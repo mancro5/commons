@@ -11,6 +11,7 @@ mod concert;
 mod db;
 mod homes;
 mod hub;
+mod museum;
 mod rent;
 mod routes;
 mod stalls;

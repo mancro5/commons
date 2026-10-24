@@ -2357,3 +2357,175 @@ async fn a_club_can_be_founded_straight_into_a_clubhouse() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn the_museum_hangs_paintings_in_turn_hearts_them_and_keeps_the_best() {
+    use base64::Engine;
+    let b64 = |v: &[u8]| base64::engine::general_purpose::STANDARD.encode(v);
+    let Some(s) = state().await else { return };
+    let (a, b) = (player(&s).await, player(&s).await);
+    let post = |p: &P, path: &str, body: Value| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        let path = format!("/api/social/museum/{path}");
+        async move { call(&s, "POST", &path, &tok, Some(body)).await }
+    };
+    let get = |p: &P, path: &str| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        let path = if path.is_empty() {
+            "/api/social/museum".to_string()
+        } else {
+            format!("/api/social/museum/{path}")
+        };
+        async move { call(&s, "GET", &path, &tok, None).await }
+    };
+
+    // A draft, kept: blank to start, then as painted.
+    let (_, d) = get(&a, "drafts/32").await;
+    assert_eq!(d["cells"], b64(&[0u8; 32 * 32]));
+    let mut cells = vec![0u8; 32 * 32];
+    for c in cells.iter_mut().take(200) {
+        *c = 7;
+    }
+    let (st, _) = post(&a, "drafts/32", json!({ "cells": b64(&cells) })).await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, _) = post(&a, "drafts/32", json!({ "cells": b64(&[40u8; 32 * 32]) })).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "colours off the palette");
+    let (st, _) = post(&a, "drafts/24", json!({ "cells": b64(&[0u8; 24 * 24]) })).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "no such size");
+
+    // Entering it: a bare canvas won't do; a painted one hangs, with the week's theme.
+    let (st, r) = post(
+        &a,
+        "submit",
+        json!({ "size": 32, "title": "Dawn", "cells": b64(&[0u8; 1024]) }),
+    )
+    .await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("too_bare"))
+    );
+    let (st, r) = post(
+        &a,
+        "submit",
+        json!({ "size": 32, "title": "Dawn", "cells": b64(&cells) }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let first = r["id"].as_i64().unwrap();
+    assert!(r["theme"].is_string());
+    // One entry per size: a new one takes the last one's place.
+    let (_, r) = post(
+        &a,
+        "submit",
+        json!({ "size": 32, "title": "Dusk", "cells": b64(&cells) }),
+    )
+    .await;
+    let dusk = r["id"].as_i64().unwrap();
+    let (_, st0) = get(&a, "").await;
+    let mine: Vec<i64> = st0["mine"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(mine, vec![dusk], "Dawn retired: {st0}");
+    assert!(
+        st0["mine"][0]["showings"]
+            .as_array()
+            .is_some_and(|s| !s.is_empty()),
+        "when it's on the wall"
+    );
+    let _ = first;
+
+    // In the catalogue, and (with few entries, or in its turn) on the wall.
+    let (_, c) = get(&b, "catalogue?size=32").await;
+    assert!(c["art"].as_array().unwrap().iter().any(|x| x["id"] == dusk));
+    let (_, w) = get(&b, "salon").await;
+    assert_eq!(w["walls"].as_array().unwrap().len(), 3);
+
+    // Hearts: not your own; one each, and they can be taken back.
+    let (st, r) = post(&a, &format!("art/{dusk}/heart"), json!({ "on": true })).await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("own"))
+    );
+    let (_, r) = post(&b, &format!("art/{dusk}/heart"), json!({ "on": true })).await;
+    assert_eq!(r["hearts"], 1);
+    let (_, r) = post(&b, &format!("art/{dusk}/heart"), json!({ "on": true })).await;
+    assert_eq!(r["hearts"], 1, "once each");
+    let (_, r) = get(&b, &format!("art/{dusk}")).await;
+    assert_eq!(r["hearted"], true);
+
+    // The Hall of Fame: the week's most loved, chosen once, with a prize.
+    // (A week far off, so other runs don't share it.)
+    let year = 3000 + (rand::random::<u32>() % 5000) as i32;
+    let today = chrono::NaiveDate::from_isoywd_opt(year, 10, chrono::Weekday::Wed).unwrap();
+    let last = crate::museum::week_of(today - chrono::Duration::days(7));
+    sqlx::query("UPDATE artworks SET week = $1 WHERE id = $2")
+        .bind(&last)
+        .bind(dusk)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let before = coins(&s, &a).await;
+    crate::museum::settle(&s, today).await.unwrap();
+    crate::museum::settle(&s, today).await.unwrap();
+    assert_eq!(
+        coins(&s, &a).await,
+        before + crate::museum::PRIZES[0],
+        "paid once"
+    );
+    let (_, f) = get(&b, "fame").await;
+    assert!(
+        f["art"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["id"] == dusk && x["fame"] == 1)
+    );
+
+    // A report takes it down at once.
+    let (st, _) = post(&a, &format!("art/{dusk}/report"), json!({})).await;
+    assert_eq!(st, StatusCode::CONFLICT, "not your own");
+    let (st, _) = post(&b, &format!("art/{dusk}/report"), json!({})).await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, c) = get(&b, "catalogue?size=32").await;
+    assert!(!c["art"].as_array().unwrap().iter().any(|x| x["id"] == dusk));
+
+    // Natural history: one of each fish, from the bag.
+    let (st, r) = post(&a, "donate", json!({ "item": 101 })).await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("none"))
+    );
+    grant(
+        &s,
+        &a,
+        101,
+        2,
+        "test",
+        &format!("museum:fish:{}", &a.name[1..7]),
+    )
+    .await;
+    let (st, r) = post(&a, "donate", json!({ "item": 101 })).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (st, r) = post(&a, "donate", json!({ "item": 101 })).await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("given"))
+    );
+    let (st, _) = post(&a, "donate", json!({ "item": 1 })).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "coins aren't fish");
+    let (_, n) = get(&a, "nature").await;
+    let perch = n["fish"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["item"] == 101)
+        .unwrap()
+        .clone();
+    assert_eq!(perch["given"], true);
+    assert!(perch["first"]["name"].is_string());
+}

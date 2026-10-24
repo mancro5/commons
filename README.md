@@ -88,6 +88,12 @@ The Casino (on the Casino block, 16 and over): slot machines, a shared
 roulette wheel (everyone in the room bets on the same spin), two blackjack
 tables of five seats against the dealer, and the cashier, for coins only. There's a daily loss limit of 300
 coins, and at the cashier you can take a break for a day or a week.
+The Museum & Gallery (a door on the Museum block and one on the Gallery
+block): paint your own picture in the Studio, small, medium or large, and
+hang it in the Salon, whose walls turn through everyone's work hour by
+hour. Give paintings you love a heart: each week's most-loved go to the
+Hall of Fame. Give the museum a fish of each kind; the first giver is
+named on its tank.
 Rowboats on the Lake: hire one at the blue BOATS hut by the pier (10
 coins for 15 minutes), tap a friend to invite them aboard (up to 3), tap
 the water to row, and "Go ashore" by any bank.
@@ -172,7 +178,7 @@ assets/city/            the city grid and block catalog (ADR 0010)
 | `API_BIND` / `ORCHESTRATOR_BIND` / `ZONE_BIND` | `0.0.0.0:8080/8081/8082` | each service |
 | `COMMONS_CLIENT_URL` | `http://localhost:5173` | api (magic-link URLs) |
 | `ZONE_PUBLIC_URL` | `ws://localhost:8082/ws` | orchestrator |
-| `COMMONS_ZONES` | `city,home,mall,bar,arcade,library`, the eight `library_<wing>`s, `club_hall,clubroom,bowling,concert_hall,casino` | orchestrator |
+| `COMMONS_ZONES` | `city,home,mall,bar,arcade,library`, the eight `library_<wing>`s, `club_hall,clubroom,bowling,concert_hall,casino,museum` | orchestrator |
 | `COMMONS_MAPS_DIR` | `assets/maps` | zone |
 | `DATABASE_URL` | `postgres://commons:commons@localhost:5432/commons` | api |
 | `TEST_DATABASE_URL` | `…/commons_test` | api tests |

@@ -13,6 +13,7 @@ mod concert;
 mod leisure;
 mod library;
 mod mall;
+mod museum;
 
 use commons_sim::map::{MapFile, MapObject, Spawn, StreetGrid};
 use std::path::PathBuf;
@@ -484,6 +485,7 @@ fn main() -> std::io::Result<()> {
     write("clubroom", &clubs::room())?;
     write("concert_hall", &concert::hall())?;
     write("casino", &casino::floor())?;
+    write("museum", &museum::building())?;
     for wing in commons_sim::library::WINGS {
         write(&wing.zone(), &library::wing(&wing))?;
     }

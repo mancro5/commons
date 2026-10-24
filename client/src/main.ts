@@ -17,6 +17,9 @@ import clubHallUrl from "../../assets/maps/club_hall.json?url";
 import clubRoomUrl from "../../assets/maps/clubroom.json?url";
 import concertHallUrl from "../../assets/maps/concert_hall.json?url";
 import casinoUrl from "../../assets/maps/casino.json?url";
+import museumUrl from "../../assets/maps/museum.json?url";
+import { Museum } from "./museum";
+import { ArtCard, ArtCataloguePanel, DeskPanel, NaturePanel, StudioPanel } from "./ui/museum";
 import bowlingUrl from "../../assets/maps/bowling.json?url";
 import { Economy } from "./economy";
 import { Game, type Ui } from "./game";
@@ -89,6 +92,7 @@ const MAP_URLS: Record<string, string> = {
   bowling: bowlingUrl,
   concert_hall: concertHallUrl,
   casino: casinoUrl,
+  museum: museumUrl,
 };
 const ERR_REPLACED = 6;
 const ERR_VERSION = 3;
@@ -300,6 +304,17 @@ async function main() {
   // The clubhouses on the city's club lots (C3).
   void clubs.loadLots().catch(() => {});
   clubs.onToast = (t) => hud.toast(t, 6000);
+  // The Museum & Gallery (ADR 0018).
+  const museum = new Museum(auth);
+  const artCard = new ArtCard(museum);
+  const artCatalogue = new ArtCataloguePanel(museum, artCard);
+  const studio = new StudioPanel(museum);
+  const nature = new NaturePanel(museum, eco, () => (game as Game | null)?.fishGiven());
+  const desk = new DeskPanel(museum, artCard, {
+    studio: () => studio.show(),
+    catalogue: () => artCatalogue.show(),
+    nature: () => nature.show(),
+  });
   const casino = new Casino(auth);
   casino.onPlayed = () => void eco.load().catch(() => {});
   // The shared tables: live from the server; big wins told to the whole floor.
@@ -415,6 +430,12 @@ async function main() {
     blackjack: new BlackjackPanel(casino, tables),
     tables,
     cage: new CagePanel(casino),
+    museum,
+    studio,
+    artCard,
+    artCatalogue,
+    desk,
+    nature,
     metro: new MetroPanel({
       map: () => {
         const g = game as Game | null;
@@ -512,7 +533,9 @@ async function main() {
             // Out of a club's room whose clubhouse stands on a lot: out of its door, in the city.
             const lot = from?.zoneId === "clubroom" && from.place.owner ? clubs.lotOf(from.place.owner) : null;
             if (z === "club_hall" && lot) return void travel({ zone: "city", arrive: `place:${lot}` });
-            const place = from && ["mall", "bar", "arcade", HALL, "club_hall", "bowling", "concert_hall", "casino"].includes(from.zoneId) ? `place:${from.zoneId}` : undefined;
+            // The Museum & Gallery has a door on each block: in and out by the one you chose.
+            if (given && (z === "museum" || (z === "city" && from?.zoneId === "museum"))) return void travel({ zone: z, arrive: given });
+            const place = from && ["mall", "bar", "arcade", HALL, "club_hall", "bowling", "concert_hall", "casino", "museum"].includes(from.zoneId) ? `place:${from.zoneId}` : undefined;
             const arrive =
               (z === HALL && from && wingOfZone(from.zoneId)) || (z === "club_hall" && from?.zoneId === "clubroom")
                 ? `place:${from.zoneId}`

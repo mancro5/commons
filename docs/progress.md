@@ -1730,6 +1730,61 @@ Checked:
     Ada wins 360!".
   - Coins match the database in every run.
 
+## The Museum & Gallery, step 1 (2026-10-24)
+
+ADR 0018. Things to make and be proud of, that others see, and that work
+on a quiet server. Nothing is authored by the day: what's new comes from
+players and from rules.
+
+- **One building, two doors:**
+  - The Museum block's columned front leads into the Grand Hall; the
+    Gallery block's glass front leads into the Salon.
+  - You leave by either door (`place:museum` / `place:gallery`; the
+    orchestrator lets the museum arrive by the gallery's door).
+- **The Studio:**
+  - Your own canvas at **16×16, 32×32 or 64×64**, in 32 colours.
+  - Tools: pencil, fill, eraser, picker, brush 1 or 2, mirror, grid, undo
+    and clear.
+  - One draft per size, saved as you paint.
+- **The Salon:**
+  - One entry per size each; entries retire after 28 days.
+  - Stands hold 3 large, 6 medium and 12 small paintings at whole-pixel
+    scales. They turn through every entry each hour, the same for
+    everyone.
+  - The desk tells you when yours is next on the wall.
+- **Catalogue, hearts, reports:** the catalogue lists every entry by size,
+  newest or most loved. Hearts can't go to your own work. A report takes
+  a painting down at once.
+- **Weekly theme and Hall of Fame:** the top 3 in each size by hearts go
+  up for good, with 100, 60 or 30 coins. The settlement runs once, on the
+  first look after the week ends.
+- **Natural History:** one of each fish per player. The first giver is
+  named on the tank, and the fish swims there for everyone.
+- **Data:** migration 0039 (`art_drafts`, `artworks`, `artwork_hearts`,
+  `artwork_reports`, `museum_weeks`, `museum_donations`); routes in
+  `social::museum`.
+
+Checked:
+- Server: unit tests (the walls' rotation reaches everyone; weeks and
+  themes), plus a full API test.
+  - **Paintings:** drafts, palette and size checks, "too bare", one entry
+    per size, the catalogue, the wall.
+  - **Hearts and fame:** hearts (not your own, one each), the Hall of Fame
+    settled once with its prize, a report taking a painting down.
+  - **Fish:** donations (must own one, once per kind).
+- Mapgen: everything reachable.
+- Clippy clean, client 91.
+- In the browser:
+  - Ada comes in by the Museum's door, paints a medium "Sunny hills" with
+    the mouse (fill, strokes; the draft saves) and hangs it, and it's on a
+    Salon stand.
+  - Bo comes in by the Gallery's door, straight into the Salon, taps the
+    stand and gives it a ❤.
+  - Ada gives a perch to Natural History, and goes out by the Gallery's
+    door onto the Gallery block.
+
+Next: step 2, bugs and mushrooms and the Naturalist's Journal.
+
 ## Next: M5 · Crowds
 
 Instancing, orchestrator routing by population, crowd LOD, slow mode,

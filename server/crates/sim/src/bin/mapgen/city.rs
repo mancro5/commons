@@ -872,6 +872,17 @@ fn landmark(k: &mut Blk, key: &str, name: &str) {
             k.spot("door:library", 24, 18);
             k.spot("library", 24, 19);
         }
+        // The Museum & Gallery (ADR 0018): one building, a door on each block.
+        "museum" => {
+            k.object("museum", 12, 7, 24, 11, "Museum & Gallery");
+            k.spot("door:museum", 24, 18);
+            k.spot("museum", 24, 19);
+        }
+        "gallery" => {
+            k.object("gallery", 13, 8, 22, 10, "Museum & Gallery");
+            k.spot("door:gallery", 24, 18);
+            k.spot("gallery", 24, 19);
+        }
         "cafe" => {
             k.object("bar", 16, 9, 16, 9, "The Mossy Mug");
             k.spot("door:bar", 24, 18);
@@ -881,7 +892,13 @@ fn landmark(k: &mut Blk, key: &str, name: &str) {
     }
     let sign = match key {
         "town_hall" => "Town Hall: the town's votes and proposals".to_string(),
-        "gallery" => "Gallery: paint on the easels outside; the gallery opens soon".to_string(),
+        "gallery" => {
+            "Gallery: paint in the Studio, hang it in the Salon, and see everyone's work. Easels out here for painting together"
+                .to_string()
+        }
+        "museum" => {
+            "Museum: the town's natural history, given by its people, and the Hall of Fame".to_string()
+        }
         "theater" => {
             "Concert Hall: take the stage and everyone inside hears you".to_string()
         }

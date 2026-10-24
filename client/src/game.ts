@@ -87,6 +87,9 @@ import type { YardPanel } from "./ui/homes";
 import type { MetroPanel } from "./ui/metro";
 import type { BlackjackPanel, Casino, CagePanel, RoulettePanel, SlotsPanel, Tables } from "./ui/casino";
 import { RouletteFx } from "./world/roulettefx";
+import type { Museum } from "./museum";
+import type { ArtCard, ArtCataloguePanel, DeskPanel, NaturePanel, StudioPanel } from "./ui/museum";
+import { MuseumFx } from "./world/museumfx";
 import { YardStands } from "./world/yardstands";
 import type { ConcertPanel } from "./ui/concert";
 
@@ -174,6 +177,13 @@ export interface Ui {
   blackjack: BlackjackPanel;
   /** The casino's shared tables, live from the server. */
   tables: Tables;
+  /** The Museum & Gallery (ADR 0018). */
+  museum: Museum;
+  studio: StudioPanel;
+  artCard: ArtCard;
+  artCatalogue: ArtCataloguePanel;
+  desk: DeskPanel;
+  nature: NaturePanel;
   cage: CagePanel;
 }
 
@@ -342,6 +352,14 @@ export class Game {
   private boatNagAt = 0;
   /** The roulette table in the room: chips, the ball, the croupier's calls. */
   private rouletteFx: RouletteFx | null = null;
+  /** The Museum & Gallery's paintings and fish, in the room. */
+  private museumFx: MuseumFx | null = null;
+
+  /** A fish given to the museum: its tank fills (if it's the first), and the bag. */
+  fishGiven() {
+    void this.museumFx?.refreshTanks();
+    void this.ui.eco.load().catch(() => {});
+  }
   /**
    * Sprinting (outdoors): a direction key pressed twice in quick succession,
    * a tile tapped twice, or tiles tapped one after another quickly. It lasts
@@ -421,7 +439,7 @@ export class Game {
   private danceBot: Avatar | null = null;
   /** A building we're walking to the door of, to go in once we get there. */
   /** Walking up to a door, to go through it (into `club`'s room, for a clubhouse). */
-  private entering: { door: TileXY; zone: string; club?: string } | null = null;
+  private entering: { door: TileXY; zone: string; club?: string; arrive?: string } | null = null;
   /** When your own wooziness wears off. */
   private soberTimer = 0;
   private grove: Grove | null = null;
@@ -477,7 +495,7 @@ export class Game {
     // Indoors (the mall, the bar, the arcade, the library): the lights are
     // on, no weather, no birds, no wheels, no sprinting; the arcade and the
     // bowling alley are lit by neon.
-    const indoors = zoneId === "mall" || zoneId === "bar" || zoneId === "arcade" || zoneId.startsWith("library") || zoneId.startsWith("club") || zoneId === "bowling" || zoneId === "concert_hall" || zoneId === "casino";
+    const indoors = zoneId === "mall" || zoneId === "bar" || zoneId === "arcade" || zoneId.startsWith("library") || zoneId.startsWith("club") || zoneId === "bowling" || zoneId === "concert_hall" || zoneId === "casino" || zoneId === "museum";
     this.ambient = new Ambient(this.scene, map, indoors);
     this.daynight = new DayNight(app, this.scene, map, indoors, zoneId === "arcade" || zoneId === "bowling");
     this.milestones = new Milestones(this.scene, map, (x, y, s) => this.daynight.addLight(x, y, s), app.stage);
@@ -671,6 +689,12 @@ export class Game {
     void ui.welcome.loadFounders().catch(() => {});
     // Club crests by names (asked afresh in each place).
     ui.clubs.forgetBadges();
+    // The Museum & Gallery (ADR 0018): the paintings on the stands, the fish in the tanks.
+    if (zoneId === "museum") {
+      const fx = new MuseumFx(this.scene, ui.museum);
+      this.museumFx = fx;
+      this.disposers.push(() => fx.destroy());
+    }
     // The Casino (ADR 0017): after half an hour's play, a gentle reminder.
     if (zoneId === "casino") {
       const since = performance.now();
@@ -968,6 +992,46 @@ export class Game {
       // the slot machines, the shared tables (roulette, blackjack) and the cashier.
       case "casino":
         this.enter(front, "casino");
+        return true;
+      // The Museum & Gallery (ADR 0018): one building, a door on each block.
+      // In by the Gallery's, you're in the Salon; by the Museum's, the Grand Hall.
+      case "museum":
+        this.enter(front, "museum");
+        return true;
+      case "gallery":
+        this.enter(front, "museum", "place:gallery");
+        return true;
+      case "museum_exit":
+        this.goTo("city", "place:museum");
+        return true;
+      case "gallery_exit":
+        this.goTo("city", "place:gallery");
+        return true;
+      case "salon_s":
+      case "salon_m":
+      case "salon_l":
+      case "fame_stand": {
+        walkUp();
+        const art = this.museumFx?.onStand.get(obj);
+        if (art) this.near(ui.artCard, front, 6).showArt(art);
+        else this.hud.toast(obj.kind === "fame_stand" ? "🏆 This stand waits for a Hall of Fame winner: the week's most-loved paintings go up here." : "🖼 This frame's empty this hour. Paint something at a Studio easel and hang it!", 4000);
+        return true;
+      }
+      case "studio_easel":
+        walkUp();
+        this.near(ui.studio, front, 6).show();
+        return true;
+      case "art_catalogue":
+        walkUp();
+        this.near(ui.artCatalogue, front, 8).show();
+        return true;
+      case "museum_desk":
+        walkUp();
+        this.near(ui.desk, front, 8).show();
+        return true;
+      case "fish_tank":
+        walkUp();
+        this.near(ui.nature, front, 8).show();
         return true;
       case "casino_exit":
         this.goTo("city");
@@ -1286,17 +1350,17 @@ export class Game {
     this.entering = { door: spot, zone: "clubroom", club };
   }
 
-  private enter(door: TileXY, zone: string) {
+  private enter(door: TileXY, zone: string, arrive?: string) {
     const self = this.self;
     if (!self) return;
     if (cheb(self.destination, door) <= 1 && !self.moving) {
-      this.goTo(zone);
+      this.goTo(zone, arrive);
       return;
     }
     const spot = nearestWalkable(this.scene.map, door.x, door.y, 2);
     if (!spot) return;
     this.moveTo(spot, true);
-    this.entering = { door: spot, zone };
+    this.entering = { door: spot, zone, arrive };
   }
 
   /** Goes in once we've walked up to the door we're entering. */
@@ -1311,7 +1375,7 @@ export class Game {
     if (self.moving) return;
     this.entering = null;
     if (e.club) this.ui.clubsPanel.goToRoom(e.club);
-    else this.goTo(e.zone);
+    else this.goTo(e.zone, e.arrive);
   }
 
   /** The Caretaker says something now and then when you're close by. */

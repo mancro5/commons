@@ -78,11 +78,13 @@ const PUBLIC_DOORS: &[&str] = &[
     "bowling",
     "concert_hall",
     "casino",
+    "museum",
+    "gallery",
 ];
 
 /// Zones served unless `COMMONS_ZONES` says otherwise: the city, homes, the
 /// public buildings, and the Library's hall and wings (ADR 0012).
-const ZONES: &str = "city,home,mall,bar,arcade,library,library_children,library_lit,library_world,library_history,library_society,library_science,library_arts,library_reference,club_hall,clubroom,bowling,concert_hall,casino";
+const ZONES: &str = "city,home,mall,bar,arcade,library,library_children,library_lit,library_world,library_history,library_society,library_science,library_arts,library_reference,club_hall,clubroom,bowling,concert_hall,casino,museum";
 
 /// A metro station, `metro_<key>` (ADR 0016): you come up its stairs.
 fn is_station(place: &str) -> bool {
@@ -236,6 +238,8 @@ async fn join(
             .filter(|w| w.starts_with("library_") && state.zones.iter().any(|z| z == w))
             .map(String::from),
         Some("place:clubroom") if zone == "club_hall" => Some("clubroom".to_string()),
+        // The Museum & Gallery has a door on each block: in by the Gallery's, the Salon.
+        Some("place:gallery") if zone == "museum" => Some("gallery".to_string()),
         Some(a) if zone == "city" => match a.strip_prefix("place:") {
             Some(place) => {
                 (PUBLIC_DOORS.contains(&place) || is_club_lot(place) || is_station(place))

@@ -15,6 +15,7 @@ import { HOUSE_OVERHANG, drawHouse } from "./houseart";
 import { metroObject } from "./metroart";
 import { casinoObject } from "./casinoart";
 import { boatObject } from "./boatart";
+import { museumObject } from "./museumart";
 
 export const TILE = 32;
 
@@ -2396,10 +2397,12 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       break;
     }
     default: {
-      const lib = libraryObject(o) ?? clubObject(o) ?? concertObject(o) ?? metroObject(o) ?? casinoObject(o) ?? boatObject(o);
+      const lib: { c: HTMLCanvasElement; overhang: number; left?: number } | null =
+        libraryObject(o) ?? clubObject(o) ?? concertObject(o) ?? metroObject(o) ?? casinoObject(o) ?? boatObject(o) ?? museumObject(o);
       if (lib) {
         c = lib.c;
         overhang = lib.overhang;
+        left = lib.left ?? 0;
         break;
       }
       [c, ctx] = makeCanvas(w, h);
