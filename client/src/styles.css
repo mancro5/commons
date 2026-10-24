@@ -5164,3 +5164,141 @@ body.woozy #stage canvas {
   flex: 1;
   min-width: 0;
 }
+
+/* ---- bugs, mushrooms and the Naturalist's Journal (ADR 0019) ---- */
+
+.netgame {
+  position: fixed;
+  left: 50%;
+  bottom: 190px;
+  transform: translateX(-50%);
+  z-index: 6;
+  width: min(300px, calc(100vw - 24px));
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.netgame[hidden] {
+  display: none;
+}
+
+.net-field {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  background: radial-gradient(circle, #e9f3dc 0%, #d4e6c0 70%, #c2d9a8 100%);
+}
+
+.net-target,
+.net-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.net-target {
+  transform: translate(-50%, -50%);
+  border: 6px solid var(--ink);
+  opacity: 0.55;
+}
+
+.net-ring {
+  border: 2px dashed var(--ink);
+  will-change: transform;
+}
+
+.net-bug {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 48px;
+  height: 48px;
+  transform: translate(-50%, -50%);
+  image-rendering: pixelated;
+}
+
+.panel.journal .journal-today {
+  margin: 0 0 6px;
+}
+
+.panel.journal .journal-titles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.panel.journal .journal-titles .stamp {
+  margin: 0;
+}
+
+.panel.journal .tabs {
+  flex-wrap: wrap;
+}
+
+.journal-bar {
+  height: 8px;
+  background: var(--paper-2);
+  margin: 8px 0 4px;
+}
+
+.journal-fill {
+  height: 100%;
+  background: #5d8a4e;
+  transition: width 0.4s;
+}
+
+.journal-grid .item {
+  position: relative;
+}
+
+.journal-grid .item .hint {
+  font-size: 10px;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.journal-grid .journal-given {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  font-size: 12px;
+}
+
+/* A whiff of funny spores: the world sways a while. */
+canvas.woozy {
+  animation: woozy 4s ease-in-out 5;
+}
+
+@keyframes woozy {
+  0%,
+  100% {
+    transform: rotate(0deg) scale(1);
+    filter: none;
+  }
+  25% {
+    transform: rotate(1.2deg) scale(1.02);
+    filter: hue-rotate(25deg) saturate(1.2);
+  }
+  75% {
+    transform: rotate(-1.2deg) scale(1.02);
+    filter: hue-rotate(-25deg) saturate(1.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  canvas.woozy {
+    animation: none;
+  }
+}

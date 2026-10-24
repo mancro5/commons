@@ -661,18 +661,31 @@ async fn nature(State(state): S, headers: HeaderMap) -> ApiResult<Json<Value>> {
             .fetch_all(&state.db)
             .await
             .map_err(db_err)?;
-    let mut fish: Vec<_> = state.catalog.of_kind("fish").collect();
-    fish.sort_by_key(|f| (f.rarity, f.id));
-    Ok(Json(json!({
-        "fish": fish.iter().map(|f| {
-            let first = firsts.iter().find(|x| x.0 == f.id);
-            json!({
-                "item": f.id, "key": f.key, "name": f.name, "rarity": f.rarity,
-                "given": given.contains(&f.id),
-                "first": first.map(|x| json!({ "name": x.1, "at": x.2.timestamp() })),
-                "givers": counts.iter().find(|c| c.0 == f.id).map(|c| c.1).unwrap_or(0),
+    // Fish by rarity; bugs and mushrooms in the naturalist's order.
+    let section = |kind: &str| -> Vec<Value> {
+        let mut items: Vec<_> = state.catalog.of_kind(kind).collect();
+        if kind == "fish" {
+            items.sort_by_key(|f| (f.rarity, f.id));
+        } else {
+            items.sort_by_key(|f| f.id);
+        }
+        items
+            .iter()
+            .map(|f| {
+                let first = firsts.iter().find(|x| x.0 == f.id);
+                json!({
+                    "item": f.id, "key": f.key, "name": f.name, "rarity": f.rarity,
+                    "given": given.contains(&f.id),
+                    "first": first.map(|x| json!({ "name": x.1, "at": x.2.timestamp() })),
+                    "givers": counts.iter().find(|c| c.0 == f.id).map(|c| c.1).unwrap_or(0),
+                })
             })
-        }).collect::<Vec<_>>(),
+            .collect()
+    };
+    Ok(Json(json!({
+        "fish": section("fish"),
+        "bugs": section("bug"),
+        "shrooms": section("shroom"),
     })))
 }
 
@@ -681,7 +694,7 @@ struct DonateReq {
     item: i32,
 }
 
-/// Gives the museum one fish of a kind (one of each kind per player).
+/// Gives the museum one fish, bug or mushroom of a kind (one of each kind per player).
 async fn donate(
     State(state): S,
     headers: HeaderMap,
@@ -691,9 +704,9 @@ async fn donate(
     let item = state
         .catalog
         .get(req.item)
-        .filter(|i| i.kind == "fish")
+        .filter(|i| ["fish", "bug", "shroom"].contains(&i.kind.as_str()))
         .ok_or_else(|| {
-            ApiError::bad_request("not_fish", "The museum's collecting fish just now.")
+            ApiError::bad_request("not_fish", "The museum collects fish, bugs and mushrooms.")
         })?;
     let mut tx = state.db.begin().await.map_err(db_err)?;
     let fresh = sqlx::query(

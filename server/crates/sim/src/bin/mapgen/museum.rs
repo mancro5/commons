@@ -1,7 +1,8 @@
 //! The Museum & Gallery (ADR 0018): one building, two doors. In from the
 //! Museum block, you're in the Grand Hall, with the Hall of Fame on its
 //! stands and the curator's desk; the Natural History room is to the west
-//! (a tank for each kind of fish, filled by donations). In from the Gallery
+//! (a tank for each kind of fish, and cases of bugs and mushrooms, filled
+//! by donations). In from the Gallery
 //! block, you're in the Salon to the east: stands for the large, medium and
 //! small paintings (they turn through every entry, hour by hour), and the
 //! Studio's easels and the catalogue by its door.
@@ -14,6 +15,9 @@ pub const W: u16 = 52;
 pub const H: u16 = 26;
 /// Tanks in the Natural History room, and the Salon's stands per size.
 pub const TANKS: u16 = 16;
+/// Cases of bugs and of mushrooms, nine to a case (33 bugs, 21 mushrooms).
+pub const BUG_CASES: u16 = 4;
+pub const SHROOM_CASES: u16 = 3;
 pub const LARGE: u16 = 3;
 pub const MEDIUM: u16 = 6;
 pub const SMALL: u16 = 12;
@@ -58,13 +62,28 @@ pub fn building() -> MapFile {
             true,
         );
     }
+    // Below the tanks, cases of bugs and of mushrooms (nine to a case).
+    for i in 0..BUG_CASES {
+        b.object("bug_case", 2 + i * 3, 19, 2, 1, Some(&i.to_string()), true);
+    }
+    for i in 0..SHROOM_CASES {
+        b.object(
+            "shroom_case",
+            2 + i * 3,
+            22,
+            2,
+            1,
+            Some(&i.to_string()),
+            true,
+        );
+    }
     b.object(
         "signpost",
-        7,
-        19,
+        11,
+        22,
         1,
         1,
-        Some("Natural History: one of each kind, given by the town. The first to give a kind is named on its tank."),
+        Some("Natural History: one of each kind, given by the town. The first to give a kind is named on its tank or case."),
         true,
     );
 

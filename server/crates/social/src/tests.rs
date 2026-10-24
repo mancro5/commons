@@ -2529,3 +2529,135 @@ async fn the_museum_hangs_paintings_in_turn_hearts_them_and_keeps_the_best() {
     assert_eq!(perch["given"], true);
     assert!(perch["first"]["name"].is_string());
 }
+
+// ---- bugs and mushrooms (ADR 0019) ------------------------------------------------------------
+
+#[tokio::test]
+async fn bugs_and_mushrooms_are_out_for_everyone_and_each_can_be_taken_once_by_each() {
+    let Some(s) = state().await else { return };
+    let (a, b) = (player(&s).await, player(&s).await);
+    let (st, out) = call(&s, "GET", "/api/social/nature/out", &a.token, None).await;
+    assert_eq!(st, StatusCode::OK, "{out}");
+    let list = out["out"].as_array().unwrap().clone();
+    assert!(!list.is_empty(), "nothing out at all: {out}");
+    assert!(out["moon"].is_string() && out["season"].is_string());
+    // Everyone sees the same things out.
+    let (_, out_b) = call(&s, "GET", "/api/social/nature/out", &b.token, None).await;
+    assert_eq!(out_b["out"], out["out"]);
+
+    let catch = |p: &P, it: &Value| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        let body = json!({ "spot": it["spot"], "slot": it["slot"] });
+        async move { call(&s, "POST", "/api/social/nature/catch", &tok, Some(body)).await }
+    };
+    let city = |p: &P| {
+        s.hub.set_location(
+            p.id,
+            crate::hub::Location {
+                zone: "city".into(),
+                instance: 1,
+                owner: None,
+                label: "City".into(),
+            },
+            true,
+            chrono::Utc::now().timestamp_millis(),
+        )
+    };
+    let it = &list[0];
+    // You have to be out in the city.
+    let (st, r) = catch(&a, it).await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("away"))
+    );
+    city(&a);
+    city(&b);
+    // A bug needs a net.
+    if let Some(bug) = list.iter().find(|i| i["shroom"] == false) {
+        let (st, r) = catch(&a, bug).await;
+        assert_eq!(
+            (st, r["error"].as_str()),
+            (StatusCode::CONFLICT, Some("no_net"))
+        );
+        sqlx::query("INSERT INTO inventory (player_id, item_id, qty) VALUES ($1, 960, 1)")
+            .bind(a.id)
+            .execute(&s.db)
+            .await
+            .unwrap();
+    }
+    for it in list.iter().take(3) {
+        let (st, r) = catch(&a, it).await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+        assert_eq!(r["key"], it["key"]);
+        // Once each.
+        let (st, r) = catch(&a, it).await;
+        assert_eq!(
+            (st, r["error"].as_str()),
+            (StatusCode::CONFLICT, Some("taken"))
+        );
+    }
+    let first = &list[0];
+    // It's gone for a, not for b.
+    let (_, out) = call(&s, "GET", "/api/social/nature/out", &a.token, None).await;
+    assert!(
+        !out["out"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["spot"] == first["spot"])
+    );
+    let (_, out) = call(&s, "GET", "/api/social/nature/out", &b.token, None).await;
+    assert!(
+        out["out"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["spot"] == first["spot"])
+    );
+    // A slot long gone, and a spot that isn't one.
+    let (st, _) = catch(
+        &b,
+        &json!({ "spot": first["spot"], "slot": first["slot"].as_i64().unwrap() - 5 }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    let (st, _) = catch(&b, &json!({ "spot": 1, "slot": first["slot"] })).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    // The museum takes one of each, and Natural History lists bugs and mushrooms.
+    let (st, r) = call(
+        &s,
+        "POST",
+        "/api/social/museum/donate",
+        &a.token,
+        Some(json!({ "item": first["item"] })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (_, n) = call(&s, "GET", "/api/social/museum/nature", &a.token, None).await;
+    let section = if first["shroom"] == true {
+        "shrooms"
+    } else {
+        "bugs"
+    };
+    let entry = n[section]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["item"] == first["item"])
+        .unwrap()
+        .clone();
+    assert_eq!(entry["given"], true);
+    assert_eq!(
+        n["bugs"].as_array().unwrap().len(),
+        commons_sim::nature::BUGS.len()
+    );
+    assert_eq!(
+        n["shrooms"].as_array().unwrap().len(),
+        commons_sim::nature::SHROOMS.len()
+    );
+    // Hints for the journal, for every kind.
+    let (_, h) = call(&s, "GET", "/api/social/nature/hints", &a.token, None).await;
+    assert!(h["golden_scarab"].as_str().unwrap().contains("Meadow"));
+}

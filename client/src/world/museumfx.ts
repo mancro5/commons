@@ -1,13 +1,15 @@
 // The Museum & Gallery in the room (ADR 0018): the paintings on the Salon's
 // stands (this hour's turn, the same for everyone, turning on the hour), the
 // Hall of Fame's latest winners on the gilded stands, and a fish in each
-// tank someone's given (an empty tank waits for its first).
+// tank someone's given (an empty tank waits for its first), and the bugs
+// and mushrooms pinned in their cases.
 
 import { Sprite, Texture } from "pixi.js";
 import { type Art, type Museum, type Specimen, paintingCanvas, toBytes } from "../museum";
 import { drawFish } from "./fish";
 import type { MapObject } from "./map";
-import { standWindow, tankWindow } from "./museumart";
+import { drawBug, drawShroom } from "./critterart";
+import { CASE_SLOTS, caseSlot, standWindow, tankWindow } from "./museumart";
 import type { Scene } from "./scene";
 
 const KINDS: Record<string, number> = { l: 64, m: 32, s: 16 };
@@ -25,6 +27,8 @@ export class MuseumFx {
   readonly onStand = new Map<MapObject, Art>();
   private fame: Art[] = [];
   private fish: Specimen[] = [];
+  private bugs: Specimen[] = [];
+  private shrooms: Specimen[] = [];
   private timer = 0;
   private off: () => void;
 
@@ -43,6 +47,8 @@ export class MuseumFx {
       const [salon, fame, nature] = await Promise.all([this.museum.loadSalon(), this.museum.fame(), this.museum.nature()]);
       this.fame = fame.art;
       this.fish = nature.fish;
+      this.bugs = nature.bugs;
+      this.shrooms = nature.shrooms;
       // The walls turn on the hour: look again just after.
       this.timer = window.setTimeout(() => void this.refresh(), Math.max(5_000, salon.next * 1000 - Date.now() + 2_000));
     } catch {
@@ -53,7 +59,12 @@ export class MuseumFx {
 
   /** Who's given what changed (a donation): the tanks again. */
   async refreshTanks() {
-    this.fish = (await this.museum.nature().catch(() => ({ fish: this.fish }))).fish;
+    const n = await this.museum.nature().catch(() => null);
+    if (n) {
+      this.fish = n.fish;
+      this.bugs = n.bugs;
+      this.shrooms = n.shrooms;
+    }
     this.draw();
   }
 
@@ -74,6 +85,13 @@ export class MuseumFx {
       } else if (o.kind === "fish_tank") {
         const f = this.fish[Number(o.label ?? 0)];
         if (f?.first) this.swim(o, f);
+      } else if (o.kind === "bug_case" || o.kind === "shroom_case") {
+        const list = o.kind === "bug_case" ? this.bugs : this.shrooms;
+        const from = Number(o.label ?? 0) * CASE_SLOTS;
+        for (let i = 0; i < CASE_SLOTS; i++) {
+          const f = list[from + i];
+          if (f?.first) this.pin(o, i, f, o.kind === "bug_case");
+        }
       }
     }
   }
@@ -91,6 +109,22 @@ export class MuseumFx {
     this.scene.sorted.addChild(s);
     this.sprites.push(s);
     this.onStand.set(o, art);
+  }
+
+  /** A bug or a mushroom in its place in a case, at half size. */
+  private pin(o: MapObject, i: number, f: Specimen, bug: boolean) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 32;
+    const ctx = c.getContext("2d")!;
+    if (bug) drawBug(ctx, f.key);
+    else drawShroom(ctx, f.key);
+    const s = new Sprite(texture(c));
+    s.scale.set(0.5);
+    const at = caseSlot(o, i);
+    s.position.set(at.x, at.y);
+    s.zIndex = (o.y + o.h) * 32 - 0.5;
+    this.scene.sorted.addChild(s);
+    this.sprites.push(s);
   }
 
   /** A fish in its tank, from the first giver. */

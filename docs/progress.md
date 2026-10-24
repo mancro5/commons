@@ -1785,6 +1785,58 @@ Checked:
 
 Next: step 2, bugs and mushrooms and the Naturalist's Journal.
 
+## Bugs, mushrooms and the Naturalist's Journal (2026-10-24)
+
+ADR 0019, step 2 of the Museum. Something different to go out for each
+day, on a quiet server too, with nothing written by the day: what's out
+follows the hour, the weather, the season and the moon.
+
+- **What's out:**
+  - 33 bugs and 21 mushrooms, Common to Mythical, each with habitats,
+    hours, weather and seasons (`commons_sim::nature`).
+  - The Ghost Glowcap only on full-moon nights.
+  - The weather is the client's own, ported bit for bit.
+- **Where:** 118 `forage` spots in the six green blocks (mapgen). Bug
+  spots roll every 10 minutes, mushroom spots every weather spell (more
+  after rain), the same for everyone.
+- **Catching:**
+  - A bug needs a net (40c, from the curator), no wheels, and no running
+    (it may fly off). Beside it, a ring-timing swing that's harder for
+    rarer bugs.
+  - Mushrooms are just picked.
+  - Each can be taken once by each player (`forage_claims`). The server
+    checks the spot, the slot, the zone, the net and the claim, then
+    grants the item through the economy.
+- **Woozy mushrooms:** the Giggle Cap and the Wobble Puff make you laugh
+  or dance, and the world sways for 20 s.
+- **The Naturalist's Journal** (it replaces the album):
+  - Fish, Bugs, Mushrooms and Garden, with counts and "???" silhouettes.
+  - Every entry says where and when to look.
+  - Three titles per section, and "Naturalist of the Commons".
+  - Shows what you've given the museum, and today's weather, season and
+    moon.
+- **Natural History:** four bug cases and three mushroom cases; first
+  givers' specimens are pinned in them.
+- **Data:** migration 0040 (items, `bug_net`, `forage_claims`); routes in
+  `social::nature`. Bugs and mushrooms count as collectables.
+
+Checked:
+- Server:
+  - Unit tests: the hash matches the client's; every kind can be found
+    somewhere, sometime; something is out in every season; the moon and
+    mist; spots read from the map.
+  - API test: the same things out for everyone; "away" until you're in the
+    city; no net, no bug; once each; gone for you but not for others; old
+    slots and bad spots refused; donations of bugs and mushrooms; hints.
+- Clippy clean, client 92.
+- In the browser:
+  - Ada (with a net) walks up to a Pond Skater, swings on the line and
+    catches it ("New in your journal").
+  - She picks a Field Mushroom, and the journal shows both, with hints.
+  - She gives the skater to the museum, and it's pinned in its case.
+
+Next: step 3, fossils.
+
 ## Next: M5 · Crowds
 
 Instancing, orchestrator routing by population, crowd LOD, slow mode,

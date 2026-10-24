@@ -12,6 +12,7 @@ mod db;
 mod homes;
 mod hub;
 mod museum;
+mod nature;
 mod rent;
 mod routes;
 mod stalls;

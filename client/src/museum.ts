@@ -67,6 +67,13 @@ export interface Salon {
   walls: Wall[];
 }
 
+/** Natural History's three rooms of specimens. */
+export interface NaturalHistory {
+  fish: Specimen[];
+  bugs: Specimen[];
+  shrooms: Specimen[];
+}
+
 export interface Specimen {
   item: number;
   key: string;
@@ -177,7 +184,7 @@ export class Museum {
   }
 
   nature() {
-    return this.auth.get<{ fish: Specimen[] }>("/api/social/museum/nature");
+    return this.auth.get<NaturalHistory>("/api/social/museum/nature");
   }
 
   donate(item: number) {

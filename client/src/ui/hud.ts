@@ -61,7 +61,7 @@ export class Hud {
           <div class="pill coins" title="Coins"></div>
           <button type="button" class="pill btn map-btn" title="City map (C)" aria-label="City map"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("map")}" /></button>
           <button type="button" class="pill btn bag-btn" title="Bag (B)" aria-label="Bag"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("bag")}" /></button>
-          <button type="button" class="pill btn album-btn" title="Album (L)" aria-label="Album"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("book")}" /></button>
+          <button type="button" class="pill btn album-btn" title="Naturalist's Journal (L)" aria-label="Journal"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("book")}" /></button>
           <button type="button" class="pill btn friends-btn" title="Friends (F)" aria-label="Friends"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("friends")}" /></button>
           <button type="button" class="pill btn notes-btn" title="Notifications (N)" aria-label="Notifications"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("bell")}" /><span class="badge-count" hidden></span></button>
           <button type="button" class="pill btn clubs-btn" title="Clubs (K)" aria-label="Clubs"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("shield")}" /><span class="badge-count" hidden>!</span></button>

@@ -63,7 +63,7 @@ import type { ApartmentsPanel, PostOfficePanel, StallPanel } from "./ui/homes";
 import type { Hud } from "./ui/hud";
 import type { DirectoryPanel, ShopPanel } from "./ui/mall";
 import type { Minimap } from "./ui/minimap";
-import { type ActionMenu, type AlbumPanel, type BagPanel, FishermanPanel, LURE_ITEM, type MarketPanel, Panel, ROD_ITEM, type PlaceBanner, type PlotMenu, type ReelGame, isTyping } from "./ui/panels";
+import { type ActionMenu, type BagPanel, FishermanPanel, LURE_ITEM, type MarketPanel, Panel, ROD_ITEM, type PlaceBanner, type PlotMenu, type ReelGame, isTyping } from "./ui/panels";
 import { Avatar, CAST_SWING_MS, PUMP_MS } from "./world/avatars";
 import { Furniture } from "./world/furniture";
 import { type MapObject, type ZoneMap, groundAt, nearestWalkable, spot, stepTarget, walkable } from "./world/map";
@@ -90,6 +90,9 @@ import { RouletteFx } from "./world/roulettefx";
 import type { Museum } from "./museum";
 import type { ArtCard, ArtCataloguePanel, DeskPanel, NaturePanel, StudioPanel } from "./ui/museum";
 import { MuseumFx } from "./world/museumfx";
+import { NET_ITEM, type Nature, type Out } from "./nature";
+import type { JournalPanel, NetGame } from "./ui/nature";
+import { NatureFx } from "./world/naturefx";
 import { YardStands } from "./world/yardstands";
 import type { ConcertPanel } from "./ui/concert";
 
@@ -131,7 +134,10 @@ export interface Ui {
   shop: ShopPanel;
   eco: Economy;
   bag: BagPanel;
-  album: AlbumPanel;
+  album: JournalPanel;
+  /** Bugs and mushrooms (ADR 0019): what's out, and the net game. */
+  forage: Nature;
+  net: NetGame;
   market: MarketPanel;
   plot: PlotMenu;
   reel: ReelGame;
@@ -354,6 +360,11 @@ export class Game {
   private rouletteFx: RouletteFx | null = null;
   /** The Museum & Gallery's paintings and fish, in the room. */
   private museumFx: MuseumFx | null = null;
+  /** The bugs and mushrooms out in the city (ADR 0019), and when to ask again what's out. */
+  private natureFx: NatureFx | null = null;
+  private natureLoadAt = 0;
+  /** Creeping up on a bug or a mushroom: what, and whether we set off at a run. */
+  private stalking: { o: Out; ran: boolean; since: number } | null = null;
 
   /** A fish given to the museum: its tank fills (if it's the first), and the bag. */
   fishGiven() {
@@ -689,6 +700,17 @@ export class Game {
     void ui.welcome.loadFounders().catch(() => {});
     // Club crests by names (asked afresh in each place).
     ui.clubs.forgetBadges();
+    // Bugs and mushrooms out in the green places (ADR 0019).
+    if (zoneId === "city") {
+      const fx = new NatureFx(this.scene, ui.forage);
+      this.natureFx = fx;
+      this.natureLoadAt = 0;
+      this.disposers.push(() => {
+        fx.destroy();
+        this.natureFx = null;
+        this.stalking = null;
+      });
+    }
     // The Museum & Gallery (ADR 0018): the paintings on the stands, the fish in the tanks.
     if (zoneId === "museum") {
       const fx = new MuseumFx(this.scene, ui.museum);
@@ -1031,7 +1053,12 @@ export class Game {
         return true;
       case "fish_tank":
         walkUp();
-        this.near(ui.nature, front, 8).show();
+        this.near(ui.nature, front, 8).showRoom("fish");
+        return true;
+      case "bug_case":
+      case "shroom_case":
+        walkUp();
+        this.near(ui.nature, front, 8).showRoom(obj.kind === "bug_case" ? "bugs" : "shrooms");
         return true;
       case "casino_exit":
         this.goTo("city");
@@ -2599,7 +2626,9 @@ export class Game {
       }
       // Catching a fish (reeling in, or your catch flopping on the bank): a
       // tap that misses doesn't walk you off, which would end the fishing.
-      if (this.flops.has(this.selfId) || this.ui.reel.active) return;
+      if (this.flops.has(this.selfId) || this.ui.reel.active || this.ui.net.active) return;
+      // A bug or a mushroom: creep up on it.
+      if (this.tapNature(wx, wy)) return;
       const t = this.scene.screenToTile(e.global.x, e.global.y);
       if (this.tapBall(e.global.x, e.global.y)) return;
       if (this.tapPet(e.global.x, e.global.y)) return;
@@ -3360,6 +3389,101 @@ export class Game {
     else if (!self.moving) this.socket.send({ t: "Sit", seat: SEAT_GROUND });
   }
 
+  // ---- bugs and mushrooms (ADR 0019) -------------------------------------------------------
+
+  /** Tapped a bug or a mushroom: walk up to it (a bug needs a net, and a quiet approach). */
+  private tapNature(wx: number, wy: number): boolean {
+    const o = this.natureFx?.at(wx, wy);
+    const self = this.self;
+    if (!o || !self) return false;
+    if (!o.shroom && this.ui.eco.qty(NET_ITEM) < 1) {
+      this.hud.toast(`🦋 ${this.known(o) ? `A ${this.ui.eco.name(o.item)}` : "A bug"}! You'll need a bug net to catch it: the Museum's curator sells them.`, 4500);
+      return true;
+    }
+    if (!o.shroom && this.ui.rides.riding) {
+      this.hud.toast("🦗 It would hear your wheels coming: hop off and creep up on foot.", 4000);
+      return true;
+    }
+    // Stop a tile short, on the side we're coming from (a mushroom: right by it).
+    const here = { x: Math.round(self.pos.x), y: Math.round(self.pos.y) };
+    let best: TileXY | null = null;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const t = { x: o.x + dx, y: o.y + dy };
+        if ((dx || dy) && walkable(this.scene.map, t.x, t.y) && (!best || cheb(t, here) < cheb(best, here))) best = t;
+      }
+    }
+    best ??= nearestWalkable(this.scene.map, o.x, o.y, 2);
+    if (!best) return true;
+    if (this.following !== null) this.stopFollowing(true);
+    this.stalking = { o, ran: false, since: performance.now() };
+    if (cheb(here, o) > 1) this.moveTo(best, true);
+    return true;
+  }
+
+  /** Whether you've found one of these before (so it has a name to you). */
+  private known(o: Out): boolean {
+    return this.ui.eco.album.has(o.item);
+  }
+
+  /** Creeping up: once beside it, catch or pick it. A bug hears you running and may be off. */
+  private checkStalk(wallNow: number) {
+    const st = this.stalking;
+    const self = this.self;
+    if (!st || !self) return;
+    if (self.moving && this.sprint) st.ran = true;
+    // Give the walk a moment to begin.
+    if (self.moving || wallNow - st.since < 150) return;
+    this.stalking = null;
+    const o = st.o;
+    const here = { x: Math.round(self.pos.x), y: Math.round(self.pos.y) };
+    if (cheb(here, o) > 1 || wallNow - st.since > 60_000) return;
+    if (!this.ui.forage.out.some((x) => x.spot === o.spot && x.slot === o.slot)) {
+      this.hud.toast("It's gone.", 2500);
+      return;
+    }
+    if (o.shroom) return void this.takeNature(o);
+    const name = this.known(o) ? this.ui.eco.name(o.item) : "bug";
+    // Bugs that can fly or hop don't wait for someone who comes running.
+    const skittish = !o.key.endsWith("_snail") && o.rarity >= 1;
+    if (st.ran && skittish && Math.random() < 0.6) {
+      this.ui.forage.scare(o);
+      this.hud.toast(`💨 The ${name} heard you running and was off! Walk up slowly next time.`, 4000);
+      return;
+    }
+    this.ui.net.play(o.key, this.known(o) ? this.ui.eco.name(o.item) : "A bug", o.rarity, (ok) => {
+      if (ok) return void this.takeNature(o);
+      this.ui.forage.scare(o);
+      this.hud.toast(`💨 Missed! The ${name} got away.`, 3000);
+    });
+  }
+
+  /** The catch, or the pick: into the bag (and the journal). */
+  private async takeNature(o: Out) {
+    try {
+      const r = await this.ui.forage.catch(o);
+      const a = /^[aeiou]/i.test(r.name) ? "an" : "a";
+      this.hud.toast(`${o.shroom ? "🍄 You picked" : "🦋 You caught"} ${a} ${r.name}!${r.first ? " New in your journal 📔" : ""}`, 4000);
+      if (r.first && r.rarity >= 3) this.emote(6);
+      if (r.woozy) this.wooze(r.key);
+    } catch (e) {
+      this.hud.toast(e instanceof Error ? e.message : "It got away.", 3500);
+      this.ui.forage.scare(o);
+    }
+  }
+
+  /** A whiff of spores from a funny mushroom: giggles (or a wobbly dance), and the world sways a while. */
+  private wooze(key: string) {
+    const giggle = key === "giggle_cap";
+    this.hud.toast(giggle ? "🤭 Its spores tickle your nose… you can't stop giggling!" : "🌀 Whoa… a puff of spores, and the world's all wobbly!", 4500);
+    this.emote(giggle ? 2 : 4);
+    const c = this.app.canvas;
+    c.classList.remove("woozy");
+    void c.offsetWidth;
+    c.classList.add("woozy");
+    window.setTimeout(() => c.classList.remove("woozy"), 20_000);
+  }
+
   emote(id: number) {
     this.socket?.send({ t: "Emote", emote: id });
   }
@@ -3467,6 +3591,15 @@ export class Game {
     const hour = this.daynight.hour();
     this.weather.update(wallNow, hour);
     this.critters.update(wallNow, this.daynight.dark);
+    if (this.natureFx) {
+      this.natureFx.update(wallNow, this.daynight.dark);
+      if (wallNow > this.natureLoadAt) {
+        // What's out changes every ten minutes (bugs) or two hours (mushrooms): look now and then.
+        this.natureLoadAt = wallNow + 45_000;
+        void this.ui.forage.load().catch(() => {});
+      }
+      this.checkStalk(wallNow);
+    }
     this.cat?.update(Date.now());
     this.petLife.update(wallNow);
     if (this.caretaker) {

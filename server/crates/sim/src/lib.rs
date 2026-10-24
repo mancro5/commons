@@ -13,6 +13,7 @@ pub mod library;
 pub mod mall;
 pub mod map;
 pub mod motion;
+pub mod nature;
 pub mod path;
 pub mod pool;
 pub mod vehicles;

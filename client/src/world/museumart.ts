@@ -64,6 +64,16 @@ export function tankWindow(o: MapObject): { x: number; y: number } {
 }
 const TANK_TOP = 30;
 
+/** A specimen case's glass: 3×3 slots of 16 px (bugs or mushrooms, at half size). */
+const CASE_TOP = 52;
+export const CASE_SLOTS = 9;
+/** Where slot `i` of a case sits (px, top-left of a 16-px square), for museumfx. */
+export function caseSlot(o: MapObject, i: number): { x: number; y: number } {
+  const w = o.w * TILE;
+  const left = (w - 3 * 18) / 2;
+  return { x: o.x * TILE + left + (i % 3) * 18 + 1, y: o.y * TILE - CASE_TOP + 6 + Math.floor(i / 3) * 16 };
+}
+
 export function museumObject(o: MapObject): { c: HTMLCanvasElement; overhang: number; left?: number } | null {
   const w = o.w * TILE;
   const h = o.h * TILE;
@@ -204,6 +214,31 @@ export function museumObject(o: MapObject): { c: HTMLCanvasElement; overhang: nu
       px(ctx, "#7dbb5c", 9, TANK_TOP - 8, 2, 10);
       px(ctx, "rgba(255,255,255,0.35)", 5, 5, 2, TANK_TOP - 6);
       return { c, overhang: TANK_TOP };
+    }
+    case "bug_case":
+    case "shroom_case": {
+      // A glass-topped cabinet, specimens pinned in rows on cream card (museumfx), a brass label.
+      const [c, ctx] = canvas(w, h + CASE_TOP);
+      const ft = CASE_TOP + h;
+      const bug = o.kind === "bug_case";
+      px(ctx, "rgba(0,0,0,0.18)", 2, ft - 4, w - 4, 4);
+      px(ctx, O, 0, CASE_TOP - 2, w, h - 2);
+      px(ctx, "#6e4b30", 1, CASE_TOP - 1, w - 2, h - 4);
+      px(ctx, "#8a5a33", 1, CASE_TOP + 1, w - 2, h - 8);
+      px(ctx, GOLD, w / 2 - 8, CASE_TOP + 8, 16, 4);
+      px(ctx, O, 2, 0, w - 4, CASE_TOP);
+      px(ctx, bug ? "#f4ecd6" : "#e6efd8", 4, 2, w - 8, CASE_TOP - 4);
+      // Faint card lines, and the glass's shine.
+      // A faint square for each specimen's place, waiting for its first.
+      const left = (w - 3 * 18) / 2;
+      for (let i = 0; i < CASE_SLOTS; i++) {
+        const sx = left + (i % 3) * 18 + 1;
+        const sy = 6 + Math.floor(i / 3) * 16;
+        px(ctx, bug ? "#e8dfc6" : "#d8e4c8", sx + 1, sy + 1, 14, 13);
+      }
+      px(ctx, "rgba(255,255,255,0.45)", 6, 4, 2, CASE_TOP - 10);
+      px(ctx, "rgba(255,255,255,0.3)", 10, 4, 1, CASE_TOP - 14);
+      return { c, overhang: CASE_TOP };
     }
     case "studio_easel": {
       // A tall easel with a blank canvas and a paint pot.

@@ -6,8 +6,10 @@
 
 import type { Economy } from "../economy";
 import { ApiError } from "../net/api";
+import { NET_ITEM } from "../nature";
+import { drawBug, drawShroom } from "../world/critterart";
 import { drawFish } from "../world/fish";
-import { ART_PALETTE, type Art, type Museum, SIZES, SIZE_NAMES, type Size, type Specimen, paintingCanvas, toBytes } from "../museum";
+import { ART_PALETTE, type Art, type Museum, type NaturalHistory, SIZES, SIZE_NAMES, type Size, type Specimen, paintingCanvas, toBytes } from "../museum";
 import { Panel, button, confirmButton, el } from "./panels";
 
 const errText = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : "That didn't work.");
@@ -468,8 +470,35 @@ export class DeskPanel extends Panel {
     private museum: Museum,
     private card: ArtCard,
     private host: { studio(): void; catalogue(): void; nature(): void },
+    private eco: Economy,
   ) {
     super("🏛 Curator", "museum-desk");
+    eco.onChange(() => this.open && this.view === "desk" && this.render());
+  }
+
+  /** The curator sells bug nets, for the town's naturalists. */
+  private netRow(): HTMLElement {
+    const box = el("div", "");
+    box.append(
+      el("h3", "", "🦋 For naturalists"),
+      el("p", "hint", "Bugs are out in the Park, the Woods, the Meadow, the Orchard and by the water, different ones by the hour, the weather and the season. Catch them with a net; mushrooms you just pick. Bring me one of each for Natural History!"),
+    );
+    const net = this.eco.items.get(NET_ITEM);
+    if (this.eco.qty(NET_ITEM) > 0) box.append(el("p", "hint", "✓ You have a bug net."));
+    else if (net?.meta.buy) {
+      const msg = el("span", "hint", "");
+      box.append(
+        button(`Buy a bug net (${net.meta.buy} coins)`, async () => {
+          try {
+            await this.eco.buy(NET_ITEM, 1);
+          } catch (e) {
+            msg.textContent = errText(e);
+          }
+        }, "small primary-sm"),
+        msg,
+      );
+    }
+    return box;
   }
 
   show() {
@@ -518,9 +547,9 @@ export class DeskPanel extends Panel {
       button("🎨 Studio", () => this.host.studio(), "small primary-sm"),
       button("📖 Catalogue", () => this.host.catalogue(), "small"),
       button("🏆 Hall of Fame", () => this.showFame(), "small"),
-      button("🐟 Natural History", () => this.host.nature(), "small"),
+      button("🏛 Natural History", () => this.host.nature(), "small"),
     );
-    this.body.append(go);
+    this.body.append(go, this.netRow());
   }
 
   private renderFame() {
@@ -547,8 +576,23 @@ export class DeskPanel extends Panel {
 
 // ---- natural history --------------------------------------------------------------------
 
+export type Room = "fish" | "bugs" | "shrooms";
+const ROOMS: { key: Room; label: string; noun: string }[] = [
+  { key: "fish", label: "🐟 Fish", noun: "tank" },
+  { key: "bugs", label: "🦋 Bugs", noun: "case" },
+  { key: "shrooms", label: "🍄 Mushrooms", noun: "case" },
+];
+
+/** A specimen's picture, by its room. */
+export function drawSpecimen(ctx: CanvasRenderingContext2D, room: Room, key: string) {
+  if (room === "fish") drawFish(ctx, key);
+  else if (room === "bugs") drawBug(ctx, key);
+  else drawShroom(ctx, key);
+}
+
 export class NaturePanel extends Panel {
-  private fish: Specimen[] = [];
+  private rooms: NaturalHistory = { fish: [], bugs: [], shrooms: [] };
+  private room: Room = "fish";
   private msg = el("p", "casino-msg");
 
   constructor(
@@ -556,7 +600,14 @@ export class NaturePanel extends Panel {
     private eco: Economy,
     private onGiven: () => void,
   ) {
-    super("🐟 Natural History", "nature");
+    super("🏛 Natural History", "nature");
+  }
+
+  /** Opens on a room: the fish tanks, or the bug or mushroom cases. */
+  showRoom(room: Room) {
+    this.room = room;
+    this.msg.textContent = "";
+    this.show();
   }
 
   show() {
@@ -566,7 +617,7 @@ export class NaturePanel extends Panel {
 
   private async load() {
     try {
-      this.fish = (await this.museum.nature()).fish;
+      this.rooms = await this.museum.nature();
     } catch {
       // Shown as empty.
     }
@@ -575,16 +626,21 @@ export class NaturePanel extends Panel {
 
   render() {
     this.body.replaceChildren();
-    const given = this.fish.filter((f) => f.given).length;
-    this.body.append(el("p", "hint", `One of each kind, given by the town. The first to give a kind is named on its tank. You've given ${given} of ${this.fish.length}.`));
+    const tabs = el("div", "tabs");
+    for (const r of ROOMS) tabs.append(button(r.label, () => ((this.room = r.key), (this.msg.textContent = ""), this.render()), this.room === r.key ? "on" : ""));
+    const list = this.rooms[this.room];
+    const noun = ROOMS.find((r) => r.key === this.room)!.noun;
+    const given = list.filter((f) => f.given).length;
+    this.body.append(tabs, el("p", "hint", `One of each kind, given by the town. The first to give a kind is named on its ${noun}. You've given ${given} of ${list.length}.`));
     const rows = el("div", "rows");
-    for (const f of this.fish) {
+    for (const f of list) {
       const row = el("div", f.first ? "specimen" : "specimen empty");
       const pic = el("canvas", "specimen-pic");
       pic.width = pic.height = 32;
-      if (f.first || f.given) drawFish(pic.getContext("2d")!, f.key);
+      if (f.first || f.given || this.eco.album.has(f.item)) drawSpecimen(pic.getContext("2d")!, this.room, f.key);
       const text = el("div", "specimen-text");
-      const name = el("strong", "", f.first ? f.name : "???");
+      const known = f.first || this.eco.album.has(f.item);
+      const name = el("strong", "", known ? f.name : "???");
       name.style.color = RARITY_COLOR[f.rarity] ?? "";
       text.append(
         name,
@@ -603,7 +659,8 @@ export class NaturePanel extends Panel {
   private async give(f: Specimen) {
     try {
       const r = await this.museum.donate(f.item);
-      this.msg.textContent = r.first ? `🏆 You're the first to give a ${r.name}! Your name is on its tank.` : `🐟 Thank you for the ${r.name}!`;
+      const noun = ROOMS.find((x) => x.key === this.room)!.noun;
+      this.msg.textContent = r.first ? `🏆 You're the first to give a ${r.name}! Your name is on its ${noun}.` : `🏛 Thank you for the ${r.name}!`;
       this.msg.className = "casino-msg win";
       this.onGiven();
       await this.load();

@@ -62,6 +62,6 @@ someone writing a new thing for today.
 ## Later
 
 - **Step 2:** bug catching and mushroom foraging, and a Naturalist's
-  Journal with a title for each completed section.
+  Journal with a title for each completed section. Done: ADR 0019.
 - **Step 3:** fossils, with personal dig spots each day, identifying,
   trading duplicates, and skeletons the town completes together.

@@ -92,8 +92,14 @@ The Museum & Gallery (a door on the Museum block and one on the Gallery
 block): paint your own picture in the Studio, small, medium or large, and
 hang it in the Salon, whose walls turn through everyone's work hour by
 hour. Give paintings you love a heart: each week's most-loved go to the
-Hall of Fame. Give the museum a fish of each kind; the first giver is
-named on its tank.
+Hall of Fame. Give the museum a fish, bug or mushroom of each kind; the
+first giver is named on its tank or case.
+Bugs and mushrooms: out in the Park, the Woods, the Meadow, the Orchard and
+by the water, different ones by the hour, the weather, the season and the
+moon. Catch bugs with a net (the Museum's curator sells them: walk up
+quietly, then swing when the ring's on the line); just pick mushrooms.
+Everything you find goes in the Naturalist's Journal (📔, L), which tells you
+where and when to look for the rest, and gives you titles as you go.
 Rowboats on the Lake: hire one at the blue BOATS hut by the pier (10
 coins for 15 minutes), tap a friend to invite them aboard (up to 3), tap
 the water to row, and "Go ashore" by any bank.

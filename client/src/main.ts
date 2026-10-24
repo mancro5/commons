@@ -58,7 +58,9 @@ import { GATHERINGS, Welcome, nextOccurrence } from "./welcome";
 import { Soundscape } from "./ambient/sound";
 import { Hud } from "./ui/hud";
 import { LOGIN_NOTICE, signIn } from "./ui/login";
-import { ActionMenu, AlbumPanel, BagPanel, MarketPanel, PlaceBanner, PlotMenu, ReelGame } from "./ui/panels";
+import { JournalPanel, NetGame } from "./ui/nature";
+import { Nature } from "./nature";
+import { ActionMenu, BagPanel, MarketPanel, PlaceBanner, PlotMenu, ReelGame } from "./ui/panels";
 import { FriendsPanel, NotificationsPanel } from "./ui/social";
 import { GoalPanel, QuarterPanel, RequestsPanel } from "./ui/town";
 import { EaselPanel } from "./activities/easel";
@@ -314,7 +316,9 @@ async function main() {
     studio: () => studio.show(),
     catalogue: () => artCatalogue.show(),
     nature: () => nature.show(),
-  });
+  }, eco);
+  // Bugs and mushrooms, and the Naturalist's Journal (ADR 0019).
+  const forage = new Nature(auth, eco);
   const casino = new Casino(auth);
   casino.onPlayed = () => void eco.load().catch(() => {});
   // The shared tables: live from the server; big wins told to the whole floor.
@@ -370,7 +374,9 @@ async function main() {
       (item) => (game as Game | null)?.bagExtra(item) ?? null,
       () => (game as Game | null)?.openCrate(),
     ),
-    album: new AlbumPanel(eco),
+    album: new JournalPanel(eco, forage, museum),
+    forage,
+    net: new NetGame(),
     market: new MarketPanel(eco),
     plot: new PlotMenu(eco, (x, y, action, item) => game?.plotAction(x, y, action, item)),
     reel: new ReelGame(),

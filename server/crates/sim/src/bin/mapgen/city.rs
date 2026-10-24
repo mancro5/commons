@@ -183,6 +183,16 @@ pub fn city() -> MapFile {
             "arena" => arena(&mut k),
             _ => landmark(&mut k, &t.key, &t.name),
         }
+        // Where bugs and mushrooms turn up in the green blocks (ADR 0019).
+        match t.key.as_str() {
+            "park" => forage(&mut k, "park", 12, 6),
+            "pond" => forage(&mut k, "park", 10, 4),
+            "lake" => forage(&mut k, "park", 12, 4),
+            "orchard" => forage(&mut k, "orchard", 12, 8),
+            "woods" => forage(&mut k, "woods", 14, 14),
+            "meadow" => forage(&mut k, "meadow", 14, 8),
+            _ => {}
+        }
         // Every block names itself on its south sidewalk.
         k.object("signpost", 21, N - 2, 1, 1, &t.name);
         // A metro station's entrance beside the signpost on some (ADR 0016):
@@ -202,6 +212,81 @@ pub fn city() -> MapFile {
 }
 
 /// Pavement around the block with street lamps along the kerb.
+/// Bug and mushroom spots (ADR 0019): `bugs` on open grass, flowers or
+/// sand, and `shrooms` on grass beside a tree or a log (anywhere grassy in
+/// the Meadow), each a few tiles from the next. A bug spot by the water
+/// is the water's edge's, whatever the block.
+fn forage(k: &mut Blk, habitat: &str, bugs: usize, shrooms: usize) {
+    let lawn = [g("grass"), g("grass_dark"), g("flowers")];
+    let woody = [
+        "tree",
+        "pine",
+        "apple_tree",
+        "willow",
+        "stump",
+        "log",
+        "mushrooms",
+        "bush",
+    ]
+    .map(super::d);
+    let open = |k: &Blk, x: u16, y: u16| {
+        let i = k.b.i(k.ox + x, k.oy + y);
+        k.b.decor[i] == 0 && !k.b.solid[i]
+    };
+    let near = |k: &Blk, x: u16, y: u16, r: i32, f: &dyn Fn(usize) -> bool| {
+        (-r..=r).any(|dy| {
+            (-r..=r).any(|dx| {
+                let (a, c) = ((k.ox + x) as i32 + dx, (k.oy + y) as i32 + dy);
+                f(k.b.i(a as u16, c as u16))
+            })
+        })
+    };
+    let mut picked: Vec<(u16, u16)> = vec![];
+    for shroom in [false, true] {
+        let mut cands: Vec<(u32, u16, u16)> = vec![];
+        for y in 3..N - 3 {
+            for x in 3..N - 3 {
+                let i = k.b.i(k.ox + x, k.oy + y);
+                let ground = k.b.ground[i];
+                let ok = open(k, x, y)
+                    && if shroom {
+                        lawn.contains(&ground)
+                            && (habitat == "meadow"
+                                || near(k, x, y, 1, &|j| woody.contains(&k.b.decor[j])))
+                    } else {
+                        lawn.contains(&ground) || ground == g("sand")
+                    };
+                if ok {
+                    cands.push((k.hash(x, y, 0x666f + shroom as u32), x, y));
+                }
+            }
+        }
+        cands.sort();
+        let want = if shroom { shrooms } else { bugs };
+        let mut n = 0;
+        for (_, x, y) in cands {
+            if n == want {
+                break;
+            }
+            if picked
+                .iter()
+                .any(|&(px, py)| px.abs_diff(x).max(py.abs_diff(y)) < 4)
+            {
+                continue;
+            }
+            picked.push((x, y));
+            n += 1;
+            let wet = !shroom && near(k, x, y, 2, &|j| k.b.ground[j] == g("water"));
+            let label = format!(
+                "{}:{}",
+                if shroom { "shroom" } else { "bug" },
+                if wet { "water" } else { habitat }
+            );
+            k.marker("forage", x, y, 1, 1, Some(&label));
+        }
+    }
+}
+
 fn sidewalk(k: &mut Blk) {
     for y in 0..N {
         for x in 0..N {
