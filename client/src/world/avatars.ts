@@ -209,6 +209,8 @@ export class Avatar {
   private wheelAt: { x: number; y: number } | null = null;
   private fishing: { castAt: number; biteAt: number } | null = null;
   private reelAt = -Infinity;
+  /** A rod held out whatever else they're doing (Francy, fishing sat on her dock). */
+  rodOut = false;
   /** A fish out on the bank, still on our line, until then: the rod stays up, tugging. */
   private hookedUntil = 0;
   /** World position and depth of the rod's tip once the line is out, for drawing the line. */
@@ -313,6 +315,12 @@ export class Avatar {
     }
   }
 
+  /** Faded (hiding in a hedge, or out of a paintball match): the figure and its name. */
+  setFade(alpha: number) {
+    this.sprite.alpha = alpha;
+    this.label.style.opacity = alpha < 1 ? String(Math.max(0, alpha)) : "";
+  }
+
   /** In the arena's fight (or out of it, with null). */
   setArena(a: { x: number; y: number; facing: 1 | -1; frame: AvatarFrame | null; walking: boolean; hurt: boolean; lean?: number; lift?: number } | null) {
     this.arena = a;
@@ -378,13 +386,17 @@ export class Avatar {
     else this.snap({ x: info.x, y: info.y });
   }
 
-  /** StateChange from the server: sit down on / stand up from `at`. */
-  setState(state: number, at: TileXY) {
+  /**
+   * StateChange from the server: sit down on / stand up from `at`. With
+   * `keepWalk` the posture changes but a walk already under way carries on
+   * (we walked off a seat or the water's edge before the server said so).
+   */
+  setState(state: number, at: TileXY, keepWalk = false) {
     if (state === 1 && this.state !== 1) this.standTile = this.destination;
     if (state !== 1) this.standTile = null;
     if (state !== FISHING) this.fishing = null;
     this.state = state;
-    this.snap(at);
+    if (!keepWalk) this.snap(at);
   }
 
   /** FishEvent CAST: face the water and swing the rod out. */
@@ -799,7 +811,7 @@ export class Avatar {
     this.rodTip = null;
     const reeling = now - this.reelAt < REEL_FLICK_MS;
     const hooked = now < this.hookedUntil;
-    if (!reeling && !hooked && (this.state !== FISHING || walking)) return;
+    if (!reeling && !hooked && !this.rodOut && (this.state !== FISHING || walking)) return;
     // Angle above the horizontal, pointing the way we face.
     let a: number;
     const f = this.fishing;

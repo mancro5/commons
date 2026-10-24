@@ -13,7 +13,7 @@ const O = "#3b3a2e";
 export const TEST_RIDE = 0x80;
 
 /** Riding speeds in tenths of a tile a second (`commons_sim::vehicles`). */
-const SPEED_X10: Record<number, number> = { 1: 52, 2: 60, 3: 72, 4: 72, 5: 64 };
+const SPEED_X10: Record<number, number> = { 1: 52, 2: 60, 3: 72, 4: 72, 5: 82 };
 
 /** How fast vehicle `code` goes (0: not a vehicle). */
 export function rideSpeed(code: number): number {

@@ -11,19 +11,27 @@ pub const TEST_RIDE: u8 = 0x80;
 /// The ground the mall's test track is made of.
 pub const TRACK_GROUND: &str = "track";
 
+/// The skateboard: free for everyone, and nearly twice walking (as it
+/// always was, before vehicles).
+pub const SKATEBOARD: u8 = 5;
+use crate::motion::SKATE_SPEED_X10;
+
 /// How much faster than walking each vehicle goes, in tenths.
 const SPEEDUP_X10: [(u8, u16); 5] = [
     (1, 13), // roller skates
     (2, 15), // kick scooter
     (3, 18), // city bike
     (4, 18), // vintage bike
-    (5, 16), // skateboard
+    (5, 0),  // skateboard: its own speed (`SKATE_SPEED_X10`)
 ];
 
 /// Speed riding vehicle `code` (test-ride bit ignored), in tenths of a tile
 /// a second; `None` for no vehicle (or one that doesn't exist).
 pub fn speed_x10(code: u8) -> Option<u8> {
     let code = code & !TEST_RIDE;
+    if code == SKATEBOARD {
+        return Some(SKATE_SPEED_X10);
+    }
     SPEEDUP_X10
         .iter()
         .find(|&&(c, _)| c == code)
@@ -45,6 +53,7 @@ mod tests {
         assert_eq!(speed_x10(1), Some(52));
         assert_eq!(speed_x10(3), Some(72));
         assert_eq!(speed_x10(3 | TEST_RIDE), Some(72));
+        assert_eq!(speed_x10(SKATEBOARD), Some(82));
         for c in codes() {
             assert!(speed_x10(c).unwrap() > WALK_SPEED_X10);
         }

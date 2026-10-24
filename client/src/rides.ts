@@ -6,6 +6,9 @@ import type { Economy, Item } from "./economy";
 import type { Auth } from "./net/api";
 import { TEST_RIDE } from "./world/vehicles";
 
+/** The skateboard's code (`commons_sim::vehicles::SKATEBOARD`): everyone has one. */
+const SKATEBOARD = 5;
+
 export class Rides {
   /** The saved ride: a vehicle's code (with `TEST_RIDE` on a test ride), 0 on foot. */
   ride = 0;
@@ -24,9 +27,9 @@ export class Rides {
     return this.ride !== 0 && !this.testRide;
   }
 
-  /** Vehicles you own. */
+  /** Vehicles you can ride: everyone's skateboard (free), then any you've bought. */
   owned(): Item[] {
-    return this.eco.ofKind("vehicle").filter((v) => this.eco.qty(v.id) > 0);
+    return this.eco.ofKind("vehicle").filter((v) => v.meta.code === SKATEBOARD || this.eco.qty(v.id) > 0);
   }
 
   /** The item for a ride code. */

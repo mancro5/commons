@@ -17,7 +17,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::Utc;
-use commons_sim::vehicles::{TEST_RIDE, speed_x10};
+use commons_sim::vehicles::{SKATEBOARD, TEST_RIDE, speed_x10};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -100,6 +100,9 @@ async fn ride(
                 ));
             }
             code | TEST_RIDE
+        } else if code == SKATEBOARD {
+            // Everyone has a skateboard.
+            code
         } else {
             let mut conn = state.db.acquire().await.map_err(db_err)?;
             let have = totals(&mut conn, player, &[it.id]).await.map_err(db_err)?[0].1;

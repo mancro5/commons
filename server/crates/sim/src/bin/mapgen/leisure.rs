@@ -139,3 +139,87 @@ pub fn bowling() -> MapFile {
     b.object("bowling_exit", 11, h - 1, 2, 1, Some("To the city"), true);
     b.finish("Bowling", (11, 13))
 }
+
+/// Inside the Splat Yard: a big timber barn with a paintball field of
+/// turf filling most of it (fenced with netting: you go on only in a
+/// match), Blue's base on the left and Red's on the right, and between them
+/// inflatable snake bunkers, hay bales, crates, tyre stacks, steel drums,
+/// hedges to hide in, the big yellow X in the middle and a power-up pad up
+/// each flank. Everything on the field is mirrored, so neither side has the
+/// better of it. Below: benches to watch from, the sign-up desk, and the
+/// door back out to the city.
+pub fn paintball() -> MapFile {
+    let (w, h) = (46u16, 36u16);
+    let (fx, fy, fw, fh) = (3u16, 2u16, 40u16, 24u16);
+    let mut b = Builder::new(w, h);
+    b.rect(0, 0, w, h, "tavern_floor");
+    b.rect(fx, fy, fw, fh, "pitch");
+    for x in 0..w {
+        b.decor(x, 0, "wood_wall");
+        if !(22..=23).contains(&x) {
+            b.decor(x, h - 1, "wood_wall");
+        }
+    }
+    for y in 0..h {
+        b.decor(0, y, "wood_wall");
+        b.decor(w - 1, y, "wood_wall");
+    }
+    // The field (solid: nobody wanders on while a match is on).
+    b.object("pb_field", fx, fy, fw, fh, Some("Splat Yard"), true);
+    // The left half, mirrored onto the right: (kind, x, y, w, h) in field tiles.
+    let half: &[(&str, u16, u16, u16, u16)] = &[
+        ("pb_snake", 4, 5, 1, 4),
+        ("pb_snake", 4, 15, 1, 4),
+        ("pb_hay", 5, 11, 1, 2),
+        ("pb_hedge", 8, 2, 2, 2),
+        ("pb_hedge", 8, 20, 2, 2),
+        ("pb_crate", 9, 8, 1, 1),
+        ("pb_crate", 10, 8, 1, 1),
+        ("pb_crate", 9, 9, 1, 1),
+        ("pb_crate", 9, 15, 1, 1),
+        ("pb_crate", 10, 15, 1, 1),
+        ("pb_crate", 9, 14, 1, 1),
+        ("pb_tires", 12, 11, 1, 2),
+        ("pb_drum", 13, 4, 1, 1),
+        ("pb_drum", 13, 19, 1, 1),
+        ("pb_snake", 15, 7, 3, 1),
+        ("pb_snake", 15, 16, 3, 1),
+        ("pb_hay", 17, 10, 2, 1),
+        ("pb_hay", 17, 13, 2, 1),
+        ("pb_hedge", 16, 2, 2, 2),
+        ("pb_hedge", 16, 20, 2, 2),
+    ];
+    for &(k, x, y, ow, oh) in half {
+        b.object(k, fx + x, fy + y, ow, oh, None, false);
+        b.object(k, fx + fw - x - ow, fy + y, ow, oh, None, false);
+    }
+    // The middle: the X, and a tyre stack above and below it.
+    b.object("pb_x", fx + 19, fy + 11, 2, 2, None, false);
+    b.object("pb_tires", fx + 19, fy + 6, 2, 1, None, false);
+    b.object("pb_tires", fx + 19, fy + 17, 2, 1, None, false);
+    // The power-up pads, up each flank.
+    b.object("pb_pad", fx + 19, fy + 1, 2, 2, None, false);
+    b.object("pb_pad", fx + 19, fy + 21, 2, 2, None, false);
+    // Where each side comes in.
+    for y in [8u16, 11, 15] {
+        b.object("pb_spawn", fx + 1, fy + y, 1, 1, Some("blue"), false);
+        b.object("pb_spawn", fx + fw - 2, fy + y, 1, 1, Some("red"), false);
+    }
+    // The stands: benches to watch from, lanterns along the wall.
+    for x in [4u16, 9, 14, 29, 34, 39] {
+        b.decor(x, 28, "bench");
+        b.decor(x + 1, 28, "bench");
+        b.decor(x + 2, 28, "bench");
+    }
+    for x in [2u16, 12, 33, 43] {
+        b.decor(x, 33, "lantern");
+    }
+    b.decor(2, 27, "barrel");
+    b.decor(43, 27, "barrel");
+    // The sign-up desk, the racks of markers, and the way out.
+    b.object("pb_desk", 20, 30, 6, 1, Some("Sign up"), true);
+    b.object("pb_rack", 4, 32, 4, 1, Some("Markers"), true);
+    b.object("pb_rack", 38, 32, 4, 1, Some("Masks"), true);
+    b.object("pb_exit", 22, h - 1, 2, 1, Some("To the city"), true);
+    b.finish("Splat Yard", (22, 32))
+}

@@ -328,6 +328,7 @@ export class BowlingPanel extends Panel {
     private send: (m: { t: "BowlJoin"; lane: number; vsBot: boolean } | { t: "BowlLeave"; lane: number } | { t: "BowlRoll"; lane: number; aim: number; power: number }) => void,
   ) {
     super("🎳 Bowling", "bowling");
+    this.sticky = true;
     this.enlargeable(this.canvas);
     this.canvas.width = CW;
     this.canvas.height = CH;

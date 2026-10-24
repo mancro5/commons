@@ -4,7 +4,7 @@
 // rich (most of all at golden hour). `?hour=21.5` overrides the clock for testing.
 
 import { type Application, ColorMatrixFilter, Container, Graphics, Sprite, Texture } from "pixi.js";
-import { TILE } from "../world/art";
+import { TILE, buildingLanterns } from "../world/art";
 import type { ZoneMap } from "../world/map";
 import type { Scene } from "../world/scene";
 
@@ -51,15 +51,15 @@ interface Grade {
 // most at golden hour (around sunrise and sunset), and kept colourful at
 // night so the dark isn't just grey.
 const GRADES: Grade[] = [
-  { h: 0, sat: 0.2, con: 0.08 },
-  { h: 5, sat: 0.2, con: 0.08 },
-  { h: 6.8, sat: 0.3, con: 0.1 },
-  { h: 8.5, sat: 0.15, con: 0.06 },
-  { h: 16, sat: 0.15, con: 0.06 },
-  { h: 18, sat: 0.32, con: 0.11 },
-  { h: 19.5, sat: 0.26, con: 0.1 },
-  { h: 21.5, sat: 0.2, con: 0.08 },
-  { h: 24, sat: 0.2, con: 0.08 },
+  { h: 0, sat: 0.34, con: 0.1 },
+  { h: 5, sat: 0.34, con: 0.1 },
+  { h: 6.8, sat: 0.44, con: 0.12 },
+  { h: 8.5, sat: 0.28, con: 0.08 },
+  { h: 16, sat: 0.28, con: 0.08 },
+  { h: 18, sat: 0.46, con: 0.13 },
+  { h: 19.5, sat: 0.4, con: 0.12 },
+  { h: 21.5, sat: 0.34, con: 0.1 },
+  { h: 24, sat: 0.34, con: 0.1 },
 ];
 
 export function gradeAt(hour: number): { sat: number; con: number } {
@@ -208,11 +208,31 @@ export class DayNight {
       }
     });
     for (const o of map.objects) {
-      if (!["town_hall", "clothes_shop", "bar", "arcade_hall", "fountain", "campfire", "lantern_stand"].includes(o.kind)) continue;
+      if (o.kind === "fountain") {
+        // The fountain's water glows aqua in the dark.
+        const f = new Sprite(whiteGlow());
+        f.anchor.set(0.5);
+        f.tint = 0x5ff0ff;
+        f.scale.set(o.w * 0.75, o.h * 0.55);
+        f.alpha = 0.6;
+        f.position.set((o.x + o.w / 2) * TILE, (o.y + o.h / 2) * TILE);
+        this.lights.addChild(f);
+        continue;
+      }
+      // The lanterns either side of a building's door: a warm little glow each.
+      for (const p of buildingLanterns(o)) {
+        add(tex, p.x, p.y, 0.95, 0.95, 0.5);
+        add(bulb, p.x, p.y, 0.3, 0.3, 0.9);
+        add(pool, p.x, p.y + 30, 1.6, 0.8, 0.35);
+      }
+      // Things that are themselves alight: a campfire, the lantern stand. (Not
+      // the middle of a building: a glow there sat on its wall like a lamp
+      // nobody could see; buildings light up by their door lanterns.)
+      if (!["campfire", "lantern_stand"].includes(o.kind)) continue;
       const s = new Sprite(tex);
       s.anchor.set(0.5);
-      s.scale.set(o.kind === "town_hall" ? 4 : o.kind === "clothes_shop" || o.kind === "bar" || o.kind === "arcade_hall" ? 3 : o.kind === "campfire" ? 3.2 : 1.6);
-      s.alpha = o.kind === "campfire" || o.kind === "lantern_stand" ? 0.8 : 0.28;
+      s.scale.set(o.kind === "campfire" ? 3.2 : 1.6);
+      s.alpha = 0.8;
       s.position.set((o.x + o.w / 2) * TILE, (o.y + o.h / 2) * TILE);
       this.lights.addChild(s);
     }
@@ -239,6 +259,22 @@ export class DayNight {
       if (o.kind === "arcade_cabinet") add(cx, o.y * TILE - 9, CABINET_NEON[o.label ?? ""] ?? 0x3fe0ff, 1.5);
       if (o.kind === "dance_machine") add(cx, o.y * TILE - 12, CABINET_NEON["Dance Off"], 2.2);
     }
+  }
+
+  /**
+   * A coloured glow at world position (x, y), shown after dark like the
+   * fountain's, for something that comes and goes (a lure): destroy the
+   * sprite to put it out.
+   */
+  addGlow(x: number, y: number, sx: number, sy: number, tint: number, alpha: number): Sprite {
+    const s = new Sprite(whiteGlow());
+    s.anchor.set(0.5);
+    s.tint = tint;
+    s.scale.set(sx, sy);
+    s.alpha = alpha;
+    s.position.set(x, y);
+    this.lights.addChild(s);
+    return s;
   }
 
   /** A warm light at world position (x, y) that shows after dark. */
@@ -282,7 +318,7 @@ export class DayNight {
     this.lights.position.copyFrom(this.scene.world.position);
     this.lights.scale.copyFrom(this.scene.world.scale);
     if (this.neon) {
-      this.setGrade(0.2, 0.08);
+      this.setGrade(0.32, 0.1);
       // A dim violet room; the neon glows ride with the camera and breathe.
       const { width, height } = this.app.screen;
       this.shade.clear().rect(0, 0, width, height).fill(0xa49cc4);
@@ -296,7 +332,7 @@ export class DayNight {
       return;
     }
     if (this.indoors) {
-      this.setGrade(0.12, 0.05);
+      this.setGrade(0.24, 0.07);
       this.dark = 0;
       this.shade.clear();
       this.lights.visible = false;

@@ -166,6 +166,25 @@ export function splash(vol = 1, delayMs = 0) {
   burst(t + 0.05, 0.22, 0.06 * vol, "highpass", 3500);
 }
 
+/**
+ * Money in: a cha-ching. Two quick coin clinks, then the till's bright bell
+ * ringing out (a touch bigger for a bigger sum).
+ */
+export function cash(vol = 1, amount = 1) {
+  if (muted) return;
+  const t = at(0);
+  const big = Math.min(1, Math.log10(Math.max(1, amount)) / 3);
+  // The clinks: short, bright, metallic.
+  for (const [dt, hz] of [[0, 2093], [0.07, 2637]] as [number, number][]) {
+    tone(t + dt, 0.06, 0.09 * vol, "square", hz, hz * 0.98);
+    tone(t + dt, 0.12, 0.06 * vol, "triangle", hz * 2.01);
+    burst(t + dt, 0.04, 0.05 * vol, "highpass", 6000);
+  }
+  // The bell: a ringing chord that fades slowly.
+  for (const hz of [1568, 1976, 2349]) tone(t + 0.15, 0.6 + big * 0.4, (0.05 + big * 0.02) * vol, "sine", hz);
+  tone(t + 0.15, 0.25, 0.04 * vol, "triangle", 3136);
+}
+
 /** A tug on the line: a little bloop. */
 export function nibble(vol = 1) {
   if (muted) return;

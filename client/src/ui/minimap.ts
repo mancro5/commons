@@ -1,11 +1,12 @@
-// The minimap: the whole city in a corner, a pulsing dot where you are, the
+// The minimap: the whole city in a corner (an old atlas in a wooden frame), a pulsing dot where you are, the
 // spot you're walking to, and the name of the place you're in. Tap it for
 // the big city map.
 
 import { blockOrigin, ownerAt } from "../world/city";
 import { type ZoneMap, spot } from "../world/map";
 import type { TileXY } from "../world/motion";
-import { cityImage, drawHome, drawYou, geometry, placeName } from "./citymap";
+import { drawArrow, drawHome, drawOthers, drawRoute, geometry, placeName } from "./citymap";
+import { atlasMap } from "./atlasmap";
 
 export class Minimap {
   readonly el = document.createElement("button");
@@ -22,6 +23,8 @@ export class Minimap {
     this.el.title = "City map (C)";
     this.el.setAttribute("aria-label", "City map");
     this.el.hidden = true;
+    // An old atlas in a wood-and-brass frame.
+    this.el.classList.add("style-wood");
     this.el.append(this.canvas, this.name);
     this.el.onclick = onTap;
     root.append(this.el);
@@ -41,8 +44,11 @@ export class Minimap {
     this.home = lot && this.map ? spot(this.map, `door:${lot}`) : null;
   }
 
-  /** Call every frame with where the player is and is heading. */
-  update(pos: TileXY, dest: TileXY | null, now: number) {
+  /**
+   * Call every frame with where the player is, the rest of their walk (if
+   * walking), which way they face (radians) and where others nearby are.
+   */
+  update(pos: TileXY, route: TileXY[] | null, now: number, heading = Math.PI / 2, others: TileXY[] = []) {
     const map = this.map;
     if (!map) return;
     const css = this.canvas.clientWidth || 160;
@@ -55,19 +61,10 @@ export class Minimap {
     const k = px / map.width;
     const ctx = this.canvas.getContext("2d")!;
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(cityImage(map), 0, 0, px, px);
-    if (dest && Math.hypot(dest.x - pos.x, dest.y - pos.y) > 2) {
-      ctx.strokeStyle = "rgba(255, 248, 227, 0.9)";
-      ctx.lineWidth = 1.5 * dpr;
-      ctx.setLineDash([3 * dpr, 3 * dpr]);
-      ctx.beginPath();
-      ctx.moveTo((pos.x + 0.5) * k, (pos.y + 0.5) * k);
-      ctx.lineTo((dest.x + 0.5) * k, (dest.y + 0.5) * k);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = "#f6c343";
-      ctx.fillRect((dest.x + 0.5) * k - 2.5 * dpr, (dest.y + 0.5) * k - 2.5 * dpr, 5 * dpr, 5 * dpr);
-    }
+    ctx.drawImage(atlasMap(map, px), 0, 0);
+    // The way there, along the streets (not for a step or two).
+    const end = route?.[route.length - 1];
+    if (route && end && Math.hypot(end.x - pos.x, end.y - pos.y) > 2) drawRoute(ctx, route, k, 1.5 * dpr, now);
     // The block you're in, outlined.
     const b = ownerAt(geometry, Math.round(pos.x), Math.round(pos.y));
     const o = blockOrigin(geometry, b);
@@ -75,7 +72,8 @@ export class Minimap {
     ctx.lineWidth = 2 * dpr;
     ctx.strokeRect(o.x * k, o.y * k, geometry.blockTiles * k, geometry.blockTiles * k);
     if (this.home) drawHome(ctx, (this.home.x + 0.5) * k, (this.home.y + 0.5) * k, 4 * dpr);
-    drawYou(ctx, (pos.x + 0.5) * k, (pos.y + 0.5) * k, 4 * dpr, now);
+    drawOthers(ctx, others, k, 1.5 * dpr);
+    drawArrow(ctx, (pos.x + 0.5) * k, (pos.y + 0.5) * k, 4.6 * dpr, heading, now);
     const name = placeName(Math.round(pos.x), Math.round(pos.y));
     if (name !== this.lastName) {
       this.lastName = name;

@@ -98,6 +98,21 @@ export class Panel {
     return !this.el.hidden;
   }
 
+  /** A game board or the map: stays open when the world behind it is tapped. */
+  sticky = false;
+
+  /**
+   * A tap on the world while a menu or shop is open: it was meant for the
+   * window (closing it, or a slip of the finger), not a walk. Closes it and
+   * says so (game boards and the map stay open: see `sticky`).
+   */
+  static dismissOnWorldTap(): boolean {
+    const p = Panel.current;
+    if (!p || !p.open || p.sticky) return false;
+    p.hide();
+    return true;
+  }
+
   /** Closes whichever panel is open; returns whether one was. */
   static closeCurrent(): boolean {
     if (!Panel.current) return false;
@@ -684,6 +699,11 @@ export class ReelGame {
     this.el.append(this.title, bar, btn);
     this.el.hidden = true;
     document.body.appendChild(this.el);
+  }
+
+  /** A fish on the line right now (the reel game showing). */
+  get active(): boolean {
+    return !this.el.hidden;
   }
 
   private pos(t: number) {

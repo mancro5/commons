@@ -560,7 +560,7 @@ mod tests {
             "theater",
             "fairground",
             "gallery",
-            "casino",
+            "paintball",
             "bowling",
             "arena",
         ] {
@@ -578,13 +578,13 @@ mod tests {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../assets/city");
         let types = std::fs::read_to_string(format!("{dir}/block_types.json")).unwrap();
         let city = std::fs::read_to_string(format!("{dir}/city.json")).unwrap();
-        let future = city.replacen("\"casino\"", "\"karaoke_bar\"", 1);
+        let future = city.replacen("\"gallery\"", "\"karaoke_bar\"", 1);
         assert!(
             City::from_json(&future, &types)
                 .unwrap_err()
                 .contains("isn't enabled")
         );
-        let unknown = city.replacen("\"casino\"", "\"moonbase\"", 1);
+        let unknown = city.replacen("\"gallery\"", "\"moonbase\"", 1);
         assert!(
             City::from_json(&unknown, &types)
                 .unwrap_err()

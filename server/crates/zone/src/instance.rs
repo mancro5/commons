@@ -18,6 +18,7 @@ mod garden;
 mod hangout;
 mod home;
 mod lucky;
+mod paintball;
 mod pool;
 mod rps;
 mod together;
@@ -38,11 +39,12 @@ use commons_protocol::{
     CELL_TILES, ClientMsg, EntityInfo, ServerMsg, Tile, emote, error_code, push_framed, state,
 };
 use commons_sim::{
-    Grid, Motion, SPRINT_SPEED_X10, TilePos, WALK_SPEED_X10, compress, route, vehicles,
+    Grid, Motion, SKATE_SPEED_X10, SPRINT_SPEED_X10, TilePos, WALK_SPEED_X10, compress, route,
+    vehicles,
 };
 
-/// The zone where vehicles can be ridden and people can sprint (everywhere
-/// else is indoors: on foot, at a walk).
+/// The zone where vehicles can be ridden (everywhere else is indoors: on
+/// foot, at a walk or a sprint).
 pub(crate) const OUTDOORS: &str = "city";
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
@@ -62,8 +64,8 @@ const MAX_PATH_EXPANSIONS: usize = 12_000;
 const ACTIVITY_EVERY_MS: u32 = 60_000;
 /// Cap on interactions counted per avatar per report.
 const MAX_INTERACTIONS_PER_REPORT: u32 = 30;
-const MAX_VIEW_W: u8 = 64;
-const MAX_VIEW_H: u8 = 48;
+const MAX_VIEW_W: u8 = 104;
+const MAX_VIEW_H: u8 = 64;
 /// Entities per CellEnter message, keeping each well under the u16 frame limit.
 const CELL_ENTER_CHUNK: usize = 200;
 /// A client whose unsent output grows past this is disconnected.
@@ -287,6 +289,8 @@ pub struct Instance {
     lanes: Vec<bowling::Lane>,
     /// The gladiator arena, if the map has one.
     arena: Option<arena::Arena>,
+    /// The Splat Yard's paintball, if the map has a field.
+    yard: Option<paintball::Yard>,
     /// The arcade's cabinets, in map order.
     cabinets: Vec<arcade::Cabinet>,
     /// The pitch's ball, if the zone has a pitch.
@@ -347,6 +351,7 @@ impl Instance {
             .iter()
             .find(|o| o.kind == "arena")
             .map(arena::Arena::new);
+        let yard = paintball::Yard::new(&zone.map.objects);
         let lanes = zone
             .map
             .objects
@@ -401,6 +406,7 @@ impl Instance {
             lucky: lucky::Lucky::new(),
             lanes,
             arena: arena_obj,
+            yard,
             cabinets,
             ball,
             activity_left: Vec::new(),
@@ -539,6 +545,7 @@ impl Instance {
             self.pool_tick(now);
             self.bowl_tick(now);
             self.arena_tick(now);
+            self.pb_tick(now);
             self.arcade_tick(now);
             self.garden_tick(now);
             self.lucky_tick(now);
@@ -767,6 +774,7 @@ impl Instance {
         self.lucky_hello(id);
         self.bowl_hello(id);
         self.arena_hello(id);
+        self.pb_hello(id);
         self.arcade_hello(id);
         self.stats
             .population
@@ -781,6 +789,7 @@ impl Instance {
         self.pool_leave(id);
         self.bowl_leave_all(id);
         self.arena_leave(id);
+        self.pb_leave(id);
         self.arcade_leave(id, None);
         let Some(a) = self.avatars.remove(&id) else {
             return;
@@ -895,6 +904,13 @@ impl Instance {
             ClientMsg::ArenaLeave {} => self.arena_leave(id),
             ClientMsg::ArenaMove { dir } => self.arena_move(id, dir),
             ClientMsg::ArenaAct { act } => self.arena_act(id, act, now),
+            ClientMsg::PbJoin { team } => self.pb_join(id, team, now),
+            ClientMsg::PbLeave {} => self.pb_leave(id),
+            ClientMsg::PbStart { bots } => self.pb_start(id, bots, now),
+            ClientMsg::PbMove { x, y, aim } => self.pb_move(id, x, y, aim, now),
+            ClientMsg::PbFire { shot, x, y, aim } => self.pb_fire(id, shot, x, y, aim, now),
+            ClientMsg::PbDash {} => self.pb_dash(id, now),
+            ClientMsg::PbReload {} => self.pb_reload(id, now),
             ClientMsg::PlotAction { x, y, action, item } => {
                 self.plot_action(id, (x, y), action, item, now)
             }
@@ -926,7 +942,7 @@ impl Instance {
 
     fn move_to(&mut self, id: u32, target: TilePos, sprint: bool, now: u32) {
         // Fighting in the arena: the fight moves you, nothing else.
-        if self.arena_fighting(id) {
+        if self.arena_fighting(id) || self.pb_playing(id) {
             return;
         }
         let a = self.avatars.get_mut(&id).unwrap();
@@ -940,7 +956,6 @@ impl Instance {
             _ => {}
         }
         let grid = &self.grid;
-        let outdoors = self.zone.id == OUTDOORS;
         let a = self.avatars.get_mut(&id).unwrap();
         // Mid-walk, continue through the tile being walked into so the new path
         // joins the old one without a seam. Otherwise start shortly in the future
@@ -966,7 +981,7 @@ impl Instance {
             return;
         }
         // On wheels where they apply; following someone, at least their pace;
-        // on foot outdoors, a sprint if asked for.
+        // on foot (indoors too), a sprint if asked for.
         let own = self.ride_speed(id, &full);
         let leader = self
             .follows
@@ -974,8 +989,15 @@ impl Instance {
             .and_then(|&l| self.ride_speed(l, &full));
         let a = self.avatars.get_mut(&id).unwrap();
         let (speed_x10, sprint_in) = match own.max(leader) {
+            // A skate keeps the speed it had built up (joining a stretch in progress).
+            Some(s) if s == SKATE_SPEED_X10 => (
+                s,
+                prefix
+                    .and(a.motion.as_ref())
+                    .map_or(0, |m| m.skate_ramp_at(t0)),
+            ),
             Some(s) => (s, 0),
-            None if sprint && outdoors => sprint_profile(prefix.and(a.motion.as_ref()), t0, now),
+            None if sprint => sprint_profile(prefix.and(a.motion.as_ref()), t0, now),
             None => (WALK_SPEED_X10, 0),
         };
         let motion = Motion {

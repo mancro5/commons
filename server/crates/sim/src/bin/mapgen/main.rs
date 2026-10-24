@@ -92,6 +92,12 @@ const DECOR: &[&str] = &[
     "chair_n",
     // The gladiator arena's sandstone walls.
     "arena_wall",
+    // Small nature to walk through: flowers, daisies, clover, pebbles, ferns.
+    "wildflowers",
+    "daisies",
+    "clover",
+    "pebbles",
+    "fern",
 ];
 
 fn g(name: &str) -> u8 {
@@ -204,6 +210,11 @@ impl Builder {
             d("tallgrass"),
             d("mushrooms"),
             d("blanket"),
+            d("wildflowers"),
+            d("daisies"),
+            d("clover"),
+            d("pebbles"),
+            d("fern"),
             // Secret passages look like the trees around them.
             d("willow_curtain"),
             d("pine_secret"),
@@ -477,6 +488,7 @@ fn main() -> std::io::Result<()> {
     write("bar", &leisure::bar())?;
     write("arcade", &leisure::arcade())?;
     write("bowling", &leisure::bowling())?;
+    write("paintball", &leisure::paintball())?;
     write("library", &library::hall())?;
     write("club_hall", &clubs::lobby())?;
     write("clubroom", &clubs::room())?;

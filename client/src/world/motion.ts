@@ -32,6 +32,122 @@ export function sprintProfile(spliced: Motion | null, t0: number, now: number): 
 }
 
 const segLen = (a: TileXY, b: TileXY) => Math.hypot(b.x - a.x, b.y - a.y);
+
+/** How long a skate's push from setting-off speed to top speed takes (sim::SKATE_RAMP_MS). */
+export const SKATE_RAMP_MS = 7_000;
+const SKATE_TOP = 3;
+const SKATE_BRAKE = 42e-6;
+
+/**
+ * The skating profile (sim::Skate, in lockstep): picking up speed from the
+ * ramp position `ramp0` to three times setting-off speed, then braking to a
+ * stop at the end of the path. Speeds in tiles per ms.
+ */
+class Skate {
+  v0: number;
+  acc: number;
+  rampLeft: number;
+  brakeAt = 0;
+  brakeT = 0;
+  brakeV = 0;
+  brake = SKATE_BRAKE;
+
+  constructor(
+    ramp0: number,
+    private len: number,
+  ) {
+    const base = SKATE_SPEED_X10 / 10_000;
+    const top = base * SKATE_TOP;
+    this.acc = (top - base) / SKATE_RAMP_MS;
+    const r = Math.max(0, Math.min(SKATE_RAMP_MS, ramp0));
+    this.v0 = base + this.acc * r;
+    this.rampLeft = SKATE_RAMP_MS - r;
+    const stops = (d: number) => {
+      const v = this.speedAfter(this.timeTo(d));
+      return d + (v * v) / (2 * SKATE_BRAKE);
+    };
+    if (stops(0) >= len) {
+      this.brake = len > 0 ? (this.v0 * this.v0) / (2 * len) : 1;
+    } else {
+      let lo = 0;
+      let hi = len;
+      for (let i = 0; i < 40; i++) {
+        const mid = (lo + hi) / 2;
+        if (stops(mid) < len) lo = mid;
+        else hi = mid;
+      }
+      this.brakeAt = lo;
+    }
+    this.brakeT = this.timeTo(this.brakeAt);
+    this.brakeV = this.speedAfter(this.brakeT);
+  }
+
+  speedAfter(dt: number): number {
+    return this.v0 + this.acc * Math.min(dt, this.rampLeft);
+  }
+
+  distBy(dt: number): number {
+    const r = Math.min(dt, this.rampLeft);
+    const d = this.v0 * r + (this.acc / 2) * r * r;
+    return d + Math.max(0, dt - r) * (this.v0 + this.acc * this.rampLeft);
+  }
+
+  timeTo(d: number): number {
+    const rampD = this.v0 * this.rampLeft + (this.acc / 2) * this.rampLeft * this.rampLeft;
+    if (d <= rampD && this.acc > 0) return (-this.v0 + Math.sqrt(this.v0 * this.v0 + 2 * this.acc * d)) / this.acc;
+    return this.rampLeft + (d - rampD) / (this.v0 + this.acc * this.rampLeft);
+  }
+
+  distAt(dt: number): number {
+    if (dt <= this.brakeT) return this.distBy(dt);
+    const u = Math.min(dt - this.brakeT, this.brakeV / this.brake);
+    return Math.min(this.len, this.brakeAt + this.brakeV * u - (this.brake / 2) * u * u);
+  }
+
+  timeFor(d: number): number {
+    if (d <= this.brakeAt) return this.timeTo(d);
+    const rem = Math.min(d - this.brakeAt, this.len - this.brakeAt);
+    const disc = Math.max(0, this.brakeV * this.brakeV - 2 * this.brake * rem);
+    return this.brakeT + (this.brakeV - Math.sqrt(disc)) / this.brake;
+  }
+
+  speedAt(dt: number): number {
+    return dt <= this.brakeT ? this.speedAfter(dt) : Math.max(0, this.brakeV - this.brake * (dt - this.brakeT));
+  }
+}
+
+const pathLen = (m: Motion) => {
+  let len = 0;
+  for (let i = 1; i < m.path.length; i++) len += segLen(m.path[i - 1], m.path[i]);
+  return len;
+};
+
+function skateOf(m: Motion): Skate | null {
+  return m.speedX10 === SKATE_SPEED_X10 ? new Skate(m.sprintIn ?? 0, pathLen(m)) : null;
+}
+
+/** For a skate, how far along its ramp its speed at `t` is (sim::Motion::skate_ramp_at); 0 otherwise. */
+export function skateRampAt(m: Motion | null, t: number): number {
+  const s = m ? skateOf(m) : null;
+  if (!m || !s) return 0;
+  const v = s.speedAt(Math.max(0, t - m.t0));
+  const base = SKATE_SPEED_X10 / 10_000;
+  return Math.round(Math.max(0, Math.min(SKATE_RAMP_MS, (v - base) / s.acc)));
+}
+
+/** How fast a motion is going at `t`, in tiles a second (0 standing). */
+export function speedAt(m: Motion, t: number): number {
+  if (t <= m.t0 || t >= endT(m)) return 0;
+  const s = skateOf(m);
+  if (s) return s.speedAt(t - m.t0) * 1000;
+  return sprintingAt(m, t) ? SPRINT_SPEED_X10 / 10 : m.speedX10 / 10;
+}
+
+/** How far a skate going `tilesPerSec` glides before it stops (tiles). */
+export function glideTiles(tilesPerSec: number): number {
+  const v = tilesPerSec / 1000;
+  return (v * v) / (2 * SKATE_BRAKE);
+}
 const msPerTile = (m: Motion) => 10_000 / Math.max(1, m.speedX10);
 const SPRINT_MS_PER_TILE = 10_000 / SPRINT_SPEED_X10;
 
@@ -39,6 +155,8 @@ const SPRINT_MS_PER_TILE = 10_000 / SPRINT_SPEED_X10;
 function distAt(m: Motion, t: number): number {
   if (t <= m.t0) return 0;
   const dt = t - m.t0;
+  const sk = skateOf(m);
+  if (sk) return sk.distAt(dt);
   const s = m.sprintIn ?? 0;
   if (!s || dt <= s) return dt / msPerTile(m);
   return s / msPerTile(m) + (dt - s) / SPRINT_MS_PER_TILE;
@@ -46,6 +164,8 @@ function distAt(m: Motion, t: number): number {
 
 /** When `d` tiles have been covered (ms after `t0`). */
 function timeFor(m: Motion, d: number): number {
+  const sk = skateOf(m);
+  if (sk) return sk.timeFor(d);
   const s = m.sprintIn ?? 0;
   const walked = s / msPerTile(m);
   if (!s || d <= walked) return d * msPerTile(m);
@@ -54,13 +174,11 @@ function timeFor(m: Motion, d: number): number {
 
 /** Whether they're sprinting at `t`. */
 export function sprintingAt(m: Motion, t: number): boolean {
-  return m.speedX10 === SPRINT_SPEED_X10 || (!!m.sprintIn && t > m.t0 + m.sprintIn);
+  return m.speedX10 === SPRINT_SPEED_X10 || (m.speedX10 !== SKATE_SPEED_X10 && !!m.sprintIn && t > m.t0 + m.sprintIn);
 }
 
 export function durationMs(m: Motion): number {
-  let len = 0;
-  for (let i = 1; i < m.path.length; i++) len += segLen(m.path[i - 1], m.path[i]);
-  return Math.ceil(timeFor(m, len));
+  return Math.ceil(timeFor(m, pathLen(m)));
 }
 
 export function endT(m: Motion): number {
@@ -84,6 +202,37 @@ export function posAt(m: Motion, t: number): TileXY {
   }
   const last = m.path[m.path.length - 1];
   return { x: last.x, y: last.y };
+}
+
+/** What's left of the walk at time `t`: where we are, then each turn still ahead (empty once there). */
+export function routeAhead(m: Motion, t: number): TileXY[] {
+  if (t >= endT(m) || m.path.length < 2) return [];
+  if (t <= m.t0) return m.path.map((p) => ({ x: p.x, y: p.y }));
+  let remaining = distAt(m, t);
+  for (let i = 1; i < m.path.length; i++) {
+    const len = segLen(m.path[i - 1], m.path[i]);
+    if (remaining < len) return [posAt(m, t), ...m.path.slice(i).map((p) => ({ x: p.x, y: p.y }))];
+    remaining -= len;
+  }
+  return [];
+}
+
+/**
+ * The rest of walk `m` from where it is at `t`, at another pace: the same
+ * route, timed so the walker is exactly where they are now (no jump), going
+ * on at `speedX10` (and `sprintIn`). Null when not mid-walk.
+ */
+export function retimed(m: Motion, t: number, speedX10: number, sprintIn: number): Motion | null {
+  const sp = splice(m, t);
+  const ahead = routeAhead(m, t);
+  if (!sp || ahead.length < 2) return null;
+  const [pos, ...rest] = ahead;
+  const path = [sp.prev, ...rest];
+  const seg = Math.hypot(rest[0].x - sp.prev.x, rest[0].y - sp.prev.y);
+  const along = seg > 0 ? (segLen(sp.prev, rest[0]) * Math.hypot(pos.x - sp.prev.x, pos.y - sp.prev.y)) / seg : 0;
+  const next: Motion = { path, t0: 0, speedX10, sprintIn };
+  next.t0 = t - timeFor(next, along);
+  return next;
 }
 
 /** Unit direction of travel at time `t`, or null when standing. */

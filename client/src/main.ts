@@ -16,6 +16,7 @@ import libReferenceUrl from "../../assets/maps/library_reference.json?url";
 import clubHallUrl from "../../assets/maps/club_hall.json?url";
 import clubRoomUrl from "../../assets/maps/clubroom.json?url";
 import bowlingUrl from "../../assets/maps/bowling.json?url";
+import paintballUrl from "../../assets/maps/paintball.json?url";
 import { Economy } from "./economy";
 import { Game, type Ui } from "./game";
 import { Homes } from "./homes";
@@ -81,6 +82,7 @@ const MAP_URLS: Record<string, string> = {
   club_hall: clubHallUrl,
   clubroom: clubRoomUrl,
   bowling: bowlingUrl,
+  paintball: paintballUrl,
 };
 const ERR_REPLACED = 6;
 const ERR_VERSION = 3;
@@ -182,6 +184,7 @@ async function main() {
     onEmote: (id) => game?.emote(id),
     onSit: () => game?.toggleSit(),
     onRide: () => game?.toggleRide(),
+    onLeave: () => game?.leaveBuilding(),
     onToys: () => game?.pickToy(),
     onBag: () => ui.bag.toggle(),
     onAlbum: () => ui.album.toggle(),
@@ -211,7 +214,7 @@ async function main() {
       const here = g?.position;
       if (!g?.scene.map.streets || !here) return null;
       const home = homes.mine ? spot(g.scene.map, `door:${homes.mine}`) : null;
-      return { map: g.scene.map, here, home };
+      return { map: g.scene.map, here, home, route: g.route, heading: g.heading, others: g.others };
     },
     walk: (t) => (game as Game | null)?.walkTo(t),
     toCity: () => void travel({ zone: "city" }),
@@ -455,7 +458,7 @@ async function main() {
           // library). Out of a library wing, you're back at its door in the hall.
           onTravel: (z) => {
             const from = game as Game | null;
-            const place = from && ["mall", "bar", "arcade", HALL, "club_hall", "bowling"].includes(from.zoneId) ? `place:${from.zoneId}` : undefined;
+            const place = from && ["mall", "bar", "arcade", HALL, "club_hall", "bowling", "paintball"].includes(from.zoneId) ? `place:${from.zoneId}` : undefined;
             const arrive =
               (z === HALL && from && wingOfZone(from.zoneId)) || (z === "club_hall" && from?.zoneId === "clubroom")
                 ? `place:${from.zoneId}`

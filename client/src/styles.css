@@ -2622,6 +2622,13 @@ img.px-icon,
   font: inherit;
   cursor: pointer;
   pointer-events: auto;
+  /* A touch see-through, so the world shows behind it; solid under the pointer. */
+  opacity: 0.86;
+  transition: opacity 0.15s;
+}
+
+#hud .minimap:hover {
+  opacity: 1;
 }
 
 #hud .minimap[hidden] {
@@ -3078,6 +3085,32 @@ body.woozy #stage canvas {
 .choice-modal .choice-card button.choice-back:hover {
   color: var(--ink);
   text-decoration: underline;
+}
+
+/* ---- dark game windows: pool and the arcade ---- */
+
+/* A really dark grey around the games, for atmosphere (the wooden title
+   bar stays). The paper colours are swapped for near-black greys, and the
+   text and the non-main buttons made light to read on them. */
+.panel.pool,
+.panel.arcade {
+  --paper: #0f0f11;
+  --paper-2: #18181b;
+  --paper-3: #222226;
+  --muted: #a9a59b;
+  background: var(--paper);
+  color: #ece6d8;
+}
+
+.panel.pool button:not(.primary):not(.x),
+.panel.arcade button:not(.primary):not(.x) {
+  color: #ece6d8;
+  background: var(--paper-3);
+}
+
+.panel.pool .hint,
+.panel.arcade .hint {
+  color: var(--muted);
 }
 
 /* ---- fish rarity (ui/rarity.ts) ---- */
@@ -3909,6 +3942,7 @@ body.woozy #stage canvas {
   padding: 0 2px;
   font-size: 0.85em;
   border-radius: 2px;
+}
 
 /* What the last pool shot did. */
 .pool-note {
@@ -4257,4 +4291,811 @@ body.woozy #stage canvas {
 }
 .arena-stamina.low i {
   background: #b07bff;
+}
+
+/* ---- the leave button (indoors): a little door in the corner ---- */
+#hud .exit-btn {
+  position: absolute;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 64px;
+  padding: 8px 10px 6px;
+  border: 0;
+  background: var(--paper-3);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform 0.12s;
+}
+
+#hud .exit-btn:hover {
+  transform: translateY(-2px);
+}
+
+#hud .exit-btn[hidden] {
+  display: none;
+}
+
+#hud .exit-btn img {
+  image-rendering: pixelated;
+}
+
+/* ---- the minimap's wood-and-brass frame (an old atlas inside: ui/atlasmap.ts) ---- */
+#hud .minimap.style-wood {
+  background: repeating-linear-gradient(90deg, #7a5232 0 6px, #84593a 6px 9px, #714b2d 9px 15px);
+  color: #f6e7c8;
+  box-shadow: inset 0 0 0 2px #4a2f1a, 0 0 0 2px #2b1a0e, 0 6px 14px rgba(0, 0, 0, 0.45);
+}
+#hud .minimap.style-wood canvas {
+  box-shadow: 0 0 0 2px #c9a14a, 0 0 0 3px #4a2f1a;
+}
+
+/* The city map, framed in wood and brass like the minimap (rings drawn
+   outside the canvas, so taps on it still land where they should). */
+.panel.citymap .city-canvas {
+  margin: 12px auto;
+  box-shadow:
+    0 0 0 2px #2b1a0e,
+    0 0 0 4px #c9a14a,
+    0 0 0 5px #6a4428,
+    0 0 0 9px #7a5232,
+    0 0 0 10px #8a6040,
+    0 0 0 12px #2b1a0e,
+    0 6px 16px 12px rgba(0, 0, 0, 0.25);
+}
+
+/* ---- money in: a coin spinning up over your head (Game.coinPop) ---- */
+.coin-pop {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transform: translate(-50%, 0);
+  pointer-events: none;
+  color: #ffe58a;
+  font-weight: bold;
+  font-size: 16px;
+  text-shadow: -1px -1px 0 #3b2208, 1px -1px 0 #3b2208, -1px 1px 0 #3b2208, 1px 1px 0 #3b2208, 0 2px 0 #3b2208, 0 0 8px rgba(255, 200, 60, 0.7);
+  animation: coin-pop 1.6s ease-out forwards;
+}
+.coin-pop img {
+  width: 26px;
+  height: 26px;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 0 6px rgba(255, 210, 80, 0.75));
+  animation: coin-spin 0.55s linear infinite;
+}
+@keyframes coin-pop {
+  0% { opacity: 0; transform: translate(-50%, 8px) scale(0.6); }
+  15% { opacity: 1; transform: translate(-50%, -6px) scale(1.1); }
+  25% { transform: translate(-50%, -10px) scale(1); }
+  70% { opacity: 1; transform: translate(-50%, -34px) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -52px) scale(0.95); }
+}
+@keyframes coin-spin {
+  0% { transform: scaleX(1); }
+  25% { transform: scaleX(0.15); }
+  50% { transform: scaleX(-1); }
+  75% { transform: scaleX(-0.15); }
+  100% { transform: scaleX(1); }
+}
+
+/* ---- Paintball at the Splat Yard ----------------------------------------- */
+
+.pb-hud {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  color: #fff6e0;
+  text-shadow: 0 2px 0 rgba(20, 12, 28, 0.7);
+}
+.pb-hud[hidden],
+.pb-lobby[hidden],
+.pb-results[hidden],
+.pb-cross[hidden],
+.pb-vignette[hidden],
+.pb-respawn[hidden],
+.pb-power[hidden],
+.pb-bottom[hidden],
+.pb-touch[hidden] {
+  display: none;
+}
+body.pb-playing canvas {
+  cursor: none;
+}
+
+/* The scoreboard: Blue, the clock, Red; each side's points as paint pips. */
+.pb-score {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: rgba(20, 14, 30, 0.88);
+  box-shadow: var(--frame), var(--drop);
+}
+.pb-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pb-side b {
+  font-size: 28px;
+  min-width: 28px;
+  text-align: center;
+}
+.pb-side span {
+  font-size: 11px;
+  letter-spacing: 1px;
+  opacity: 0.85;
+}
+.pb-side.blue b {
+  color: #3fa9ff;
+}
+.pb-side.red b {
+  color: #ff4f6a;
+}
+.pb-pips {
+  display: flex;
+  gap: 2px;
+}
+.pb-pips i {
+  width: 7px;
+  height: 10px;
+  background: #3a3046;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.pb-pips i.on {
+  background: var(--c);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.25), 0 0 6px var(--c);
+}
+.pb-clock {
+  min-width: 70px;
+  text-align: center;
+  font-size: 16px;
+  color: #ffd23f;
+}
+.pb-score.mp-blue .pb-side.blue,
+.pb-score.mp-red .pb-side.red {
+  animation: pb-pulse 0.9s ease-in-out infinite;
+}
+@keyframes pb-pulse {
+  50% {
+    filter: brightness(1.5) drop-shadow(0 0 6px currentColor);
+  }
+}
+
+/* The kill feed. */
+.pb-feed {
+  position: absolute;
+  top: 70px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.pb-feed-row {
+  padding: 3px 8px;
+  background: rgba(20, 14, 30, 0.8);
+  box-shadow: var(--frame-thin);
+  font-size: 13px;
+  animation: pb-slide 0.25s ease-out;
+  transition: opacity 1s;
+}
+.pb-feed-row .me {
+  text-decoration: underline;
+}
+.pb-feed-row.old {
+  opacity: 0;
+}
+@keyframes pb-slide {
+  from {
+    transform: translateX(30px);
+    opacity: 0;
+  }
+}
+
+/* Big words in the middle: the countdown, splats, streaks, power-ups. */
+.pb-center {
+  position: absolute;
+  top: 26%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.pb-announce {
+  text-align: center;
+  color: var(--c);
+  animation: pb-pop 2.2s ease-out forwards;
+}
+.pb-announce-main {
+  font-size: calc(26px * var(--s, 1));
+  letter-spacing: 2px;
+  white-space: nowrap;
+  text-shadow:
+    0 3px 0 rgba(20, 12, 28, 0.9),
+    0 0 18px color-mix(in srgb, var(--c) 60%, transparent);
+}
+.pb-announce-sub {
+  font-size: 13px;
+  color: #fff6e0;
+}
+@keyframes pb-pop {
+  0% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+  10% {
+    transform: scale(0.92);
+    opacity: 1;
+  }
+  16% {
+    transform: scale(1);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-14px);
+  }
+}
+
+/* The bottom bar: paint left, the hopper, the roll, the power-up. */
+.pb-bottom {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  background: rgba(20, 14, 30, 0.88);
+  box-shadow: var(--frame), var(--drop);
+}
+.pb-hp {
+  display: flex;
+  gap: 4px;
+}
+.pb-hp i {
+  width: 14px;
+  height: 18px;
+  background: #3a3046;
+  border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.4);
+}
+.pb-hp i.on {
+  background: var(--c);
+  box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.25), inset 2px 2px 0 rgba(255, 255, 255, 0.45);
+}
+.pb-ammo {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 132px;
+}
+.pb-balls {
+  display: flex;
+  gap: 2px;
+}
+.pb-balls i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #3a3046;
+}
+.pb-balls i.on {
+  background: #ffd23f;
+  box-shadow: inset -2px -2px 0 rgba(0, 0, 0, 0.2), inset 1px 1px 0 rgba(255, 255, 255, 0.6);
+}
+.pb-ammo.low .pb-balls i.on {
+  background: #ff4f6a;
+}
+.pb-reload {
+  position: relative;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-align: center;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.25) calc(var(--f) * 100%), transparent 0);
+}
+.pb-ammo.low .pb-reload {
+  color: #ff8a9a;
+  animation: pb-blink 0.6s steps(2) infinite;
+}
+@keyframes pb-blink {
+  50% {
+    opacity: 0.3;
+  }
+}
+.pb-dash {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  border-radius: 50%;
+  background: conic-gradient(#7ee05a calc(var(--f, 1) * 360deg), #3a3046 0);
+  box-shadow: inset 0 0 0 4px rgba(20, 14, 30, 0.9);
+  opacity: 0.6;
+}
+.pb-dash.ready {
+  opacity: 1;
+  box-shadow:
+    inset 0 0 0 4px rgba(20, 14, 30, 0.9),
+    0 0 10px #7ee05a;
+}
+.pb-power {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+.pb-power b {
+  display: block;
+  height: 4px;
+  width: calc(var(--f) * 100%);
+  max-width: 100%;
+  background: var(--c);
+}
+
+/* Out: the count till you are back. */
+.pb-respawn {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: #ff8a9a;
+}
+.pb-respawn div {
+  font-size: 22px;
+  letter-spacing: 3px;
+}
+.pb-respawn b {
+  font-size: 64px;
+  color: #fff6e0;
+}
+
+/* Hit: an arrow at the edge toward whoever shot you. */
+.pb-dir {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  transform: rotate(var(--a, 0rad));
+  opacity: 0;
+}
+.pb-dir::after {
+  content: "";
+  position: absolute;
+  left: min(34vw, 300px);
+  top: -22px;
+  border-left: 26px solid var(--c, #ff4f6a);
+  border-top: 22px solid transparent;
+  border-bottom: 22px solid transparent;
+  filter: drop-shadow(0 0 8px var(--c, #ff4f6a));
+}
+.pb-dir.show {
+  animation: pb-dir 0.9s ease-out forwards;
+}
+@keyframes pb-dir {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* The red edge: a flash when hit, a slow throb on your last paint. */
+.pb-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 0 rgba(255, 40, 70, 0);
+}
+.pb-vignette.hit {
+  animation: pb-hit 0.45s ease-out;
+}
+.pb-vignette.low {
+  animation: pb-low 0.9s ease-in-out infinite;
+}
+@keyframes pb-hit {
+  0% {
+    box-shadow: inset 0 0 120px 40px rgba(255, 40, 70, 0.75);
+  }
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(255, 40, 70, 0);
+  }
+}
+@keyframes pb-low {
+  50% {
+    box-shadow: inset 0 0 140px 30px rgba(255, 30, 60, 0.45);
+  }
+}
+
+/* The crosshair: four ticks round a dot; it kicks out when you fire,
+   shows a white X when you hit, a red one when you put them out. */
+.pb-cross {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 8;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+.pb-cross::before,
+.pb-cross::after {
+  content: "";
+  position: absolute;
+  left: -13px;
+  top: -13px;
+  width: 26px;
+  height: 26px;
+  background:
+    linear-gradient(#fff, #fff) 50% 0 / 2px 7px no-repeat,
+    linear-gradient(#fff, #fff) 50% 100% / 2px 7px no-repeat,
+    linear-gradient(#fff, #fff) 0 50% / 7px 2px no-repeat,
+    linear-gradient(#fff, #fff) 100% 50% / 7px 2px no-repeat,
+    radial-gradient(circle, #fff 1.5px, transparent 2px);
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000);
+  transition: transform 0.08s;
+}
+.pb-cross::after {
+  background:
+    linear-gradient(45deg, transparent 45%, var(--x, #fff) 45%, var(--x, #fff) 55%, transparent 55%),
+    linear-gradient(-45deg, transparent 45%, var(--x, #fff) 45%, var(--x, #fff) 55%, transparent 55%);
+  opacity: 0;
+}
+.pb-cross.fire::before {
+  animation: pb-kick 0.12s ease-out;
+}
+.pb-cross.hit::after {
+  animation: pb-x 0.3s ease-out;
+}
+.pb-cross.kill::after {
+  --x: #ff4f6a;
+  animation: pb-x 0.5s ease-out;
+}
+@keyframes pb-kick {
+  40% {
+    transform: scale(1.45);
+  }
+}
+@keyframes pb-x {
+  0% {
+    opacity: 1;
+    transform: scale(1.4);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+/* The lobby: who is on which team, join, play. */
+.pb-lobby {
+  position: fixed;
+  top: 70px;
+  right: 12px;
+  z-index: 6;
+  width: min(330px, calc(100vw - 24px));
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--frame), var(--drop);
+}
+.pb-lobby-head {
+  display: flex;
+  flex-direction: column;
+}
+.pb-lobby-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+.pb-lobby-teams {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.pb-lobby-team {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  background: color-mix(in srgb, var(--tc) 14%, var(--paper));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--tc) 55%, transparent);
+}
+.pb-lobby-team.blue {
+  --tc: #3fa9ff;
+}
+.pb-lobby-team.red {
+  --tc: #ff4f6a;
+}
+.pb-lobby-team-name {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: color-mix(in srgb, var(--tc) 75%, #000);
+}
+.pb-slot {
+  font-size: 12px;
+  padding: 2px 4px;
+  background: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pb-slot.open {
+  color: var(--muted);
+  text-align: center;
+}
+.pb-slot.me {
+  font-weight: bold;
+  box-shadow: inset 3px 0 0 var(--tc);
+}
+.pb-join {
+  margin-top: 3px;
+  font-size: 12px;
+}
+.pb-lobby-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pb-lobby-actions .primary {
+  flex: 1;
+}
+.pb-help {
+  margin: 0;
+  font-size: 11px;
+}
+
+/* The results. */
+.pb-results {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  background: rgba(20, 14, 30, 0.45);
+  pointer-events: none;
+}
+.pb-results-card {
+  min-width: min(360px, calc(100vw - 32px));
+  padding: 14px 18px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--frame), var(--drop);
+  text-align: center;
+  animation: pb-pop-in 0.4s ease-out;
+}
+.pb-results-card h2 {
+  margin: 0;
+  font-size: 36px;
+  letter-spacing: 3px;
+}
+.pb-results-score {
+  margin: 4px 0 10px;
+  font-size: 16px;
+}
+.pb-results-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pb-results-row {
+  display: grid;
+  grid-template-columns: 1fr 56px 56px;
+  padding: 3px 8px;
+  background: var(--paper-2);
+  text-align: left;
+}
+.pb-results-row.me {
+  outline: 2px solid var(--gold);
+}
+@keyframes pb-pop-in {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+}
+
+/* On a phone: roll and reload. */
+.pb-touch {
+  position: absolute;
+  right: 14px;
+  bottom: 90px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+}
+.pb-touch-btn {
+  padding: 12px 14px;
+  font-size: 15px;
+}
+
+/* ---- Paintball by touch: twin sticks, big buttons, a clear screen ---------- */
+
+/* While you play by touch, the town's bars make way for your thumbs. */
+body.pb-playing.pb-touch-mode .chat,
+body.pb-playing.pb-touch-mode .chat-log,
+body.pb-playing.pb-touch-mode .emotes,
+body.pb-playing.pb-touch-mode .zoom-pad,
+body.pb-playing.pb-touch-mode .minimap,
+body.pb-playing.pb-touch-mode .exit-btn,
+body.pb-playing.pb-touch-mode .top,
+body.pb-playing.pb-touch-mode .tasks-chip,
+body.pb-playing.pb-touch-mode .bottom,
+body.pb-playing.pb-touch-mode .mood-btn,
+body.pb-playing.pb-touch-mode .sit,
+body.pb-playing.pb-touch-mode .ride-btn,
+body.pb-playing.pb-touch-mode .toys-btn {
+  display: none !important;
+}
+body.pb-playing.pb-touch-mode {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* A stick: a ring where the thumb went down, a knob that follows it. */
+.pb-stick {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 7;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.pb-stick[hidden] {
+  display: none;
+}
+.pb-stick::before {
+  content: "";
+  position: absolute;
+  left: -60px;
+  top: -60px;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.08) 55%, rgba(255, 255, 255, 0.18) 56%, rgba(255, 255, 255, 0.05) 70%);
+  box-shadow:
+    0 0 0 3px rgba(20, 14, 30, 0.45),
+    inset 0 0 0 2px rgba(255, 255, 255, 0.35);
+}
+.pb-stick-knob {
+  position: absolute;
+  left: -26px;
+  top: -26px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffffff, #d8d2c4 60%, #9a9282);
+  box-shadow:
+    0 3px 0 rgba(20, 14, 30, 0.6),
+    0 0 0 3px rgba(20, 14, 30, 0.55);
+}
+.pb-stick.aim .pb-stick-knob {
+  background: radial-gradient(circle at 35% 35%, #fff4c4, #ffd23f 60%, #c99a1a);
+}
+.pb-stick.aim.firing::before {
+  box-shadow:
+    0 0 0 3px rgba(20, 14, 30, 0.45),
+    inset 0 0 0 3px #ff4f6a,
+    0 0 18px rgba(255, 79, 106, 0.55);
+}
+.pb-stick.aim.firing .pb-stick-knob {
+  background: radial-gradient(circle at 35% 35%, #ffd6dc, #ff4f6a 60%, #b8323a);
+}
+
+/* Roll and reload: big, round, on the right edge above the aim thumb. */
+.pb-touch {
+  right: 16px;
+  bottom: auto;
+  top: 34%;
+  gap: 14px;
+  align-items: center;
+}
+.pb-touch-btn {
+  width: 68px;
+  height: 68px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 30px;
+  line-height: 1;
+  border: 0;
+  color: #fff;
+  background: rgba(20, 14, 30, 0.72);
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.4),
+    0 4px 0 rgba(0, 0, 0, 0.45);
+  touch-action: none;
+}
+.pb-touch-btn.reload {
+  width: 54px;
+  height: 54px;
+  font-size: 24px;
+}
+.pb-touch-btn.pressed {
+  animation: pb-press 0.18s ease-out;
+}
+@keyframes pb-press {
+  40% {
+    transform: scale(0.86);
+    box-shadow:
+      0 0 0 4px #7ee05a,
+      0 1px 0 rgba(0, 0, 0, 0.45);
+  }
+}
+
+/* By touch, the hopper and paint sit up top (the thumbs own the bottom). */
+body.pb-touch-mode .pb-bottom {
+  bottom: auto;
+  top: 62px;
+  transform: translateX(-50%) scale(0.85);
+  transform-origin: top center;
+}
+body.pb-touch-mode .pb-feed {
+  top: auto;
+  bottom: 12px;
+  right: 50%;
+  transform: translateX(50%);
+  align-items: center;
+}
+
+/* Small screens: the scoreboard and lobby fit. */
+@media (max-width: 640px) {
+  .pb-score {
+    gap: 6px;
+    padding: 4px 8px;
+  }
+  .pb-pips i {
+    width: 4px;
+    height: 8px;
+  }
+  .pb-side b {
+    font-size: 22px;
+    min-width: 20px;
+  }
+  .pb-side span {
+    display: none;
+  }
+  .pb-lobby {
+    top: auto;
+    bottom: 64px;
+    right: 50%;
+    transform: translateX(50%);
+    width: calc(100vw - 20px);
+  }
+  .pb-announce-main {
+    font-size: calc(20px * var(--s, 1));
+  }
+  .pb-help {
+    display: none;
+  }
 }
