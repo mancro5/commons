@@ -1,8 +1,8 @@
 // Yard stands (by each house's front door): a little wooden stand under a
 // striped awning, drawn when its owner puts something on it, with what's
-// for sale standing on the counter so passers-by can see it, and a chalk
-// board with the cheapest price. Your own empty stand shows as a bare one,
-// so you know it's there.
+// for sale standing on the counter so passers-by can see it, each with its
+// price on a little tag below it (and "+2" if there's more than fits). Your
+// own empty stand shows as a bare one, so you know it's there.
 
 import { Sprite, type Texture } from "pixi.js";
 import type { Economy } from "../economy";
@@ -25,8 +25,8 @@ function px(ctx: CanvasRenderingContext2D, color: string, x: number, y: number, 
 const standCache = new Map<string, Texture>();
 
 /** The stand itself (64×72: two tiles wide, the awning reaching above). */
-function standTexture(colour: string, price: number | null): Texture {
-  const key = `${colour}:${price}`;
+function standTexture(colour: string): Texture {
+  const key = colour;
   let t = standCache.get(key);
   if (t) return t;
   const c = document.createElement("canvas");
@@ -48,17 +48,41 @@ function standTexture(colour: string, price: number | null): Texture {
   px(ctx, "#a0703f", 5, 43, 54, 5);
   px(ctx, "#8a5a33", 5, 48, 54, 19);
   for (let x = 12; x < 58; x += 11) px(ctx, "#6e4b30", x, 48, 1, 19);
-  // The chalk board, with the cheapest price.
-  if (price !== null) {
-    px(ctx, O, 40, 52, 18, 12);
-    px(ctx, "#2f3a32", 41, 53, 16, 10);
-    const s = String(price);
-    if (canPixel(s)) drawPixelText(ctx, s, Math.round(49 - pixelWidth(s, 1) / 2), 55, "#f2ead8", 1);
-  }
   t = toTexture(c);
   standCache.set(key, t);
   return t;
 }
+
+const tagCache = new Map<string, Texture>();
+
+/** A price tag on a string (or "+2": more on the stand than fits on the counter). */
+function tagTexture(text: string, more = false): Texture {
+  let t = tagCache.get(text);
+  if (t) return t;
+  // (The pixel font has no "+": it's drawn by hand, before the number.)
+  const plus = more ? 4 : 0;
+  const w = Math.max(12, pixelWidth(text, 1) + 6 + plus);
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = 12;
+  const ctx = c.getContext("2d")!;
+  ctx.imageSmoothingEnabled = false;
+  px(ctx, O, 0, 2, w, 10);
+  px(ctx, more ? "#2f3a32" : "#fff8e3", 1, 3, w - 2, 8);
+  px(ctx, O, Math.floor(w / 2), 0, 1, 3);
+  const tx = Math.round(w / 2 - (pixelWidth(text, 1) + plus) / 2);
+  if (more) {
+    px(ctx, "#f2ead8", tx, 7, 3, 1);
+    px(ctx, "#f2ead8", tx + 1, 6, 1, 3);
+  }
+  if (canPixel(text)) drawPixelText(ctx, text, tx + plus, 5, more ? "#f2ead8" : O, 1);
+  t = toTexture(c);
+  tagCache.set(text, t);
+  return t;
+}
+
+/** What fits on the counter. */
+const ON_COUNTER = 3;
 
 function hashLot(lot: string): number {
   let h = 7;
@@ -93,24 +117,39 @@ export class YardStands {
       if (o.kind !== "yard_stand" || !o.label) continue;
       const y = this.rent.yardAt(o.label);
       if (!y || (!y.goods.length && !y.mine)) continue;
-      const cheapest = y.goods.length ? Math.min(...y.goods.map((g) => g.price)) : null;
-      const s = new Sprite(standTexture(AWNINGS[hashLot(o.label) % AWNINGS.length], cheapest));
+      const s = new Sprite(standTexture(AWNINGS[hashLot(o.label) % AWNINGS.length]));
       s.position.set(o.x * TILE, (o.y + 1) * TILE - 72);
-      s.zIndex = (o.y + 1) * TILE - 2;
+      // Behind anyone (or any pet) standing on its row: its counter's at the back of the tiles.
+      s.zIndex = o.y * TILE + 12;
       this.scene.sorted.addChild(s);
-      // What's on sale, side by side on the counter (three at most to see).
-      y.goods.slice(0, 3).forEach((g, i) => {
+      this.sprites.push(s);
+      const add = (sp: Sprite, z: number) => {
+        sp.zIndex = s.zIndex + z;
+        this.scene.sorted.addChild(sp);
+        this.sprites.push(sp);
+      };
+      // What's on sale, side by side on the counter, each priced on a tag below it.
+      const top = (o.y + 1) * TILE - 72;
+      y.goods.slice(0, ON_COUNTER).forEach((g, i) => {
         const item = this.eco.items.get(g.item);
         if (!item) return;
+        const cx = o.x * TILE + 14 + i * 18;
         const it = new Sprite(itemTexture(item.key, item.kind));
         it.anchor.set(0.5, 1);
-        it.scale.set(0.6);
-        it.position.set(o.x * TILE + 14 + i * 14, (o.y + 1) * TILE - 28);
-        it.zIndex = s.zIndex + 0.5 + i * 0.01;
-        this.scene.sorted.addChild(it);
-        this.sprites.push(it);
+        it.scale.set(0.55);
+        it.position.set(cx, top + 44);
+        add(it, 0.5 + i * 0.01);
+        const tag = new Sprite(tagTexture(String(g.price)));
+        tag.anchor.set(0.5, 0);
+        tag.position.set(cx, top + 49);
+        add(tag, 0.6 + i * 0.01);
       });
-      this.sprites.push(s);
+      if (y.goods.length > ON_COUNTER) {
+        const more = new Sprite(tagTexture(String(y.goods.length - ON_COUNTER), true));
+        more.anchor.set(0.5, 0);
+        more.position.set(o.x * TILE + 56, top + 28);
+        add(more, 0.7);
+      }
     }
   }
 

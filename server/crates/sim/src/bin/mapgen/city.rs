@@ -1203,9 +1203,11 @@ fn homes(k: &mut Blk, block: BlockId) {
     for i in 0..3u16 {
         let x0 = 3 + i * 15;
         k.rect(x0 + 1, 9, 10, 3, "flowers");
-        k.rect(x0 + 1, 35, 10, 3, "flowers");
+        k.rect(x0 + 1, 33, 10, 3, "flowers");
         house(k, i as u8, (x0 + 1, 3, 10, 6));
-        house(k, 3 + i as u8, (x0 + 1, 39, 10, 6));
+        // The south row stands back from the pavement, so a front fence
+        // (a row in front of the door) stays on the lawn.
+        house(k, 3 + i as u8, (x0 + 1, 37, 10, 6));
     }
     k.rect(11, 18, 2, 10, "flowers");
     house(k, 6, (3, 18, 8, 10));

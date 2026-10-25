@@ -16,6 +16,8 @@ export interface MapObject {
   isNew?: boolean;
   /** Houses and postboxes: how they've been done up (0: as built). */
   style?: number;
+  /** Houses: the rest of how they're done up (door, flowers, lights: item codes). */
+  looks?: Record<string, number>;
   /** Library bookcases: which wing, and how many books stand in it. */
   wing?: string;
   books?: number;

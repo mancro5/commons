@@ -5,8 +5,11 @@
 // flower boxes); a panelled front door under a little porch roof, a step, a
 // lamp and the house number; shrubs either side. Each house picks its
 // details from its place, so a street is never all alike; paint (ADR 0011,
-// M7) changes the walls and roof.
+// M7) changes the walls and roof; the door's colour, the flowers in the
+// window boxes (and roses climbing the walls), and lights along the eaves or
+// lanterns by the door are the resident's too.
 
+import { DOOR_PAINT, FLOWER_SETS, LIGHTS } from "./goods";
 import type { MapObject } from "./map";
 import { disc, polygon } from "./pixeldraw";
 import { canPixel, drawPixelText, pixelWidth } from "./pixelfont";
@@ -81,16 +84,18 @@ function shrub(ctx: CanvasRenderingContext2D, x: number, y: number, flowers: str
 }
 
 /** A house's art, `w`×`h` its footprint in px; drawn from HOUSE_OVERHANG above it. */
-export function drawHouse(ctx: CanvasRenderingContext2D, o: MapObject, w: number, h: number, painted?: [string, string]) {
+export function drawHouse(ctx: CanvasRenderingContext2D, o: MapObject, w: number, h: number, painted?: [string, string], looks?: Record<string, number>) {
   // Each detail from its own hash of the place: neighbours share none.
   const pick = (n: number, salt: number) => mix(o.x, o.y, 73 + salt * 101) % n;
   const walls = painted?.[0] ?? WALLS[pick(WALLS.length, 1)];
   const roof = painted?.[1] ?? ROOFS[pick(ROOFS.length, 2)];
-  const door = DOORS[pick(DOORS.length, 3)];
+  const door = DOOR_PAINT[looks?.door ?? 0] ?? DOORS[pick(DOORS.length, 3)];
   const trim = "#f7f1e3";
   const shutters = pick(2, 4) ? shade(roof, -0.15) : null;
   const flowers = ["#e8566b", "#f6c343", "#ffffff", "#c9a7f4"];
-  const boxes = pick(2, 5) ? [flowers[pick(4, 6)], flowers[pick(4, 7)], "#ffffff"] : null;
+  const chosen = FLOWER_SETS[looks?.flowers ?? 0];
+  const boxes = chosen ? chosen.colors : pick(2, 5) ? [flowers[pick(4, 6)], flowers[pick(4, 7)], "#ffffff"] : null;
+  const lights = LIGHTS[looks?.lights ?? 0];
   const dormer = pick(3, 8) !== 0;
   const chimneyLeft = pick(2, 9) !== 0;
   const look = mix(o.x, o.y, 1373);
@@ -153,10 +158,12 @@ export function drawHouse(ctx: CanvasRenderingContext2D, o: MapObject, w: number
     px(ctx, shade(door, -0.22), dx + 2, py, 8, 10);
   }
   disc(ctx, "#f6c343", dx + 9, dTop + 30, 2);
-  // The lamp by the door, and the house number.
-  px(ctx, O, dx - 32, dTop + 6, 8, 12);
-  px(ctx, "#ffe9a8", dx - 31, dTop + 7, 6, 9);
-  px(ctx, "rgba(255,233,168,0.22)", dx - 38, dTop + 2, 20, 22);
+  // The lamp by the door (unless there are lanterns instead), and the house number.
+  if (!lights?.lanterns) {
+    px(ctx, O, dx - 32, dTop + 6, 8, 12);
+    px(ctx, "#ffe9a8", dx - 31, dTop + 7, 6, 9);
+    px(ctx, "rgba(255,233,168,0.22)", dx - 38, dTop + 2, 20, 22);
+  }
   const no = String(((o.label ?? "").split(":").pop() ?? "0").replace(/\D/g, "") || "1");
   const n = String(Number(no) + 1);
   px(ctx, O, dx + 22, dTop + 6, 14, 11);
@@ -165,9 +172,28 @@ export function drawHouse(ctx: CanvasRenderingContext2D, o: MapObject, w: number
   // The step.
   px(ctx, O, dx - dw / 2 - 8, foot + 2, dw + 16, 8);
   px(ctx, "#cfc5b1", dx - dw / 2 - 7, foot + 3, dw + 14, 6);
-  // Shrubs at the corners.
-  shrub(ctx, 30, foot + 2, flowers[(look >>> 16) % 4]);
-  shrub(ctx, w - 30, foot + 2, flowers[(look >>> 18) % 4]);
+  // Shrubs at the corners (in the resident's flowers, if they've chosen some).
+  shrub(ctx, 30, foot + 2, chosen?.colors[0] ?? flowers[(look >>> 16) % 4]);
+  shrub(ctx, w - 30, foot + 2, chosen?.colors[1] ?? flowers[(look >>> 18) % 4]);
+  // Climbing roses up the corner boards.
+  if (chosen?.climbing) {
+    for (const cx of [18, w - 18]) {
+      for (let y = foot - 2; y > eave + 4; y -= 3) {
+        const sway = Math.round(Math.sin(y / 7) * 3);
+        px(ctx, "#4f7a3e", cx + sway - 1, y, 3, 3);
+        if ((y + cx) % 9 < 3) px(ctx, chosen.colors[(y >> 2) % chosen.colors.length], cx + sway - 2, y - 1, 3, 2);
+      }
+    }
+  }
+  // Lanterns either side of the door (the resident's), bigger than the plain lamp.
+  if (lights?.lanterns) {
+    for (const lx of [dx - 36, dx + 40]) {
+      px(ctx, O, lx + 3, dTop + 2, 2, 4);
+      px(ctx, O, lx, dTop + 6, 8, 14);
+      px(ctx, "#ffe9a8", lx + 1, dTop + 8, 6, 10);
+      px(ctx, "rgba(255,233,168,0.25)", lx - 6, dTop + 2, 20, 26);
+    }
+  }
 
   // ---- the roof -------------------------------------------------------------------
   const ridgeY = 18;
@@ -211,6 +237,18 @@ export function drawHouse(ctx: CanvasRenderingContext2D, o: MapObject, w: number
   px(ctx, O, l - 2, eave - 1, r - l + 4, 6);
   px(ctx, trim, l, eave, r - l, 3);
   px(ctx, "rgba(0,0,0,0.22)", 14, eave + 5, w - 28, 5);
+  // String lights along the eaves: bulbs hanging in little swags.
+  if (lights && !lights.lanterns) {
+    for (let x = l + 8, i = 0; x < r - 8; x += 12, i++) {
+      const sag = Math.round(Math.abs(Math.sin(((x - l) / 24) * Math.PI)) * 3);
+      px(ctx, O, x, eave + 6 + sag, 12, 1);
+      const b = lights.bulbs[i % lights.bulbs.length];
+      px(ctx, "rgba(255,240,200,0.3)", x + 2, eave + 5 + sag, 8, 9);
+      px(ctx, O, x + 4, eave + 6 + sag, 4, 6);
+      px(ctx, b, x + 5, eave + 7 + sag, 2, 4);
+      px(ctx, "#ffffff", x + 5, eave + 7 + sag, 1, 1);
+    }
+  }
   // A dormer on some: a little gabled window in the roof.
   if (dormer) {
     const cx = chimneyLeft ? w - 120 : 120;

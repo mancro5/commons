@@ -6,11 +6,15 @@ import type { Economy, Item } from "./economy";
 import type { Auth } from "./net/api";
 
 /** A house done up outside: slot → the item's code. */
-export type HouseLooks = Partial<Record<"facade" | "fence" | "yard" | "postbox", number>>;
+export type HouseLooks = Partial<Record<"facade" | "door" | "flowers" | "lights" | "fence" | "path" | "yard" | "postbox", number>>;
 
 export const EXTERIOR_SLOTS: { slot: keyof HouseLooks; name: string }[] = [
   { slot: "facade", name: "Paint" },
+  { slot: "door", name: "Front door" },
+  { slot: "flowers", name: "Flowers" },
+  { slot: "lights", name: "Lights" },
   { slot: "fence", name: "Fence" },
+  { slot: "path", name: "Garden path" },
   { slot: "yard", name: "In the yard" },
   { slot: "postbox", name: "Postbox" },
 ];

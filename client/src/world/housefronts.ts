@@ -5,7 +5,7 @@
 import { Sprite } from "pixi.js";
 import type { Goods, HouseLooks } from "../goods";
 import { TILE } from "./art";
-import { fenceTexture, yardTexture } from "./goods";
+import { fenceTexture, pathTexture, yardTexture } from "./goods";
 import { type ZoneMap, type MapObject, spot } from "./map";
 import type { Scene } from "./scene";
 
@@ -36,8 +36,12 @@ export class HouseFronts {
 
   private dress(house: MapObject, looks: HouseLooks) {
     const plot = house.label!;
-    if ((house.style ?? 0) !== (looks.facade ?? 0)) {
+    // Paint, the door, the flowers and lights are all part of the house's own drawing.
+    const drawn = { door: looks.door ?? 0, flowers: looks.flowers ?? 0, lights: looks.lights ?? 0 };
+    const was = house.looks ?? {};
+    if ((house.style ?? 0) !== (looks.facade ?? 0) || drawn.door !== (was.door ?? 0) || drawn.flowers !== (was.flowers ?? 0) || drawn.lights !== (was.lights ?? 0)) {
       house.style = looks.facade ?? 0;
+      house.looks = drawn;
       this.scene.redraw(house);
     }
     const box = this.map.objects.find((o) => o.kind === "postbox" && o.label === plot);
@@ -63,6 +67,16 @@ export class HouseFronts {
         s.zIndex = y * TILE + TILE - 2;
         made.push(s);
       }
+    }
+    // The path from the step down to the fence's gap.
+    if (looks.path && door) {
+      const top = door.y;
+      const rows = 2;
+      const s = new Sprite(pathTexture(looks.path, 40, rows * TILE));
+      s.position.set(door.x * TILE - 20, top * TILE);
+      // Flat on the ground: under everyone walking on it.
+      s.zIndex = top * TILE - 30;
+      made.push(s);
     }
     if (looks.yard) {
       const s = new Sprite(yardTexture(looks.yard));

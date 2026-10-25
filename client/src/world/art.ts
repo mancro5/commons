@@ -1376,7 +1376,7 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       // resident has done it up.
       [c, ctx] = makeCanvas(w, h + HOUSE_OVERHANG);
       overhang = HOUSE_OVERHANG;
-      drawHouse(ctx, o, w, h, o.style ? FACADES[o.style] : undefined);
+      drawHouse(ctx, o, w, h, o.style ? FACADES[o.style] : undefined, o.looks);
       break;
     }
     case "city_gate": {
