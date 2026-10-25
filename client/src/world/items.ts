@@ -4,6 +4,7 @@
 
 import { Texture } from "pixi.js";
 import { PALETTE, avatarCanvas, styleFor, toTexture } from "./art";
+import { drawBug, drawShroom } from "./critterart";
 import { drawFish } from "./fish";
 import { petCanvas, petTexture } from "./pets";
 import { vehicleCanvas, vehicleTexture } from "./vehicles";
@@ -141,6 +142,14 @@ function drawIcon(ctx: CanvasRenderingContext2D, key: string, kind: string) {
     px(ctx, "#e8e8f0", 14, 3, 1, 8);
     px(ctx, O, 13, 11, 3, 3);
     px(ctx, "#e8566b", 14, 12, 1, 1);
+    return;
+  }
+  if (key === "bug_net") {
+    // A long handle and a hoop of fine white mesh.
+    for (let i = 0; i < 8; i++) px(ctx, i < 2 ? O : "#a8743a", 1 + i, 14 - i, 2, 2);
+    disc(ctx, O, 11, 5, 5);
+    disc(ctx, "#f4f2ea", 11, 5, 4);
+    for (const [x, y] of [[9, 3], [11, 3], [13, 3], [8, 5], [10, 5], [12, 5], [14, 5], [9, 7], [11, 7], [13, 7]]) px(ctx, "#cfcabb", x, y);
     return;
   }
   if (key === "fish_lure") {
@@ -469,6 +478,8 @@ const iconCache = new Map<string, string>();
 /** An item's icon canvas: fish at 32×32 (they have the detail), the rest 16×16. */
 function iconCanvas(key: string, kind: string): HTMLCanvasElement {
   if (kind === "fish") return canvas(32, 32, (ctx) => drawFish(ctx, key));
+  if (kind === "bug") return canvas(32, 32, (ctx) => drawBug(ctx, key));
+  if (kind === "shroom") return canvas(32, 32, (ctx) => drawShroom(ctx, key));
   return canvas(16, 16, (ctx) => drawIcon(ctx, key, kind));
 }
 
@@ -497,6 +508,8 @@ function cachedTex(key: string, draw: () => HTMLCanvasElement): Texture {
 export function itemTexture(key: string, kind: string): Texture {
   if (kind === "furniture") return furnitureTexture(key);
   if (kind === "fish") return cachedTex(`fish:${key}`, () => canvas(32, 32, (ctx) => drawFish(ctx, key)));
+  if (kind === "bug") return cachedTex(`bug:${key}`, () => canvas(32, 32, (ctx) => drawBug(ctx, key)));
+  if (kind === "shroom") return cachedTex(`shroom:${key}`, () => canvas(32, 32, (ctx) => drawShroom(ctx, key)));
   if (WEARABLE.has(kind)) return cachedTex(`wear:${key}`, () => wearing(key, kind));
   if (kind === "pet") return petTexture(COSMETIC_CODES.get(key) ?? 1, 2);
   if (kind === "vehicle") return vehicleTexture(COSMETIC_CODES.get(key) ?? 3);

@@ -184,31 +184,34 @@ message_enum! {
         43 ArenaAct { act: u8, aim: u16 }
         /// Open a lucky crate from your bag.
         44 OpenCrate {}
+        /// The Lake's rowboats (`boat::*` op): rent one at the boat hire, or
+        /// get out (the captain takes everyone ashore; a passenger hops off).
+        45 Boat { op: u8 }
         /// Paintball: take a place on a team (0 Blue, 1 Red, 2 either). In a
         /// match, you take a bot's place.
-        45 PbJoin { team: u8 }
+        46 PbJoin { team: u8 }
         /// Give up your place (a bot takes it mid-match).
-        46 PbLeave {}
+        47 PbLeave {}
         /// Start the match (you have a place): `bots` fill the empty ones.
-        47 PbStart { bots: bool }
+        48 PbStart { bots: bool }
         /// Where you are on the field (tiles ×100) and aim, a few times a second.
-        48 PbMove { x: u16, y: u16, aim: u16 }
+        49 PbMove { x: u16, y: u16, aim: u16 }
         /// You fired shot `shot` (your own count) from (x, y) toward `aim`.
-        49 PbFire { shot: u16, x: u16, y: u16, aim: u16 }
+        50 PbFire { shot: u16, x: u16, y: u16, aim: u16 }
         /// A dodge roll.
-        50 PbDash {}
+        51 PbDash {}
         /// Reload now.
-        51 PbReload {}
+        52 PbReload {}
         /// Start the arena's match (you have a place): `bots` fill the empty ones.
-        52 ArenaStart { bots: bool }
+        53 ArenaStart { bots: bool }
         /// In the arena's lobby: a bot in place `slot` (`on`), or taken out.
-        53 ArenaBot { slot: u8, on: bool }
+        54 ArenaBot { slot: u8, on: bool }
         /// In the arena's lobby: how good the bots are (0 easy, 1 medium, 2 hard).
-        54 ArenaLevel { level: u8 }
+        55 ArenaLevel { level: u8 }
         /// In the Splat Yard's lobby: a bot in place `slot` (`on`), or taken out.
-        55 PbBot { slot: u8, on: bool }
+        56 PbBot { slot: u8, on: bool }
         /// In the Splat Yard's lobby: how good the bots are (0 easy, 1 medium, 2 hard).
-        56 PbLevel { level: u8 }
+        57 PbLevel { level: u8 }
     }
 }
 
@@ -348,15 +351,19 @@ message_enum! {
         43 LuckyFound { id: u32, x: u16, y: u16 }
         /// Your lucky crate held `coins`.
         44 LuckyOpened { coins: u16 }
+        /// The boat you're in (sent to everyone aboard): its captain, who
+        /// sits where (`seats`, front to back), and the instance time the
+        /// hire runs out. `captain` 0: you're ashore again.
+        45 BoatState { captain: u32, until: u32, seats: Vec<u32> }
         /// The paintball match (`commons_sim::paintball` status): the time
         /// left in this phase, the score, who has each place (Blue's three,
         /// then Red's; 0 free), everyone on the field, the pads' power-ups,
         /// and (when it's over) the winners (0 Blue, 1 Red, 2 a draw).
-        45 PbState { status: u8, now: u32, phase_ms: u32, blue: u8, red: u8, winner: u8, slots: Vec<u32>, players: Vec<PbPlayer>, pickups: Vec<PbPickup>, level: u8 }
+        46 PbState { status: u8, now: u32, phase_ms: u32, blue: u8, red: u8, winner: u8, slots: Vec<u32>, players: Vec<PbPlayer>, pickups: Vec<PbPickup>, level: u8 }
         /// A shot fired (a ball, or with bit 1 of `kind` a spread of three; bit 0: bouncing).
-        46 PbShot { by: u32, shot: u16, x: u16, y: u16, aim: u16, kind: u8 }
+        47 PbShot { by: u32, shot: u16, x: u16, y: u16, aim: u16, kind: u8 }
         /// Something happened (`paintball::ev`): `a` and `b` as each says, at (x, y), `n` the ball or a count.
-        47 PbEvent { kind: u8, a: u32, b: u32, x: u16, y: u16, n: u16 }
+        48 PbEvent { kind: u8, a: u32, b: u32, x: u16, y: u16, n: u16 }
     }
 }
 
@@ -407,7 +414,28 @@ pub mod together {
     pub const STOP_FOLLOW: u8 = 5;
     /// A game of rock paper scissors (see `rps`); anyone may be asked.
     pub const RPS: u8 = 6;
-    pub const MAX: u8 = RPS;
+    /// Come aboard my boat (`boat`): only from a captain with a free seat.
+    pub const BOAT: u8 = 7;
+    pub const MAX: u8 = BOAT;
+}
+
+/// The Lake's rowboats: hired at the boat hire by the pier, rowed by their
+/// captain with up to `SEATS` passengers aboard.
+pub mod boat {
+    /// `Boat.op`.
+    pub const RENT: u8 = 1;
+    pub const ASHORE: u8 = 2;
+    /// What a hire costs, and how long it lasts.
+    pub const PRICE: i32 = 10;
+    pub const HIRE_MS: u32 = 15 * 60_000;
+    /// Passengers, besides the captain.
+    pub const SEATS: usize = 3;
+    /// Rowing speed, in tenths of a tile a second.
+    pub const SPEED_X10: u8 = 64;
+    /// `EntityInfo.vehicle` of the captain (the boat drawn under them), and of
+    /// the passenger in seat `n` (`PASSENGER + n`, front to back from 0).
+    pub const CAPTAIN: u8 = 6;
+    pub const PASSENGER: u8 = 7;
 }
 
 /// `Drink.kind`.

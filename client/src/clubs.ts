@@ -13,6 +13,8 @@ export type Room = Omit<Lease, "kind"> & { kind: "club_room"; members?: number |
 
 export interface ClubTier extends Tier {
   members: number;
+  /** A Clubhouse: on one of the city's club lots (C3). */
+  lot?: boolean;
 }
 
 export interface MyClub {
@@ -58,6 +60,38 @@ export interface Post {
   at: number;
 }
 
+/** The weekly meetup: a weekday (0 Monday) and a minute of the day, UTC. */
+export interface Meetup {
+  dow: number;
+  minute: number;
+  /** Unix seconds: when the next one starts. */
+  next: number;
+  /** While one's on: when it ends. */
+  live_until: number | null;
+  /** Who's come to the one that's on. */
+  came: string[];
+  stay_mins: number;
+  reward: number;
+}
+
+export interface Goal {
+  key: string;
+  title: string;
+  progress: number;
+  target: number;
+  reward: number;
+  done: boolean;
+}
+
+/** C2: the meetup, the week's goals, the room's furniture. */
+export interface Life {
+  meetup: Meetup | null;
+  goals: Goal[];
+  /** Unix seconds: when this week's goals end. */
+  week_ends: number;
+  furniture: number;
+}
+
 /** A club as its members see it. */
 export interface Detail {
   club: PublicClub;
@@ -69,6 +103,54 @@ export interface Detail {
   tiers: ClubTier[];
   members: Member[];
   posts: Post[];
+  life: Life;
+}
+
+/** A club lot in the city, and the club whose clubhouse stands on it (C3). */
+export interface Lot {
+  /** `lot:<bx>_<by>`: also the spot in front of it, and `door:<lot>`. */
+  lot: string;
+  name: string;
+  club: { id: string; name: string; crest: string; color: string } | null;
+}
+
+export interface Standing {
+  rank: number;
+  id: string;
+  name: string;
+  crest: string;
+  color: string;
+  points: number;
+  mine?: boolean;
+  /** Last week's clubs of the week: what they won. */
+  coins?: number;
+}
+
+export interface Leaderboard {
+  week_ends: number;
+  standings: Standing[];
+  last: Standing[];
+  awards: number[];
+}
+
+/** An event a club holds for everyone, at a public place (C3). */
+export interface ClubEvent {
+  id: number;
+  title: string;
+  /** A spot in the city. */
+  place: string;
+  place_name: string;
+  starts_at: number;
+  ends_at: number;
+  live: boolean;
+  club: { id: string; name: string; crest: string; color: string };
+  going: number;
+  /** Whether you're going. */
+  me: boolean;
+  /** Friends of yours who are going. */
+  friends: string[];
+  /** Whether you can call it off (the host club's owner or a moderator). */
+  staff: boolean;
 }
 
 export interface Badge {
@@ -99,17 +181,28 @@ export class Clubs {
   private badgeListeners = new Set<() => void>();
   /** A club page changed for its members (a donation, a post, someone joining). */
   onClubChanged: (club: string, what: Record<string, unknown>) => void = () => {};
+  /** Something to tell the player (a goal reached). */
+  onToast: (text: string) => void = () => {};
+  /** The clubhouses on the lots, as last heard. */
+  lots: Lot[] = [];
+  private lotListeners = new Set<(lots: Lot[]) => void>();
+  private eventListeners = new Set<() => void>();
+  /** Public places events can be held at. */
+  places: { key: string; name: string }[] = [];
 
   constructor(
     private auth: Auth,
     social: Social,
   ) {
     social.onPush((m) => {
+      if (m.t === "club_lots") void this.loadLots().catch(() => {});
+      if (m.t === "club_events") for (const f of this.eventListeners) f();
       // An invite or a removal changes the list too.
       if (m.t === "notify" && String((m.n as { kind?: string })?.kind).startsWith("club_")) void this.load().catch(() => {});
       if (m.t !== "club") return;
       // Someone joining or leaving may change the crest by their name.
       for (const who of [m.joined, m.left]) if (typeof who === "string") this.forgetBadges(who);
+      if (typeof m.goal === "string") this.onToast(`${m.crest as string} ${m.name as string} reached a goal: “${m.goal}”. +${m.coins as number} coins for the treasury!`);
       void this.load().catch(() => {});
       this.onClubChanged(m.club as string, m);
     });
@@ -160,8 +253,11 @@ export class Clubs {
     return r;
   }
 
-  found(name: string, crest: string, color: string) {
-    return this.post<{ id: string; name: string }>("/api/social/clubs/found", { name, crest, color });
+  /** Founds a club in a room of `tier` (default: a club room); a Clubhouse needs its `lot`. */
+  async found(name: string, crest: string, color: string, tier?: number, lot?: string) {
+    const r = await this.post<{ id: string; name: string }>("/api/social/clubs/found", { name, crest, color, ...(tier ? { tier } : {}), ...(lot ? { lot } : {}) });
+    if (lot) await this.loadLots().catch(() => {});
+    return r;
   }
 
   invite(club: string, friend: string) {
@@ -196,12 +292,66 @@ export class Clubs {
     return this.post(`/api/social/clubs/${club}/posts/${post}/delete`, {});
   }
 
-  rentRoom(club: string, tier: number) {
-    return this.post<{ room: Room }>(`/api/social/clubs/${club}/room`, { tier });
+  /** Rents (or moves) the club's room; a Clubhouse needs a club `lot`. */
+  async rentRoom(club: string, tier: number, lot?: string) {
+    const r = await this.post<{ room: Room }>(`/api/social/clubs/${club}/room`, lot ? { tier, lot } : { tier });
+    await this.loadLots().catch(() => {});
+    return r;
+  }
+
+  // ---- C3: clubhouses, the clubs of the week, events ----------------------
+
+  onLots(fn: (lots: Lot[]) => void): () => void {
+    this.lotListeners.add(fn);
+    return () => this.lotListeners.delete(fn);
+  }
+
+  async loadLots(): Promise<Lot[]> {
+    this.lots = (await this.auth.get<{ lots: Lot[] }>("/api/social/clubs/lots")).lots;
+    for (const f of this.lotListeners) f(this.lots);
+    return this.lots;
+  }
+
+  /** The lot a club's clubhouse stands on, if it has one. */
+  lotOf(club: string): string | null {
+    const plot = this.club(club)?.room?.plot;
+    return plot?.startsWith("lot:") ? plot : null;
+  }
+
+  leaderboard(): Promise<Leaderboard> {
+    return this.auth.get("/api/social/clubs/leaderboard");
+  }
+
+  onEvents(fn: () => void): () => void {
+    this.eventListeners.add(fn);
+    return () => this.eventListeners.delete(fn);
+  }
+
+  async events(): Promise<ClubEvent[]> {
+    const r = await this.auth.get<{ events: ClubEvent[]; places: { key: string; name: string }[] }>("/api/social/events");
+    this.places = r.places;
+    return r.events;
+  }
+
+  planEvent(club: string, title: string, place: string, startsAt: number, hours: number) {
+    return this.auth.send<{ id: number }>(`/api/social/clubs/${club}/events`, { title, place, starts_at: startsAt, hours });
+  }
+
+  cancelEvent(club: string, event: number) {
+    return this.auth.send(`/api/social/clubs/${club}/events/${event}/cancel`, {});
+  }
+
+  rsvp(event: number, going: boolean) {
+    return this.auth.send<{ going: number; me: boolean }>(`/api/social/events/${event}/rsvp`, { going });
   }
 
   pay(club: string) {
     return this.post<{ room: Room }>(`/api/social/clubs/${club}/pay`, {});
+  }
+
+  /** Sets the weekly meetup (UTC weekday and minute), or clears it (null). */
+  setMeetup(club: string, at: { dow: number; minute: number } | null) {
+    return this.post(`/api/social/clubs/${club}/meetup`, at ?? { dow: null, minute: null });
   }
 
   showBadge(club: string) {

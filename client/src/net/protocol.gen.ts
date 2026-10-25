@@ -369,6 +369,7 @@ export type ClientMsg =
   | { t: "ArenaMove"; x: number; y: number; aim: number }
   | { t: "ArenaAct"; act: number; aim: number }
   | { t: "OpenCrate" }
+  | { t: "Boat"; op: number }
   | { t: "PbJoin"; team: number }
   | { t: "PbLeave" }
   | { t: "PbStart"; bots: boolean }
@@ -584,56 +585,60 @@ export function encodeClientMsg(m: ClientMsg): Uint8Array {
     case "OpenCrate":
       w.u8(44);
       break;
-    case "PbJoin":
+    case "Boat":
       w.u8(45);
+      w.u8(m.op);
+      break;
+    case "PbJoin":
+      w.u8(46);
       w.u8(m.team);
       break;
     case "PbLeave":
-      w.u8(46);
+      w.u8(47);
       break;
     case "PbStart":
-      w.u8(47);
+      w.u8(48);
       w.bool(m.bots);
       break;
     case "PbMove":
-      w.u8(48);
+      w.u8(49);
       w.u16(m.x);
       w.u16(m.y);
       w.u16(m.aim);
       break;
     case "PbFire":
-      w.u8(49);
+      w.u8(50);
       w.u16(m.shot);
       w.u16(m.x);
       w.u16(m.y);
       w.u16(m.aim);
       break;
     case "PbDash":
-      w.u8(50);
-      break;
-    case "PbReload":
       w.u8(51);
       break;
-    case "ArenaStart":
+    case "PbReload":
       w.u8(52);
+      break;
+    case "ArenaStart":
+      w.u8(53);
       w.bool(m.bots);
       break;
     case "ArenaBot":
-      w.u8(53);
+      w.u8(54);
       w.u8(m.slot);
       w.bool(m.on);
       break;
     case "ArenaLevel":
-      w.u8(54);
+      w.u8(55);
       w.u8(m.level);
       break;
     case "PbBot":
-      w.u8(55);
+      w.u8(56);
       w.u8(m.slot);
       w.bool(m.on);
       break;
     case "PbLevel":
-      w.u8(56);
+      w.u8(57);
       w.u8(m.level);
       break;
   }
@@ -775,39 +780,42 @@ export function decodeClientMsg(b: Uint8Array): ClientMsg {
       m = { t: "OpenCrate" };
       break;
     case 45:
-      m = { t: "PbJoin", team: r.u8() };
+      m = { t: "Boat", op: r.u8() };
       break;
     case 46:
-      m = { t: "PbLeave" };
+      m = { t: "PbJoin", team: r.u8() };
       break;
     case 47:
-      m = { t: "PbStart", bots: r.bool() };
+      m = { t: "PbLeave" };
       break;
     case 48:
-      m = { t: "PbMove", x: r.u16(), y: r.u16(), aim: r.u16() };
+      m = { t: "PbStart", bots: r.bool() };
       break;
     case 49:
-      m = { t: "PbFire", shot: r.u16(), x: r.u16(), y: r.u16(), aim: r.u16() };
+      m = { t: "PbMove", x: r.u16(), y: r.u16(), aim: r.u16() };
       break;
     case 50:
-      m = { t: "PbDash" };
+      m = { t: "PbFire", shot: r.u16(), x: r.u16(), y: r.u16(), aim: r.u16() };
       break;
     case 51:
-      m = { t: "PbReload" };
+      m = { t: "PbDash" };
       break;
     case 52:
-      m = { t: "ArenaStart", bots: r.bool() };
+      m = { t: "PbReload" };
       break;
     case 53:
-      m = { t: "ArenaBot", slot: r.u8(), on: r.bool() };
+      m = { t: "ArenaStart", bots: r.bool() };
       break;
     case 54:
-      m = { t: "ArenaLevel", level: r.u8() };
+      m = { t: "ArenaBot", slot: r.u8(), on: r.bool() };
       break;
     case 55:
-      m = { t: "PbBot", slot: r.u8(), on: r.bool() };
+      m = { t: "ArenaLevel", level: r.u8() };
       break;
     case 56:
+      m = { t: "PbBot", slot: r.u8(), on: r.bool() };
+      break;
+    case 57:
       m = { t: "PbLevel", level: r.u8() };
       break;
     default:
@@ -862,6 +870,7 @@ export type ServerMsg =
   | { t: "LuckyShown"; x: number; y: number; moves: number }
   | { t: "LuckyFound"; id: number; x: number; y: number }
   | { t: "LuckyOpened"; coins: number }
+  | { t: "BoatState"; captain: number; until: number; seats: number[] }
   | { t: "PbState"; status: number; now: number; phaseMs: number; blue: number; red: number; winner: number; slots: number[]; players: PbPlayer[]; pickups: PbPickup[]; level: number }
   | { t: "PbShot"; by: number; shot: number; x: number; y: number; aim: number; kind: number }
   | { t: "PbEvent"; kind: number; a: number; b: number; x: number; y: number; n: number }
@@ -1183,8 +1192,14 @@ export function encodeServerMsg(m: ServerMsg): Uint8Array {
       w.u8(44);
       w.u16(m.coins);
       break;
-    case "PbState":
+    case "BoatState":
       w.u8(45);
+      w.u32(m.captain);
+      w.u32(m.until);
+      w.vec(m.seats, (x) => w.u32(x));
+      break;
+    case "PbState":
+      w.u8(46);
       w.u8(m.status);
       w.u32(m.now);
       w.u32(m.phaseMs);
@@ -1197,7 +1212,7 @@ export function encodeServerMsg(m: ServerMsg): Uint8Array {
       w.u8(m.level);
       break;
     case "PbShot":
-      w.u8(46);
+      w.u8(47);
       w.u32(m.by);
       w.u16(m.shot);
       w.u16(m.x);
@@ -1206,7 +1221,7 @@ export function encodeServerMsg(m: ServerMsg): Uint8Array {
       w.u8(m.kind);
       break;
     case "PbEvent":
-      w.u8(47);
+      w.u8(48);
       w.u8(m.kind);
       w.u32(m.a);
       w.u32(m.b);
@@ -1356,12 +1371,15 @@ export function decodeServerMsg(b: Uint8Array): ServerMsg {
       m = { t: "LuckyOpened", coins: r.u16() };
       break;
     case 45:
-      m = { t: "PbState", status: r.u8(), now: r.u32(), phaseMs: r.u32(), blue: r.u8(), red: r.u8(), winner: r.u8(), slots: r.vec(() => r.u32()), players: r.vec(() => decPbPlayer(r)), pickups: r.vec(() => decPbPickup(r)), level: r.u8() };
+      m = { t: "BoatState", captain: r.u32(), until: r.u32(), seats: r.vec(() => r.u32()) };
       break;
     case 46:
-      m = { t: "PbShot", by: r.u32(), shot: r.u16(), x: r.u16(), y: r.u16(), aim: r.u16(), kind: r.u8() };
+      m = { t: "PbState", status: r.u8(), now: r.u32(), phaseMs: r.u32(), blue: r.u8(), red: r.u8(), winner: r.u8(), slots: r.vec(() => r.u32()), players: r.vec(() => decPbPlayer(r)), pickups: r.vec(() => decPbPickup(r)), level: r.u8() };
       break;
     case 47:
+      m = { t: "PbShot", by: r.u32(), shot: r.u16(), x: r.u16(), y: r.u16(), aim: r.u16(), kind: r.u8() };
+      break;
+    case 48:
       m = { t: "PbEvent", kind: r.u8(), a: r.u32(), b: r.u32(), x: r.u16(), y: r.u16(), n: r.u16() };
       break;
     default:

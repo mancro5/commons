@@ -31,7 +31,9 @@ type S = State<Arc<AppState>>;
 pub const ONCE: &[&str] = &["tool", "instrument", "toy", "exterior", "gadget"];
 
 /// Exterior slots.
-pub const SLOTS: &[&str] = &["facade", "fence", "yard", "postbox"];
+pub const SLOTS: &[&str] = &[
+    "facade", "door", "flowers", "lights", "fence", "path", "yard", "postbox",
+];
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()

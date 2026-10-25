@@ -8,9 +8,12 @@ import { type MapObject, type ZoneMap, groundAt } from "./map";
 import type { TileXY } from "./motion";
 
 const CHUNK = 16;
+/** Indoors: how far (tiles) the north wall's art stands above the top row, and the HUD's height (screen px). */
+const WALL_ABOVE = 1.5;
+const HUD_PX = 72;
 /** Decor drawn flat on the ground. */
 /** Objects that lie flat (people stand on them): the dance floor, the paintball field's markings, pads and bases. */
-const FLAT_OBJECTS = new Set(["dance_floor", "pb_field", "pb_pad", "pb_spawn", "arena_spikes", "arena_carpet"]);
+const FLAT_OBJECTS = new Set(["dance_floor", "concert_stage", "pb_field", "pb_pad", "pb_spawn", "arena_spikes", "arena_carpet"]);
 const FLAT = new Set(["blanket", "lilypad", "mushrooms", "wildflowers", "daisies", "clover", "pebbles", "bones"]);
 /** Decor that sways in the wind. */
 const SWAY = new Set(["tree", "pine", "apple_tree", "bush", "tallgrass", "reeds", "willow", "willow_curtain", "pine_secret", "fern", "palm", "dry_shrub"]);
@@ -111,7 +114,7 @@ export class Scene {
     this.rows = Math.ceil(map.height / CHUNK);
     this.placed = map.objects
       // Drawn elsewhere, or invisible.
-      .filter((o) => o.kind !== "grove_slot" && o.kind !== "nook" && o.kind !== "spot" && o.kind !== "arena")
+      .filter((o) => o.kind !== "grove_slot" && o.kind !== "nook" && o.kind !== "spot" && o.kind !== "forage" && o.kind !== "arena" && o.kind !== "yard_stand" && o.kind !== "boat_lake")
       .map((o) => ({ o, x0: o.x - 1, y0: o.y - 4, x1: o.x + o.w, y1: o.y + o.h, sprite: null, extras: [] }));
     this.resize();
   }
@@ -364,14 +367,20 @@ export class Scene {
     };
   }
 
-  /** Centres on `p`, but stops at the map edge; a map smaller than the screen is centred. */
+  /**
+   * Centres on `p`, but stops at the map edge; a map smaller than the screen
+   * is centred. Indoors, the north wall stands up above the room's top row
+   * (and the HUD sits across the top of the screen), so the camera may look
+   * that far above the map too: the wall shows whole, clear of the HUD.
+   */
   follow(p: TileXY) {
     const { width, height } = this.app.screen;
     const span = TILE * this.scale;
-    const axis = (at: number, size: number, view: number) =>
-      size <= view ? size / 2 : Math.min(Math.max(at + 0.5, view / 2), size - view / 2);
+    const axis = (at: number, size: number, view: number, before = 0) =>
+      size + before <= view ? (size - before) / 2 : Math.min(Math.max(at + 0.5, view / 2 - before), size - view / 2);
+    const above = this.map.streets ? 0 : WALL_ABOVE + HUD_PX / span;
     const cx = axis(p.x, this.map.width, width / span);
-    const cy = axis(p.y, this.map.height, height / span);
+    const cy = axis(p.y, this.map.height, height / span, above);
     this.cam = { x: cx - 0.5, y: cy - 0.5 };
     // Snap to the device pixel grid so every art pixel lands on whole pixels.
     const res = this.app.renderer.resolution;

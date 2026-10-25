@@ -75,7 +75,45 @@ club room for 30 members costs 60). After that the club's treasury pays
 the rent, from what members chip in; if it can't, the room is given up
 after a grace period, but the club carries on. Owners and moderators
 invite friends; the board, roles and your club's crest by your name are
-on the club's page, and the stairs lead up to its room.
+on the club's page, and the stairs lead up to its room. Each club can set
+a weekly meetup (20 coins for staying 10 minutes of it in the room), works
+on four weekly goals that pay its treasury, can ring every member who's
+online with 📞 Call the club, and decorates its room from members' bags
+(each piece stays its owner's). Bigger clubs can rent a Clubhouse on one
+of the city's club lots (120 a week): its door leads into their room. Clubs
+plan events for everyone at public places (📅 What's on, at the Club Hall
+or in the 🛡 panel), and the Club Hall's leaderboard names the week's top
+three clubs, which win coins for their treasuries.
+The Casino (on the Casino block, 16 and over): slot machines, a shared
+roulette wheel (everyone in the room bets on the same spin), two blackjack
+tables of five seats against the dealer, and the cashier, for coins only. There's a daily loss limit of 300
+coins, and at the cashier you can take a break for a day or a week.
+The Museum & Gallery (a door on the Museum block and one on the Gallery
+block): paint your own picture in the Studio, small, medium or large, and
+hang it in the Salon, whose walls turn through everyone's work hour by
+hour. Give paintings you love a heart: each week's most-loved go to the
+Hall of Fame. Give the museum a fish, bug or mushroom of each kind; the
+first giver is named on its tank or case.
+Bugs and mushrooms: out in the Park, the Woods, the Meadow, the Orchard and
+by the water, different ones by the hour, the weather, the season and the
+moon. Catch bugs with a net (the Museum's curator sells them: walk up
+quietly, then swing when the ring's on the line); just pick mushrooms.
+Everything you find goes in the Naturalist's Journal (📔, L), which tells you
+where and when to look for the rest, and gives you titles as you go.
+Rowboats on the Lake: hire one at the blue BOATS hut by the pier (10
+coins for 15 minutes), tap a friend to invite them aboard (up to 3), tap
+the water to row, and "Go ashore" by any bank.
+The metro: nine stations around the city (look for the red M); at one,
+tap a station on the map to ride there, and anyone following you comes too.
+Houses have a yard stand by the front door: put things from your bag on
+it (2, 4 or 6, by the house's tier) at your own price, and anyone walking
+past sees them on the counter and can buy them.
+The Concert Hall (on the Theater block): take the stage at the microphone
+and everyone in the hall hears you, and only you, for up to an hour (16
+and over; listeners get listen-only voice passes and a volume slider).
+`COMMONS_CLUB_SWEEP_SECS`
+(default 60) sets how often the club sweep runs; each run counts as a
+minute.
 Testing on a dev server: a wish at the wishing well (on the Town Hall's
 plaza) grants 10,000 coins, every time; real servers don't have it.
 🔊 or M toggles sound;
@@ -146,7 +184,7 @@ assets/city/            the city grid and block catalog (ADR 0010)
 | `API_BIND` / `ORCHESTRATOR_BIND` / `ZONE_BIND` | `0.0.0.0:8080/8081/8082` | each service |
 | `COMMONS_CLIENT_URL` | `http://localhost:5173` | api (magic-link URLs) |
 | `ZONE_PUBLIC_URL` | `ws://localhost:8082/ws` | orchestrator |
-| `COMMONS_ZONES` | `city,home,mall,bar,arcade,library`, the eight `library_<wing>`s, `club_hall,clubroom,bowling` | orchestrator |
+| `COMMONS_ZONES` | `city,home,mall,bar,arcade,library`, the eight `library_<wing>`s, `club_hall,clubroom,bowling,concert_hall,casino,museum` | orchestrator |
 | `COMMONS_MAPS_DIR` | `assets/maps` | zone |
 | `DATABASE_URL` | `postgres://commons:commons@localhost:5432/commons` | api |
 | `TEST_DATABASE_URL` | `…/commons_test` | api tests |

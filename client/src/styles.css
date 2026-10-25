@@ -515,25 +515,76 @@ body {
 }
 
 .chess-board .sq {
+  position: relative;
   border: 0;
   padding: 0;
   min-width: 0;
   min-height: 0;
-  font-size: clamp(20px, 7vw, 30px);
+  font-size: clamp(22px, 7.5vw, 32px);
   line-height: 1;
   display: grid;
   place-items: center;
   cursor: default;
   color: #2b2a24;
-  font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", system-ui, sans-serif;
+  font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", "DejaVu Sans", system-ui, sans-serif;
 }
 
 .chess-board .light {
-  background: #efe3c8;
+  background: #f0d9b5;
 }
 
 .chess-board .dark {
-  background: #b58863;
+  background: #b07a52;
+}
+
+/* White: cream with a dark outline and a soft shadow; black: near-black with a light rim. */
+.chess-board .sq.w {
+  color: #fffaf0;
+  text-shadow:
+    -1px -1px 0 #2b2723,
+    1px -1px 0 #2b2723,
+    -1px 1px 0 #2b2723,
+    1px 1px 0 #2b2723,
+    0 2px 0 rgba(43, 39, 35, 0.45);
+}
+
+.chess-board .sq.b {
+  color: #2b2723;
+  text-shadow:
+    -1px -1px 0 rgba(255, 248, 227, 0.55),
+    1px -1px 0 rgba(255, 248, 227, 0.55),
+    0 2px 0 rgba(43, 39, 35, 0.35);
+}
+
+/* Coordinates in the corners of the edge squares. */
+.chess-board .sq[data-file]::after,
+.chess-board .sq[data-rank]::before {
+  position: absolute;
+  font: 700 9px/1 var(--font, sans-serif);
+  text-shadow: none;
+  pointer-events: none;
+}
+
+.chess-board .sq[data-file]::after {
+  content: attr(data-file);
+  right: 2px;
+  bottom: 2px;
+}
+
+.chess-board .sq[data-rank]::before {
+  content: attr(data-rank);
+  left: 2px;
+  top: 2px;
+}
+
+.chess-board .light[data-file]::after,
+.chess-board .light[data-rank]::before {
+  color: #b07a52;
+}
+
+.chess-board .dark[data-file]::after,
+.chess-board .dark[data-rank]::before {
+  color: #f0d9b5;
 }
 
 .chess-board .last {
@@ -2292,8 +2343,8 @@ img.px-icon,
 
 .chess-board {
   border: 0;
-  box-shadow: var(--frame);
-  margin: var(--px);
+  box-shadow: var(--frame), 0 0 0 6px #6e4b30, 0 0 0 8px #3b3a2e;
+  margin: 10px;
 }
 
 .reel .bar {
@@ -4127,6 +4178,998 @@ body.woozy #stage canvas {
 .bowl-score .run.pending {
   opacity: 0.55;
   font-style: italic;
+}
+
+/* Clubs C2: this week's meetup, goals, and the meetup form. */
+.panel .meetup.live {
+  background: #fff2c2;
+  border: 2px solid #e0a43a;
+  padding: 8px;
+  margin: 4px 0 8px;
+}
+
+.panel .meetup-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0 8px;
+}
+
+.panel .meetup-form select,
+.panel .meetup-form input {
+  font: inherit;
+  padding: 5px 6px;
+}
+
+.panel .goals {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.panel .goal {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  font-size: 14px;
+}
+
+.panel .goal .bar {
+  grid-column: 1 / -1;
+  height: 6px;
+  background: var(--paper-2);
+}
+
+.panel .goal .bar span {
+  display: block;
+  height: 100%;
+  background: #e0a43a;
+}
+
+.panel .goal.done .bar span {
+  background: var(--leaf);
+}
+
+/* Clubs C3: what's on, the clubs of the week, choosing a club lot. */
+.panel .event {
+  border: 2px solid var(--paper-2);
+  padding: 6px 8px;
+  margin: 4px 0;
+}
+
+.panel .event.live {
+  background: #fff2c2;
+  border-color: #e0a43a;
+}
+
+.panel .event-form,
+.panel .lot-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 6px 0 10px;
+}
+
+.panel .event-form input:not([type="time"]) {
+  flex: 1 1 100%;
+}
+
+.panel .event-form select,
+.panel .event-form input {
+  font: inherit;
+  padding: 5px 6px;
+}
+
+.panel .lot-pick {
+  flex-direction: column;
+  align-items: stretch;
+  background: var(--paper-2);
+  padding: 8px;
+}
+
+.panel .club-row .rank {
+  min-width: 26px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.panel .club-row.mine {
+  background: #fff2c2;
+}
+
+/* The Concert Hall's stage panel (ADR 0015). */
+.panel .concert-live {
+  font-weight: 700;
+  font-size: 16px;
+  margin: 2px 0 6px;
+}
+
+.panel .concert-volume {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.panel .concert-volume input[type="range"] {
+  flex: 1;
+}
+
+/* The metro (ADR 0016): the map of the lines, and the ride underground. */
+.panel.metro {
+  width: min(460px, calc(100vw - 24px));
+}
+
+.panel .metro-map {
+  width: 100%;
+  aspect-ratio: 1;
+  image-rendering: pixelated;
+  cursor: pointer;
+  border: 2px solid var(--ink, #3b3a2e);
+}
+
+.panel .metro-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.metro-ride {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease-out;
+  background: #1d1a24;
+  overflow: hidden;
+}
+
+.metro-ride.on {
+  opacity: 1;
+}
+
+.metro-ride.off {
+  opacity: 0;
+  transition: opacity 0.35s ease-in;
+}
+
+.metro-ride .tunnel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 180px;
+  transform: translateY(-50%);
+  background: linear-gradient(#2c2836 0 20%, #3a3546 20% 80%, #2c2836 80%);
+  border-top: 6px solid #4a4458;
+  border-bottom: 6px solid #4a4458;
+}
+
+/* Lamps on the tunnel wall streaking past. */
+.metro-ride .lights {
+  position: absolute;
+  inset: 16px 0 auto 0;
+  height: 10px;
+  background: repeating-linear-gradient(90deg, #ffe9a8 0 18px, transparent 18px 140px);
+  opacity: 0.85;
+  animation: metro-lights 0.35s linear infinite;
+}
+
+.metro-ride .train {
+  position: absolute;
+  bottom: 22px;
+  left: 0;
+  width: 460px;
+  image-rendering: pixelated;
+  animation: metro-train 1.5s cubic-bezier(0.55, 0.1, 0.35, 1) forwards, metro-bob 0.18s ease-in-out infinite alternate;
+}
+
+.metro-ride .next-stop {
+  position: absolute;
+  left: 50%;
+  top: calc(50% - 150px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  font: 600 20px "Pixelify Sans", sans-serif;
+  color: #3b3a2e;
+  background: #fff8e3;
+  border: 3px solid #3b3a2e;
+  animation: metro-sign 1.5s ease-out forwards;
+}
+
+.metro-ride .next-stop .m {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #c8553d;
+  color: #fff8e3;
+  border: 2px solid #3b3a2e;
+}
+
+@keyframes metro-lights {
+  to {
+    background-position: -140px 0;
+  }
+}
+
+@keyframes metro-train {
+  from {
+    transform: translateX(-480px);
+  }
+  to {
+    transform: translateX(calc(100vw + 40px));
+  }
+}
+
+@keyframes metro-bob {
+  to {
+    margin-bottom: 2px;
+  }
+}
+
+@keyframes metro-sign {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 10px);
+  }
+  20%,
+  100% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .metro-ride .lights,
+  .metro-ride .train {
+    animation: none;
+  }
+  .metro-ride .train {
+    left: calc(50% - 230px);
+  }
+}
+
+/* The Casino (ADR 0017): reels, the wheel, chips. */
+.panel.casino {
+  width: min(400px, calc(100vw - 24px));
+}
+
+.panel .slot-reels {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  background: #8f1f2b;
+  border: 3px solid #3b3a2e;
+  margin-bottom: 8px;
+}
+
+.panel .slot-reel {
+  width: 70px;
+  height: 70px;
+  display: grid;
+  place-items: center;
+  font-size: 40px;
+  background: #fff8e3;
+  border: 2px solid #3b3a2e;
+}
+
+.panel .slot-reel.spinning {
+  filter: blur(1px);
+  animation: reel-bob 0.12s linear infinite alternate;
+}
+
+@keyframes reel-bob {
+  to {
+    transform: translateY(3px);
+  }
+}
+
+.panel .casino-msg {
+  min-height: 1.4em;
+  font-weight: 700;
+  text-align: center;
+  margin: 6px 0;
+}
+
+.panel .casino-msg.win {
+  color: #b07a1a;
+  font-size: 17px;
+}
+
+.panel .pay-card {
+  font-size: 12px;
+}
+
+.panel canvas.wheel {
+  display: block;
+  margin: 0 auto 8px;
+  width: 170px;
+  height: 170px;
+}
+
+.panel button.small.red {
+  background: #c8553d;
+  color: #fff8e3;
+}
+
+.panel button.small.black {
+  background: #2b2723;
+  color: #fff8e3;
+}
+
+.panel button.small.on {
+  outline: 3px solid var(--leaf);
+  outline-offset: -3px;
+}
+
+.panel .tier-row input[type="number"] {
+  width: 64px;
+  font: inherit;
+  padding: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel .slot-reel.spinning {
+    animation: none;
+  }
+}
+
+/* Vehicles: how fast this one goes, in the shop. */
+.panel .ride-speed {
+  font-weight: 700;
+  color: #b07a1a;
+  margin: 4px 0 8px;
+}
+
+/* The Casino's shared tables (ADR 0017, K2): chips, cards, seats. */
+.panel .table-clock {
+  text-align: center;
+  font-weight: 700;
+  margin: 2px 0 6px;
+}
+
+.panel .table-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.panel .chip-tag {
+  font-size: 12px;
+  padding: 2px 6px;
+  background: #f1e6c8;
+  border: 2px solid #3b3a2e;
+}
+
+.panel .chip-tag.mine {
+  background: #e7f0d6;
+  border-color: var(--leaf);
+}
+
+.panel .dealer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #2f6f4a;
+  color: #fff8e3;
+  border: 3px solid #3b3a2e;
+}
+
+.panel .seats {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.panel .seat {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 2px solid #c9bb95;
+  background: #fffaf0;
+}
+
+.panel .seat.turn {
+  border-color: #e0a43a;
+  background: #fff1cf;
+}
+
+.panel .seat-name {
+  font-weight: 700;
+  min-width: 72px;
+}
+
+.panel .seat-name.mine {
+  color: var(--leaf);
+}
+
+.panel .seat-bet {
+  font-size: 12px;
+}
+
+.panel .seat-result {
+  margin-left: auto;
+  font-weight: 700;
+}
+
+.panel .seat-result.win {
+  color: #b07a1a;
+}
+
+.panel .cards {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.panel .card {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  height: 34px;
+  padding: 0 2px;
+  font-weight: 700;
+  font-size: 13px;
+  color: #2b2723;
+  background: #fff8e3;
+  border: 2px solid #3b3a2e;
+  border-radius: 3px;
+}
+
+.panel .card.red {
+  color: #c8553d;
+}
+
+.panel .card.back {
+  background: repeating-linear-gradient(45deg, #8f1f2b 0 4px, #b8323f 4px 8px);
+}
+
+.panel .cards .total {
+  font-size: 12px;
+  white-space: nowrap;
+  font-weight: 700;
+  margin-left: 4px;
+}
+
+.panel .wheel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.panel .wheel-row canvas.wheel {
+  width: 140px;
+  height: 140px;
+  margin: 0;
+  flex: none;
+}
+
+.panel .wheel-side {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel .wheel-side .table-clock {
+  text-align: left;
+}
+
+/* "🚣 Your rowboat · 12 min · Go ashore", under the follow chip. */
+.boat-chip {
+  position: fixed;
+  top: max(144px, calc(env(safe-area-inset-top) + 136px));
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 4px 12px;
+  background: #dcefff;
+}
+
+.boat-chip button {
+  border: 0;
+  padding: 4px 10px;
+  font-weight: 600;
+  font-size: 13px;
+  background: var(--paper-3);
+  box-shadow: var(--frame-thin), inset 0 calc(var(--px2) * -1) 0 0 rgba(110, 75, 48, 0.3);
+  margin: var(--px2);
+  cursor: pointer;
+}
+
+/* The roulette felt (K2): everyone's chips in their colours, the last numbers. */
+.panel .table-players {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0;
+  font-size: 12px;
+}
+
+.panel .table-player {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.panel .table-player .mine {
+  font-weight: 700;
+}
+
+.panel button.tiny {
+  padding: 1px 6px;
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.panel .chip-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid #3b3a2e;
+  flex: none;
+}
+
+.panel .history {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.panel .history .num {
+  min-width: 18px;
+  padding: 1px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  color: #fff8e3;
+  border: 1px solid #3b3a2e;
+}
+
+.panel .history .num:first-child {
+  outline: 2px solid #e0a43a;
+}
+
+.panel .num.red,
+.panel .cell.red {
+  background: #c8553d;
+}
+
+.panel .num.black,
+.panel .cell.black {
+  background: #2b2723;
+}
+
+.panel .num.green,
+.panel .cell.green {
+  background: #2f8f4f;
+}
+
+.panel .felt {
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  background: #2f6f4a;
+  border: 3px solid #6e4b30;
+  margin: 6px 0;
+}
+
+.panel .felt-numbers {
+  display: grid;
+  grid-template-columns: 24px repeat(12, 1fr);
+  grid-template-rows: repeat(3, 26px);
+  gap: 2px;
+}
+
+.panel .felt-row {
+  display: flex;
+  gap: 2px;
+}
+
+.panel .felt-row .cell {
+  flex: 1;
+  height: 24px;
+}
+
+.panel .felt .cell {
+  position: relative;
+  padding: 0;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff8e3;
+  border: 1px solid #d8e8c8;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.panel .felt .cell.out {
+  background: transparent;
+}
+
+.panel .felt .cell.out.red {
+  background: #c8553d;
+}
+
+.panel .felt .cell.out.black {
+  background: #2b2723;
+}
+
+.panel .felt .cell.zero {
+  grid-row: 1 / span 3;
+}
+
+.panel .felt .cell:hover {
+  outline: 2px solid #f2c94c;
+  outline-offset: -2px;
+}
+
+.panel .felt.locked .cell {
+  cursor: default;
+}
+
+.panel .felt .cell .stack {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  display: flex;
+  gap: 1px;
+}
+
+.panel .felt .cell .stack .chip-dot {
+  width: 7px;
+  height: 7px;
+  border-width: 1px;
+}
+
+/* The Museum & Gallery (ADR 0018): the Studio, paintings, the catalogue, natural history. */
+.panel.studio {
+  width: min(560px, calc(100vw - 24px));
+}
+
+.panel .studio-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.panel .studio-canvas {
+  width: min(320px, calc(100vw - 110px));
+  aspect-ratio: 1;
+  image-rendering: pixelated;
+  touch-action: none;
+  cursor: crosshair;
+  box-shadow: var(--frame-thin);
+  background: #fbf7ee;
+}
+
+.panel .studio-tools {
+  display: grid;
+  grid-template-columns: repeat(2, 36px);
+  gap: 4px;
+}
+
+.panel .studio-tools button {
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.panel .studio-palette {
+  display: grid;
+  grid-template-columns: repeat(16, 1fr);
+  gap: 2px;
+  margin: 8px 0 2px;
+}
+
+.panel .studio-palette .swatch {
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: 2px solid #3b3a2e;
+  box-shadow: none;
+}
+
+.panel .studio-palette .swatch.on {
+  outline: 3px solid #f2c94c;
+  outline-offset: -1px;
+  transform: scale(1.12);
+}
+
+.panel .studio-hang {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.panel .studio-hang input {
+  font: inherit;
+  padding: 6px;
+}
+
+.panel.art-card {
+  width: min(320px, calc(100vw - 24px));
+}
+
+.panel .art-big {
+  display: block;
+  margin: 0 auto 6px;
+  width: 256px;
+  height: 256px;
+  image-rendering: pixelated;
+  box-shadow: 0 0 0 4px #a8743f, 0 0 0 6px #3b3a2e;
+}
+
+.panel .art-by {
+  text-align: center;
+  font-weight: 700;
+  margin: 8px 0 2px;
+}
+
+.panel .art-fame {
+  text-align: center;
+  color: #b07a1a;
+  font-weight: 700;
+}
+
+.panel.art-catalogue,
+.panel.museum-desk {
+  width: min(420px, calc(100vw - 24px));
+}
+
+.panel .art-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.panel .art-tile {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 4px;
+  min-width: 0;
+}
+
+.panel .art-thumb {
+  image-rendering: pixelated;
+  width: 64px;
+  height: 64px;
+  box-shadow: 0 0 0 2px #3b3a2e;
+}
+
+.panel .art-row .art-thumb {
+  width: 48px;
+  height: 48px;
+}
+
+.panel .art-tile-title {
+  font-weight: 700;
+  font-size: 12px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel .art-tile-by {
+  font-size: 11px;
+}
+
+.panel .art-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  margin: 3px 0;
+  flex-wrap: wrap;
+}
+
+.panel.nature {
+  width: min(420px, calc(100vw - 24px));
+}
+
+.panel .specimen {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 2px solid #c9bb95;
+  background: #f4fbff;
+}
+
+.panel .specimen.empty {
+  background: #efeae0;
+}
+
+.panel .specimen-pic {
+  width: 32px;
+  height: 32px;
+  image-rendering: pixelated;
+  background: #bfe3f2;
+  box-shadow: 0 0 0 2px #3b3a2e;
+  flex: none;
+}
+
+.panel .specimen-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.panel .specimen-given {
+  color: #3f7a4a;
+  font-weight: 700;
+}
+
+/* The Studio has a lot to show: let it use the screen's height, and keep its rows tight. */
+.panel.studio .panel-body {
+  max-height: calc(100vh - 150px);
+  gap: 6px;
+}
+
+.panel.studio .studio-hang .tier-row {
+  display: flex;
+  gap: 6px;
+}
+
+.panel.studio .studio-hang .tier-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---- bugs, mushrooms and the Naturalist's Journal (ADR 0019) ---- */
+
+.netgame {
+  position: fixed;
+  left: 50%;
+  bottom: 190px;
+  transform: translateX(-50%);
+  z-index: 6;
+  width: min(300px, calc(100vw - 24px));
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.netgame[hidden] {
+  display: none;
+}
+
+.net-field {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  background: radial-gradient(circle, #e9f3dc 0%, #d4e6c0 70%, #c2d9a8 100%);
+}
+
+.net-target,
+.net-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.net-target {
+  transform: translate(-50%, -50%);
+  border: 6px solid var(--ink);
+  opacity: 0.55;
+}
+
+.net-ring {
+  border: 2px dashed var(--ink);
+  will-change: transform;
+}
+
+.net-bug {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 48px;
+  height: 48px;
+  transform: translate(-50%, -50%);
+  image-rendering: pixelated;
+}
+
+.panel.journal .journal-today {
+  margin: 0 0 6px;
+}
+
+.panel.journal .journal-titles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.panel.journal .journal-titles .stamp {
+  margin: 0;
+}
+
+.panel.journal .tabs {
+  flex-wrap: wrap;
+}
+
+.journal-bar {
+  height: 8px;
+  background: var(--paper-2);
+  margin: 8px 0 4px;
+}
+
+.journal-fill {
+  height: 100%;
+  background: #5d8a4e;
+  transition: width 0.4s;
+}
+
+.journal-grid .item {
+  position: relative;
+}
+
+.journal-grid .item .hint {
+  font-size: 10px;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.journal-grid .journal-given {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  font-size: 12px;
+}
+
+/* A whiff of funny spores: the world sways a while. */
+canvas.woozy {
+  animation: woozy 4s ease-in-out 5;
+}
+
+@keyframes woozy {
+  0%,
+  100% {
+    transform: rotate(0deg) scale(1);
+    filter: none;
+  }
+  25% {
+    transform: rotate(1.2deg) scale(1.02);
+    filter: hue-rotate(25deg) saturate(1.2);
+  }
+  75% {
+    transform: rotate(-1.2deg) scale(1.02);
+    filter: hue-rotate(-25deg) saturate(1.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  canvas.woozy {
+    animation: none;
+  }
 }
 
 /* ---- the leave button (indoors): a little door in the corner ---- */

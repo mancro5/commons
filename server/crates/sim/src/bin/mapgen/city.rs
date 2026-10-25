@@ -133,6 +133,20 @@ impl Blk<'_> {
     }
 }
 
+/// The metro's stations (ADR 0016): the block, a key and a name. A cross
+/// through the middle and the four corners, so nowhere is far from one.
+pub const STATIONS: &[(u8, u8, &str, &str)] = &[
+    (3, 3, "market", "Market"),
+    (3, 0, "north", "North Homes"),
+    (6, 3, "east", "East Homes"),
+    (3, 6, "south", "South Homes"),
+    (0, 3, "west", "West Homes"),
+    (1, 1, "orchard", "Orchard"),
+    (5, 1, "woods", "Woods"),
+    (5, 5, "lake", "Lake"),
+    (1, 5, "meadow", "Meadow"),
+];
+
 pub fn city() -> MapFile {
     let city = City::from_json(CITY, TYPES).expect("assets/city is invalid");
     let geo = city.geometry;
@@ -177,17 +191,34 @@ pub fn city() -> MapFile {
             "orchard" => orchard(&mut k),
             "woods" => woods(&mut k),
             "meadow" => meadow(&mut k),
-            "club_lot" => club_lot(&mut k),
+            "club_lot" => club_lot(&mut k, id),
             "home" => homes(&mut k, id),
             "fairground" => fairground(&mut k),
             "arena" => arena(&mut k),
             "arcade" => fun_corner(&mut k),
             _ => landmark(&mut k, &t.key, &t.name),
         }
+        // Where bugs and mushrooms turn up in the green blocks (ADR 0019).
+        match t.key.as_str() {
+            "park" => forage(&mut k, "park", 12, 6),
+            "pond" => forage(&mut k, "park", 10, 4),
+            "lake" => forage(&mut k, "park", 12, 4),
+            "orchard" => forage(&mut k, "orchard", 12, 8),
+            "woods" => forage(&mut k, "woods", 14, 14),
+            "meadow" => forage(&mut k, "meadow", 14, 8),
+            _ => {}
+        }
         // Every block names itself on its south sidewalk (the Market's a
         // little to the side, clear of its south road's rounded corner).
         let sign_x = if t.key == "market" { 18 } else { 21 };
         k.object("signpost", sign_x, N - 2, 1, 1, &t.name);
+        // A metro station's entrance beside the signpost on some (ADR 0016):
+        // stairs down to the underground; you come up at `door:metro_<key>`.
+        if let Some((_, _, key, name)) = STATIONS.iter().find(|s| (s.0, s.1) == (id.bx, id.by)) {
+            k.object("metro_entrance", 25, N - 2, 2, 2, name);
+            k.spot(&format!("door:metro_{key}"), 27, N - 2);
+            k.spot(&format!("metro_{key}"), 27, N - 2);
+        }
     }
 
     for (id, _) in city.blocks() {
@@ -242,6 +273,81 @@ fn round_corners(b: &mut Builder, ox: u16, oy: u16) {
 }
 
 /// Pavement around the block with street lamps along the kerb.
+/// Bug and mushroom spots (ADR 0019): `bugs` on open grass, flowers or
+/// sand, and `shrooms` on grass beside a tree or a log (anywhere grassy in
+/// the Meadow), each a few tiles from the next. A bug spot by the water
+/// is the water's edge's, whatever the block.
+fn forage(k: &mut Blk, habitat: &str, bugs: usize, shrooms: usize) {
+    let lawn = [g("grass"), g("grass_dark"), g("flowers")];
+    let woody = [
+        "tree",
+        "pine",
+        "apple_tree",
+        "willow",
+        "stump",
+        "log",
+        "mushrooms",
+        "bush",
+    ]
+    .map(super::d);
+    let open = |k: &Blk, x: u16, y: u16| {
+        let i = k.b.i(k.ox + x, k.oy + y);
+        k.b.decor[i] == 0 && !k.b.solid[i]
+    };
+    let near = |k: &Blk, x: u16, y: u16, r: i32, f: &dyn Fn(usize) -> bool| {
+        (-r..=r).any(|dy| {
+            (-r..=r).any(|dx| {
+                let (a, c) = ((k.ox + x) as i32 + dx, (k.oy + y) as i32 + dy);
+                f(k.b.i(a as u16, c as u16))
+            })
+        })
+    };
+    let mut picked: Vec<(u16, u16)> = vec![];
+    for shroom in [false, true] {
+        let mut cands: Vec<(u32, u16, u16)> = vec![];
+        for y in 3..N - 3 {
+            for x in 3..N - 3 {
+                let i = k.b.i(k.ox + x, k.oy + y);
+                let ground = k.b.ground[i];
+                let ok = open(k, x, y)
+                    && if shroom {
+                        lawn.contains(&ground)
+                            && (habitat == "meadow"
+                                || near(k, x, y, 1, &|j| woody.contains(&k.b.decor[j])))
+                    } else {
+                        lawn.contains(&ground) || ground == g("sand")
+                    };
+                if ok {
+                    cands.push((k.hash(x, y, 0x666f + shroom as u32), x, y));
+                }
+            }
+        }
+        cands.sort();
+        let want = if shroom { shrooms } else { bugs };
+        let mut n = 0;
+        for (_, x, y) in cands {
+            if n == want {
+                break;
+            }
+            if picked
+                .iter()
+                .any(|&(px, py)| px.abs_diff(x).max(py.abs_diff(y)) < 4)
+            {
+                continue;
+            }
+            picked.push((x, y));
+            n += 1;
+            let wet = !shroom && near(k, x, y, 2, &|j| k.b.ground[j] == g("water"));
+            let label = format!(
+                "{}:{}",
+                if shroom { "shroom" } else { "bug" },
+                if wet { "water" } else { habitat }
+            );
+            k.marker("forage", x, y, 1, 1, Some(&label));
+        }
+    }
+}
+
 fn sidewalk(k: &mut Blk) {
     for y in 0..N {
         for x in 0..N {
@@ -735,8 +841,8 @@ fn pond(k: &mut Blk) {
     k.scatter(3, 3, N - 3, N - 3, 13, &["tree", "bush", "willow"]);
 }
 
-/// The Lake: the Little Island across stepping stones from the pier, and
-/// the campfire circle on the south-west shore.
+/// The Lake: the Little Island across stepping stones from the pier, the
+/// boat hire by the pier, and the campfire circle on the south-west shore.
 fn lake(k: &mut Blk) {
     k.lawn();
     water(k, 24.0, 22.0, 19.0, 16.0);
@@ -773,6 +879,19 @@ fn lake(k: &mut Blk) {
         k.clear(x, 15, 1, 1, "stones");
         x += 1;
     }
+    // The boat hire: a hut on the bank by the pier, rowboats tied up on the
+    // water beside it, where hired boats set out (and people are set down on
+    // the pier when the hire's up), and the lake's bounds for the boats.
+    k.clear(26, 40, 4, 3, "grass");
+    k.object("boat_hire", 26, 40, 3, 2, "Boat hire");
+    for x in 19..23 {
+        k.decor(x, 36, "none");
+        k.decor(x, 37, "none");
+    }
+    k.marker("boat_moored", 19, 36, 2, 1, None);
+    k.spot("boat_launch", 22, 36);
+    k.spot("boat_dock", 23, 36);
+    k.marker("boat_lake", 4, 5, 41, 35, None);
     // The campfire: logs to sit on, and a question to talk about.
     let (fx, fy) = (9u16, 41u16);
     k.clear(fx - 2, fy - 2, 5, 5, "sand");
@@ -1338,9 +1457,18 @@ fn market_extras(k: &mut Blk, name: &dyn Fn(i32, i32) -> String) {
     }
 }
 
-/// A fenced lot waiting for a club.
-fn club_lot(k: &mut Blk) {
+/// A fenced lot a club can rent for its clubhouse (ADR 0014, C3). The
+/// `club_house` object is the clubhouse's footprint: drawn as a building
+/// site while the lot is free, and as the club's house, under its banner,
+/// once a club rents it. Its door (`door:lot:<bx>_<by>`) leads into the
+/// club's room.
+fn club_lot(k: &mut Blk, block: BlockId) {
     k.lawn();
+    let lot = commons_sim::city::club_lot_key(block);
+    k.object("club_house", 14, 14, 20, 10, &lot);
+    k.spot(&format!("door:{lot}"), 24, 24);
+    k.spot(&lot, 24, 25);
+    k.rect(22, 25, 4, 16, "path");
     for i in 6..42u16 {
         if !(22..26).contains(&i) {
             k.decor(i, 6, "fence");
@@ -1356,7 +1484,7 @@ fn club_lot(k: &mut Blk) {
         43,
         1,
         1,
-        "Club lot: one day a club can rent this land for its own clubhouse",
+        "Club lot: a club can rent this land for its clubhouse, at the Club Hall's desk",
     );
     k.scatter(3, 3, 6, N - 3, 5, &["tree", "bush"]);
     k.scatter(42, 3, N - 3, N - 3, 5, &["tree", "bush"]);
@@ -1374,13 +1502,18 @@ fn homes(k: &mut Blk, block: BlockId) {
         let door = (x + w / 2, y + h);
         k.spot(&format!("door:{lot}"), door.0, door.1);
         k.object("postbox", door.0 + 3, door.1, 1, 1, &lot);
+        // The yard stand by the front door: drawn when its owner puts
+        // something on it (it's walked past, not into: a marker).
+        k.marker("yard_stand", door.0 - 3, door.1, 2, 1, Some(&lot));
     };
     for i in 0..3u16 {
         let x0 = 3 + i * 15;
         k.rect(x0 + 1, 9, 10, 3, "flowers");
-        k.rect(x0 + 1, 35, 10, 3, "flowers");
+        k.rect(x0 + 1, 33, 10, 3, "flowers");
         house(k, i as u8, (x0 + 1, 3, 10, 6));
-        house(k, 3 + i as u8, (x0 + 1, 39, 10, 6));
+        // The south row stands back from the pavement, so a front fence
+        // (a row in front of the door) stays on the lawn.
+        house(k, 3 + i as u8, (x0 + 1, 37, 10, 6));
     }
     k.rect(11, 18, 2, 10, "flowers");
     house(k, 6, (3, 18, 8, 10));
@@ -1438,6 +1571,18 @@ fn landmark(k: &mut Blk, key: &str, name: &str) {
             k.spot("door:club_hall", 24, 18);
             k.spot("club_hall", 24, 19);
         }
+        // The Casino (ADR 0017): coins only, 16 and over.
+        "casino" => {
+            k.object("casino", 14, 7, 20, 11, "Casino");
+            k.spot("door:casino", 24, 18);
+            k.spot("casino", 24, 19);
+        }
+        // The Concert Hall (ADR 0015), on the Theater block.
+        "theater" => {
+            k.object("concert_hall", 14, 7, 20, 11, "Concert Hall");
+            k.spot("door:concert_hall", 24, 18);
+            k.spot("concert_hall", 24, 19);
+        }
         "paintball" => {
             k.object("paintball_hall", 14, 8, 20, 10, "Splat Yard");
             k.spot("door:paintball", 24, 18);
@@ -1453,6 +1598,17 @@ fn landmark(k: &mut Blk, key: &str, name: &str) {
             k.spot("door:library", 24, 18);
             k.spot("library", 24, 19);
         }
+        // The Museum & Gallery (ADR 0018): one building, a door on each block.
+        "museum" => {
+            k.object("museum", 12, 7, 24, 11, "Museum & Gallery");
+            k.spot("door:museum", 24, 18);
+            k.spot("museum", 24, 19);
+        }
+        "gallery" => {
+            k.object("gallery", 13, 8, 22, 10, "Museum & Gallery");
+            k.spot("door:gallery", 24, 18);
+            k.spot("gallery", 24, 19);
+        }
         "cafe" => {
             k.object("bar", 16, 9, 16, 9, "The Mossy Mug");
             k.spot("door:bar", 24, 18);
@@ -1462,7 +1618,16 @@ fn landmark(k: &mut Blk, key: &str, name: &str) {
     }
     let sign = match key {
         "town_hall" => "Town Hall: the town's votes and proposals".to_string(),
-        "gallery" => "Gallery: paint on the easels outside; the gallery opens soon".to_string(),
+        "gallery" => {
+            "Gallery: paint in the Studio, hang it in the Salon, and see everyone's work. Easels out here for painting together"
+                .to_string()
+        }
+        "museum" => {
+            "Museum: the town's natural history, given by its people, and the Hall of Fame".to_string()
+        }
+        "theater" => {
+            "Concert Hall: take the stage and everyone inside hears you".to_string()
+        }
         "cinema" => "Cinema: the big screen plays outside; the cinema opens soon".to_string(),
         "arcade" => {
             "Arcade: pong, light cycles, racers, a dance-off and more inside; word games out here"
@@ -1473,7 +1638,9 @@ fn landmark(k: &mut Blk, key: &str, name: &str) {
             "Library: every book in Project Gutenberg, in every language. Browse the wings, or ask at the desk"
                 .to_string()
         }
-        "casino" => "Casino: opening soon. Play money only, never real money".to_string(),
+        "casino" => {
+            "Casino: slots and roulette, coins only, never real money. 16 and over".to_string()
+        }
         "bowling" => "Bowling: four lanes inside; rent shoes at the counter".to_string(),
         "paintball" => "Splat Yard: paintball inside, Blue against Red, three a side. First to ten!".to_string(),
         "club_hall" => {
@@ -1546,6 +1713,8 @@ fn check_reachable(map: &MapFile, city: &City) {
     let mut lots = 0;
     for o in &map.objects {
         let ok = match o.kind.as_str() {
+            // Boats set out on the water, a step from the pier.
+            "spot" if o.label.as_deref() == Some("boat_launch") => near(o.x, o.y, 1),
             "spot" | "grove_slot" => near(o.x, o.y, if o.kind == "spot" { 0 } else { 1 }),
             "house" => {
                 lots += 1;
@@ -1569,6 +1738,46 @@ fn check_reachable(map: &MapFile, city: &City) {
                 .iter()
                 .any(|o| o.kind == "spot" && o.label.as_deref() == Some(door.as_str())),
             "no door for lot {lot}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_boat_hire_sits_by_the_pier_with_boats_on_the_lake() {
+        let map = city();
+        let grid = map.grid();
+        let find = |kind: &str, label: Option<&str>| {
+            map.objects
+                .iter()
+                .find(|o| o.kind == kind && (label.is_none() || o.label.as_deref() == label))
+                .unwrap_or_else(|| panic!("{kind} {label:?}"))
+        };
+        let water = map.ground_legend.iter().position(|g| g == "water").unwrap() as u8;
+        let wet =
+            |x: u16, y: u16| map.ground[y as usize * map.width as usize + x as usize] == water;
+        let launch = find("spot", Some("boat_launch"));
+        let dock = find("spot", Some("boat_dock"));
+        let hut = find("boat_hire", None);
+        let moored = find("boat_moored", None);
+        let lake = find("boat_lake", None);
+        assert!(wet(launch.x, launch.y), "boats set out on the water");
+        assert!(wet(moored.x, moored.y) && wet(moored.x + 1, moored.y));
+        assert!(grid.walkable(dock.x, dock.y), "the dock's on the pier");
+        assert!(launch.x.abs_diff(dock.x) <= 1 && launch.y.abs_diff(dock.y) <= 1);
+        assert!(
+            (lake.x..lake.x + lake.w).contains(&launch.x)
+                && (lake.y..lake.y + lake.h).contains(&launch.y)
+        );
+        // From the hut's front to the dock, on foot.
+        let front = (hut.x + 1, hut.y + hut.h);
+        assert!(commons_sim::find_path(&grid, front, (dock.x, dock.y), 100_000).is_some());
+        assert!(
+            hut.x.abs_diff(dock.x).max(hut.y.abs_diff(dock.y)) <= 8,
+            "hired by the pier"
         );
     }
 }

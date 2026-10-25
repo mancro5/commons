@@ -65,6 +65,15 @@ impl Hub {
         self.0.lock().unwrap().sockets.contains_key(&player)
     }
 
+    /// Pushes a JSON message to everyone online (dropped where full).
+    pub fn broadcast(&self, msg: &serde_json::Value) {
+        let text = msg.to_string();
+        let h = self.0.lock().unwrap();
+        for tx in h.sockets.values().flat_map(|c| c.values()) {
+            let _ = tx.try_send(text.clone());
+        }
+    }
+
     /// Pushes a JSON message to every socket of `player` (dropped if full).
     pub fn send(&self, player: Uuid, msg: &serde_json::Value) {
         let text = msg.to_string();
@@ -74,6 +83,16 @@ impl Hub {
                 let _ = tx.try_send(text.clone());
             }
         }
+    }
+
+    /// Everyone the zones report in `zone`'s instance `instance`.
+    pub fn in_zone(&self, zone: &str, instance: u16) -> Vec<Uuid> {
+        let h = self.0.lock().unwrap();
+        h.locations
+            .iter()
+            .filter(|(_, l)| l.zone == zone && l.instance == instance)
+            .map(|(p, _)| *p)
+            .collect()
     }
 
     pub fn location(&self, player: Uuid) -> Option<Location> {

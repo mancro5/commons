@@ -19,7 +19,7 @@ export function icon(item: Item | undefined): HTMLImageElement {
   img.alt = "";
   if (item) img.src = itemIconUrl(item.key, item.kind);
   // Fish wear their rarity: a coloured frame, common grey to mythical pink.
-  if (item && (item.kind === "fish" || item.kind === "junk")) {
+  if (item && ["fish", "junk", "bug", "shroom"].includes(item.kind)) {
     img.classList.add("rarity", `rarity-${Math.max(0, Math.min(5, item.rarity))}`);
     img.title = `${item.name} · ${tier(item.rarity).name}`;
   }
@@ -349,42 +349,6 @@ export class BagPanel extends Panel {
   }
 }
 
-export class AlbumPanel extends Panel {
-  constructor(private eco: Economy) {
-    super("Album", "album");
-    eco.onChange(() => this.open && this.render());
-  }
-
-  show() {
-    super.show();
-    this.eco.loadAlbum().catch(() => {});
-  }
-
-  render() {
-    this.body.replaceChildren();
-    for (const [title, kinds] of [
-      ["Fish", ["fish", "junk"]],
-      ["Plants", ["plant"]],
-    ] as [string, string[]][]) {
-      const items = this.eco.ofKind(...kinds);
-      const found = items.filter((i) => this.eco.album.has(i.id)).length;
-      const head = el("h3", "", `${title} · ${found}/${items.length}`);
-      if (found === items.length && items.length) head.append(el("span", "stamp", "Complete!"));
-      this.body.append(head);
-      const grid = el("div", "item-grid");
-      for (const it of items) {
-        const entry = this.eco.album.get(it.id);
-        const cell = el("div", entry ? "item" : "item unknown");
-        cell.append(icon(it), el("span", "name", entry ? it.name : "???"));
-        if (entry) cell.append(el("span", "qty", `×${entry.total}`));
-        if (!entry && it.meta.night) cell.append(el("span", "hint", "comes out at night"));
-        grid.append(cell);
-      }
-      this.body.append(grid);
-    }
-  }
-}
-
 export class MarketPanel extends Panel {
   private tab: "sell" | "buy" = "sell";
   private err = el("p", "error");
@@ -701,9 +665,12 @@ export class ReelGame {
     document.body.appendChild(this.el);
   }
 
-  /** A fish on the line right now (the reel game showing). */
+  /** When "Reel in!" was last pressed (the bar hides at once, but the click's release comes after). */
+  hitAt = -Infinity;
+
+  /** Whether a bite is being reeled in right now, or was just now (its click still finishing). */
   get active(): boolean {
-    return !this.el.hidden;
+    return !this.el.hidden || performance.now() - this.hitAt < 700;
   }
 
   private pos(t: number) {
@@ -750,6 +717,7 @@ export class ReelGame {
 
   private hit() {
     if (!this.done) return;
+    this.hitAt = performance.now();
     // In the zone (a hair of slack at its edges): the closer to its middle the better.
     const d = Math.abs(this.pos(performance.now()) - 0.5);
     const w = this.tier.sweet + 0.008;

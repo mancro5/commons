@@ -1273,6 +1273,591 @@ browser:
 - The clubs run still passes.
 - No errors.
 
+## Clubs C2 · Club life: done (2026-10-23)
+
+ADR 0014, "C2: club life". Reasons to come back on a given day, together.
+
+- **The weekly meetup:**
+  - The owner or a moderator picks a weekday and a time. It's stored in
+    UTC and shown in local time.
+  - Members get a reminder 30 minutes before, and a notice when it starts
+    (with a "Go up" button).
+  - Anyone who spends 10 minutes of the hour in the club room gets 20
+    coins, once.
+  - Who's there comes from the zones' presence reports (the social hub),
+    never from clients.
+- **Goals each week** (from Monday, UTC):
+  - come to the meetup together (up to three members);
+  - 120 member-minutes in the room;
+  - 15 fish caught by members;
+  - donations worth a week's rent.
+
+  Each goal reached pays 10 to 15 coins into the treasury, once, and every
+  member gets a toast.
+- **The club call:** rings every member who's online into one call, under
+  the phone rules (a phone each, no blocks, the age rules, eight at most).
+  Club members don't have to be friends with each other. The call code now
+  shares one ring step (`calls::ring_into`) between friend calls and club
+  calls.
+- **Decorating together:**
+  - Members place furniture from their own bags (`club_objects`, migration
+    0034), up to the room's tier (16 pieces, or 32).
+  - A piece stays its placer's. They, the owner or a moderator can pick it
+    up, and it goes back to the placer's bag. It also goes back when they
+    leave or are removed, or when the room is given up.
+  - The zone treats a club room like a home for furniture; the api checks
+    membership, the cap and whose piece it is (`api/src/clubroom.rs`).
+- **The club page** has a "This week" section: the meetup (live, with who's
+  come), the meetup form for the owner and moderators, goal progress bars,
+  📞 Call the club, and the furniture count.
+- **Fixed from the merge:** the `styles.css` conflict resolution had lost
+  the closing brace of the club-badge rule. Every rule after it (the fork's
+  bowling, arena, pool and lighting styles, and C2's) didn't apply. A new
+  client test (`styles.test.ts`) fails on unbalanced braces.
+
+Checked:
+- Server: social 19, with the whole of club life (a meetup on now, the
+  reward once each, the start notice once, all four goals paid once, the
+  club call ringing, furniture back on leaving and on closing; the sweep
+  can be pointed at one club so parallel tests don't pay each other).
+  Also the meetup-time unit tests, API 46 (club furniture: no room,
+  outsiders, members, someone else's piece, the owner putting it back in
+  the placer's bag, the 16-piece cap), zone 58 and sim 49; clippy clean.
+- Client: 89 tests, including the stylesheet check, which fails on the
+  merge's version and passes now.
+- In the browser, with a 5-second club sweep, two members:
+  - A meetup that's on now: both go up and get 20 coins each, and the
+    meetup goal pays the treasury, with a toast.
+  - "This week" shows the live meetup, who's come, and the goals.
+  - 📞 Call the club rings Bo.
+  - Ada places a chair from her bag; Bo sees it but can't pick it up
+    ("That's someone else's").
+  - The bowling panel is styled again.
+
+## Clubs C3 · Clubs in the town: done (2026-10-23)
+
+ADR 0014, "C3: clubs in the town". Clubs now show in the city and bring
+everyone together.
+
+- **Clubhouses on the club lots:**
+  - A third tier, the Clubhouse (`rent.json` tier 3, `lot: true`): 40
+    members, 40 pieces of furniture, 120 coins a week from the treasury.
+  - The owner picks one of the city's five club lots. The lease's plot
+    becomes `lot:<bx>_<by>`, and the unique open-plot index means one club
+    per lot. Moving back down frees the lot, and so does the room being
+    given up.
+  - Each lot has a `club_house` footprint, drawn as a building site with a
+    FOR RENT sign while free. Once rented, it's the club's house: timber
+    walls, a roof in the club's colour, the crest on a banner over the
+    door, and the name on a board. Everyone online sees it change at once
+    (a `club_lots` push).
+  - Members go in through its door, and leaving the room brings them back
+    out of that door (the orchestrator accepts `place:lot:…` arrivals). For
+    anyone else the door says it's members only.
+- **Clubs of the week:**
+  - Points: 10 per goal reached, 5 per member at the meetup, 1 per 10
+    minutes together in the room.
+  - The leaderboard (in the Club Hall and the 🛡 panel) shows this week's
+    standings, your clubs, and last week's winners.
+  - When a week ends, the top three get 30, 20 and 10 coins in their
+    treasuries, once, and their owners and moderators are told
+    (`club_week_awards`, migration 0035).
+- **Events for everyone:**
+  - The owner and moderators plan events: a title (filtered like chat),
+    within the next two weeks, one or two hours long, at most three
+    planned at once.
+  - They're held at a public place: the Fairground bandstand or pitch, the
+    Arena, the Club Hall steps, the wishing well, or the club's own lot.
+  - Anyone can say "I'm going". They're reminded 15 minutes before; when
+    it starts, they and the host club's members are told, with "Show me".
+  - Cancelling tells those going.
+  - Only a count of who's going is shown, plus your friends' names.
+- **Care (ADR 0014 updated):** events only happen at public places, where
+  everyone can already meet, so club rooms stay members-only and nothing
+  new opens to strangers.
+- **The Club Hall** has two new boards: Clubs of the week (a podium) and
+  What's on (posters).
+
+Checked:
+- Server: social 21, including a C3 test: picking a lot, a taken lot, a
+  made-up lot, members can't plan, a made-up place, planning at the
+  bandstand and at the club's lot, a non-member going, the reminder and
+  start once each, members told, cancelling, the week's award paid once,
+  the leaderboard, and moving down freeing the lot.
+- Also a test that every event place and lot is a real spot in the city,
+  and one for the orchestrator's lot-door check; sim 50, with the
+  clubhouse tier and the five lots; API 46, zone 58; clippy clean;
+  client 89.
+- In the browser:
+  - Ada moves her club into a Clubhouse from the lot picker, and Cy's
+    city redraws it at once.
+  - Ada walks there, goes in through the door, and comes back out of it.
+  - Cy is told it's members only.
+  - Ada plans a fishing contest at the bandstand; Cy finds it on What's
+    on and says he's going ("2 going").
+  - The leaderboard and the Club Hall's new boards.
+
+## The Concert Hall: done (2026-10-23)
+
+ADR 0015. One player on stage, everyone in the hall listening: sing, play,
+tell a story or host a quiz.
+
+- **The hall:**
+  - A cream music hall with a marquee, on the Theater block (until now a
+    placeholder).
+  - Inside (`concert_hall` zone): a velvet backdrop whose board reads LIVE
+    and the performer's name, the stage boards with footlights that light
+    up during a set, a microphone stand, speakers, and rows of seats either
+    side of an aisle.
+  - Clubs can hold events there: it's one of the C3 places.
+- **The stage** (`social/src/concert.rs`), one per hall instance:
+  - At the microphone, anyone 16 or over takes the stage while it's free,
+    for up to an hour, and walks up onto it. 🎤 shows by their name.
+  - The set ends when they step down, leave the hall, or the hour is up
+    (checked every 5 seconds). The gateway then removes them from the
+    voice room through LiveKit's room service.
+- **Who hears whom:**
+  - The performer's pass may talk. Everyone else in the hall gets a new
+    listen-only pass (`voice::listen_token`: `canPublish: false`, no
+    sources), so LiveKit itself refuses anything they send.
+  - Passes are only given to players the zones report in that hall.
+  - Listeners get a volume slider and mute.
+- **Care:** listening follows ADR 0013's age rules between the performer
+  and each listener. With `COMMONS_VOICE_MINORS` off, under-16s see who's
+  on stage but hear no live voice. A block either way also means no pass.
+
+Checked:
+- Server: social 23 (who may take the stage: not from outside the hall,
+  not under 16, one at a time; listening: only in the hall, not for
+  under-16s yet; walking out ends the set, the hour ends it, stepping down
+  ends it; the hall told each time). Also the stage's unit test, common's
+  listen-only pass test (`canPublish` false), and mapgen (the stage, the
+  mic and the seats reachable); clippy clean; client 89.
+- In the browser, with a real LiveKit server and fake microphones:
+  - Ada takes the stage at the mic and walks onto it.
+  - Bo, in the hall, is put on listen-only at once and receives her audio
+    track.
+  - Bo's microphone is refused by LiveKit ("insufficient permissions"),
+    and Ada's room shows Bo with no tracks.
+  - 🎤 shows by Ada's name, and the board reads her name.
+  - She steps down and both are off.
+
+## Nicer houses, and yard stands (2026-10-23)
+
+- **Houses redrawn** (`client/src/world/houseart.ts`):
+  - A hipped roof of shingle rows, lit on one slope and shaded on the
+    other, with a ridge cap, a trim board along the eaves and its shadow
+    on the wall.
+  - A brick chimney with a cap, and on some houses a dormer window.
+  - Clapboard walls with corner boards on a stone foundation.
+  - Four-pane windows with frames and sills; some have shutters, some
+    flower boxes.
+  - A panelled front door with a glazed top, under a little porch roof,
+    with a step, a lamp and the house number.
+  - Flowering shrubs at the corners.
+  - Each detail comes from its own hash of the house's place, so
+    neighbours differ. Paint from "Decorate outside" still sets the walls
+    and roof.
+- **Yard stands:**
+  - Every house has a spot by its front door (`yard_stand`, between the
+    yard ornament and the door).
+  - From the door menu ("Your yard stand 🧺"), the owner puts things from
+    their bag on it at their own price: 2, 4 or 6 by the house's tier
+    (`listings` in `rent.json`). Apartments have no yard.
+  - A wooden stand appears under a striped awning, with what's for sale
+    standing on the counter as item pictures and a chalk board with the
+    cheapest price.
+  - Anyone passing taps it to buy: coins to the owner, who's told.
+  - It's the market stalls' code, on the home lease (`stall_listings`).
+    `GET /api/social/yards`, and `put` with `at: "yard"`.
+  - Moving out, or the lease ending, puts what's left back in the bag.
+- **Fixed:** buying the last one of anything from a stall failed (the
+  count went to 0 before the listing was removed, against the table's
+  `qty > 0` rule). It affected market stalls since C4 too. Now the listing
+  goes.
+
+Checked:
+- Server: social 24, with a yard-stand test: no house means no yard; the
+  Cottage's two places; everyone sees the stand; buying one and the last
+  one; coins to the owner and a notice; moving out gives back what's
+  left. Also sim 50 (the 168 stand spots generated) and clippy clean;
+  client 89.
+- In the browser:
+  - Ada moves into a house and puts a minnow and a tulip on her stand from
+    the door menu; they stand on the counter, with the price board.
+  - Bo walks by, taps the stand, and buys the minnow, the last one
+    (200 → 194 coins); it leaves the counter.
+  - A street of the new houses, each different.
+
+## The metro (2026-10-23)
+
+ADR 0016. Nine stations spread around the city: the Market, North, East,
+South and West Homes, and the Orchard, Woods, Lake and Meadow corners.
+
+- **The stations:** entrances on the blocks' south sidewalks
+  (`metro_entrance`, mapgen `STATIONS`), with green railings, stairs
+  going down, and a red M sign with the name. Each has an arrival spot
+  (`door:metro_<key>`). The city map marks them with a red M.
+- **The map:** at an entrance, the city with the Ring line and two Cross
+  lines, every station named, "you are here" pulsing. Tap a station, or
+  its button, to ride.
+- **The ride:**
+  - A dark tunnel with lamps streaking past, a little two-car train with
+    faces in its round windows, and a "Next stop: …" sign. It takes
+    about 1.5 seconds and honours reduced motion.
+  - Meanwhile the city is re-joined at the station
+    (`arrive: place:metro_<key>`; the orchestrator accepts only `metro_`
+    plus lowercase letters there).
+  - `goTo(zone, arrive)` now passes the arrival point through, so doors
+    that know where you come out (the metro) say so.
+- **Followers:** whoever follows you rides too (`Going`/`Went` carry the
+  station), comes up at the same stairs, and follows you on again.
+
+Checked:
+- Orchestrator: a station-arrival test.
+- Mapgen: every station reachable, in the city's reachability check.
+- Client 89, clippy clean.
+- In the browser: Ada and Bo are friends and Bo follows Ada. At the
+  Market station Ada opens the map and rides to the Lake; both see the
+  train; both come up at the Lake station's stairs (291, 310); a moment
+  later Bo is following Ada again.
+
+## The Casino, K1: slots and roulette (2026-10-23)
+
+ADR 0017. The Casino block now has a building, and inside it there is a
+casino floor (`casino` zone, 26×18).
+
+- **Coins only, never real money.** The server draws every outcome
+  (`commons_sim::casino`, using the OS's random numbers). Each round is
+  recorded in `casino_rounds`, with a unique key so a double press
+  doesn't play twice.
+- **The slots:**
+  - Six slot machines; bets of 1 to 20.
+  - Weighted reels.
+  - Three of a kind pays 5× to 250×; two cherries pay 2×.
+  - The return is 95.1 % (a test checks it).
+- **Roulette:**
+  - European, one zero; bets of 1 to 50.
+  - You can bet on red/black, odd/even, 1–18/19–36, a dozen or a single
+    number.
+  - The wheel animates to the drawn number.
+  - The return is 97.3 % on every bet.
+- **Care:**
+  - The casino is 16 and over: the orchestrator refuses the zone, and the
+    API refuses play, unless `COMMONS_CASINO_MINORS` is set.
+  - You can only play inside the casino.
+  - The most anyone can lose is 300 coins a day (UTC).
+  - At the cashier, "take a break" closes the casino to you for a day or
+    a week, and it can't be undone early.
+  - After 30 minutes inside, a reminder shows how today is going.
+
+Checked:
+- Sim tests for the return rates.
+- A social test covering age, presence, limits and breaks.
+- Mapgen reachability.
+- Client 89, clippy clean.
+- In the browser: Ada spins the slots twice (−5 each), wins 20 on red
+  at roulette (25 red), and reads the cashier's desk. A 12-year-old is
+  turned away at the door.
+
+Next: K2, blackjack. After that, K3: poker tables, a jackpot and
+cosmetic prizes.
+
+## Faster vehicles (2026-10-23)
+
+Vehicles now give real speed. Before, a bike was barely faster than a
+sprint (1.3× to 1.8× walking); now it's 2.2× to 3.5×, and the dearer the
+ride, the faster it goes:
+
+| Vehicle | Speed |
+|---|---|
+| Roller skates | 2.2× |
+| Skateboard | 2.4× |
+| Kick scooter | 2.7× |
+| City bike | 3.2× |
+| Vintage bike | 3.5× |
+
+The changes:
+- The speeds live in `commons_sim::vehicles` and in the client's
+  `vehicles.ts`.
+- Migration 0037 updates the `speed` in each vehicle item's meta.
+- The shop shows "⚡ N× walking speed".
+- Riders leave dust puffs and speed streaks behind them (none with
+  reduced motion), and their wheels spin faster.
+
+Checked:
+- Sim test: every vehicle is at least 2× walking and faster than a
+  sprint.
+- Server and client test suites pass, clippy clean.
+- In the browser, Market station to Lake station: 48 s on foot, 15 s on
+  the city bike.
+
+## The Casino, K2: tables everyone shares (2026-10-23)
+
+ADR 0017. The casino is social now: alone or together, like a real
+casino.
+
+- **Roulette:**
+  - One wheel per casino instance. Everyone bets on the same spin and
+    sees everyone else's chips.
+  - "Spin!" goes when every player who has bet has pressed it (alone, at
+    once), or 20 s after the first chip.
+  - Everyone watches the same spin land; while the wheel spins, the
+    betting buttons step aside.
+- **Blackjack:**
+  - Two tables (`blackjack_table`), five seats each. Players sit, bet,
+    and the hand is dealt when everyone seated has bet (or 15 s after the
+    first bet). Turns go in seat order: hit, stand or double, 20 s each.
+  - The dealer's hole card stays face down until the players are done;
+    the dealer stands on 17 and blackjack pays 3:2.
+  - Cards, totals and results show for every seat; anyone can watch.
+- **Big wins** are announced to the whole floor as a toast.
+- **The coins:** a table bet is charged when it's placed (an unsettled
+  round, so the daily limit counts it) and settled when the round ends.
+  Unsettled rounds are refunded at startup. Leaving the casino gives back
+  a bet that hasn't been dealt yet.
+- **Code and data:** `commons_sim::blackjack` holds the rules (tested);
+  `social::tables` holds the state, timers and pushes. Migration 0038
+  adds `settled` and allows the `blackjack` game.
+
+Checked:
+- Server: blackjack rules tests, plus a two-player table test (a shared
+  spin, the ready rule, the round cap, no bets after the spin starts,
+  turns, the hidden hole card, payouts, timeouts, leaving, refunds). It
+  passed 25 runs in a row. Clippy clean, client 89.
+- In the browser, Ada and Bo:
+  - Roulette: each saw the other's chips. Ada's button read "Waiting for
+    1 more…" until Bo pressed Spin. The wheel landed on 35 black for
+    both; Bo won 20 and Ada lost 10.
+  - Blackjack, table 2: both sat down; the hand was dealt once both had
+    bet; the hole card was face down. Bo's blackjack paid +25 and was
+    announced to the room.
+
+Next: K3, poker between players, a jackpot and cosmetics.
+
+## Rowboats on the Lake (2026-10-24)
+
+Hire a rowboat at the Lake and take up to three friends round it.
+
+- **The boat hire:**
+  - A blue clapboard hut (`boat_hire`) on the bank by the pier, with a
+    rowboat tied up beside it (`boat_moored`).
+  - Tap the hut and "Hire a rowboat": 10 coins for 15 minutes, charged
+    through the economy (`boat_hire`). The boat sets out from the water
+    by the pier (`boat_launch`).
+- **Aboard:**
+  - The captain taps a friend and picks "🚣 Invite aboard". This uses
+    `together::BOAT`, offered and accepted like a hug; the friend gets a
+    "Climb aboard 🚣" card. There are three seats.
+- **Rowing:**
+  - The captain taps the water (or uses the keys) to row at 6.4 tiles a
+    second. Tapping land rows to the water nearest it.
+  - Boats go over the lake's own water only (`Lake::water`: the water
+    inside the `boat_lake` bounds). The server and the client find the
+    same route.
+  - Passengers get the captain's very walk, so the boat moves as one. A
+    passenger can't steer.
+- **Getting out:**
+  - By any bank, "Go ashore" sets everyone down on a tile each; a
+    passenger can "Hop off" alone.
+  - When the hire runs out, or the captain leaves, everyone is set down
+    on the pier.
+- **How it looks:**
+  - The captain's `vehicle` is the boat: a red-and-cream rowboat, with
+    oars that dip as they row. Passengers sit along it, names spread out.
+  - Everyone aboard bobs gently, and the boat leaves ripples behind.
+  - A chip shows "🚣 Your rowboat · 2/3 aboard · 12 min left", with Go
+    ashore or Hop off.
+- **Rules:** no sitting, fishing or gardening from the boat. Anyone
+  following a rower waits on the bank.
+- **Protocol v26:** `Boat { op }`, `BoatState`, `together::BOAT`, and
+  `boat::*`.
+
+Checked:
+- Zone tests:
+  - A captain with three friends (a fourth doesn't fit). Passengers
+    can't steer; the boat moves as one; tapping land rows to the water by
+    it. Going ashore mid-lake is refused, and at the bank everyone lands
+    on a tile each.
+  - A passenger hops off. Boarding is refused from too far away. The
+    hire running out puts everyone on the pier, and so does the captain
+    leaving.
+- Mapgen: the hut, the launch and dock, and the moored boat are where
+  they should be.
+- Clippy clean, client 89.
+- In the browser, Ada, Bo and Cy:
+  - Ada hires a boat (100 → 90 coins); Bo and Cy climb aboard from their
+    cards (vehicles 6, 7, 8). Bo's tap only brings up "Ada's rowing".
+  - All three row out to the middle of the lake together; "Go ashore"
+    out there says "Row up to the bank first".
+  - Back at the pier, everyone is ashore on their own tile and the chip
+    is gone.
+
+## The Casino: a roulette table like a real one (2026-10-24)
+
+ADR 0017. Roulette was already one shared spin; now it looks and feels
+like playing it together.
+
+- **The felt in the window:**
+  - Tap a box to put a chip there. Everyone's chips show on it in their
+    colour.
+  - A list of who's playing, each with their colour, their total and ✓
+    once they've said Spin. "Same bet" copies a friend's latest bet.
+  - A board of the last 12 numbers (`history`, kept by `social::tables`).
+- **The table in the room:** chips piled on the felt in each player's
+  colour; the ball racing round the wheel while it spins; then a marker
+  with the number. The table art now draws the dozens and the
+  even-money boxes.
+- **The croupier:** a `CROUPIER` clerk behind the table who calls the
+  game for everyone: bets open, last bets, no more bets, the number and
+  who won. Winners get 🎉. Tapping the croupier gives tips and opens the
+  table.
+- **Fix:** table state now carries a `seq`, which starts from the clock
+  so it keeps rising across restarts. A late reply to your own "Spin!"
+  could arrive after the wheel had started and roll it back, so your
+  client missed the landing and didn't refresh your coins (the server
+  had paid you). Stale states are now ignored.
+
+Checked:
+- Server table test: the history board.
+- Client tests: a stale reply is ignored and the landing still pays;
+  player colours and totals. 91 in all; clippy clean.
+- In the browser, Ada and Bo:
+  - Ada puts 10 on 17; Bo sees "Place your bets, please!" from the
+    croupier, presses "Same bet" (his 10 joins hers on 17) and adds 5 on
+    red. Both see two colours on 17.
+  - The croupier calls "No more bets!", then "17, black! Bo wins 360,
+    Ada wins 360!".
+  - Coins match the database in every run.
+
+## The Museum & Gallery, step 1 (2026-10-24)
+
+ADR 0018. Things to make and be proud of, that others see, and that work
+on a quiet server. Nothing is authored by the day: what's new comes from
+players and from rules.
+
+- **One building, two doors:**
+  - The Museum block's columned front leads into the Grand Hall; the
+    Gallery block's glass front leads into the Salon.
+  - You leave by either door (`place:museum` / `place:gallery`; the
+    orchestrator lets the museum arrive by the gallery's door).
+- **The Studio:**
+  - Your own canvas at **16×16, 32×32 or 64×64**, in 32 colours.
+  - Tools: pencil, fill, eraser, picker, brush 1 or 2, mirror, grid, undo
+    and clear.
+  - One draft per size, saved as you paint.
+- **The Salon:**
+  - One entry per size each; entries retire after 28 days.
+  - Stands hold 3 large, 6 medium and 12 small paintings at whole-pixel
+    scales. They turn through every entry each hour, the same for
+    everyone.
+  - The desk tells you when yours is next on the wall.
+- **Catalogue, hearts, reports:** the catalogue lists every entry by size,
+  newest or most loved. Hearts can't go to your own work. A report takes
+  a painting down at once.
+- **Weekly theme and Hall of Fame:** the top 3 in each size by hearts go
+  up for good, with 100, 60 or 30 coins. The settlement runs once, on the
+  first look after the week ends.
+- **Natural History:** one of each fish per player. The first giver is
+  named on the tank, and the fish swims there for everyone.
+- **Data:** migration 0039 (`art_drafts`, `artworks`, `artwork_hearts`,
+  `artwork_reports`, `museum_weeks`, `museum_donations`); routes in
+  `social::museum`.
+
+Checked:
+- Server: unit tests (the walls' rotation reaches everyone; weeks and
+  themes), plus a full API test.
+  - **Paintings:** drafts, palette and size checks, "too bare", one entry
+    per size, the catalogue, the wall.
+  - **Hearts and fame:** hearts (not your own, one each), the Hall of Fame
+    settled once with its prize, a report taking a painting down.
+  - **Fish:** donations (must own one, once per kind).
+- Mapgen: everything reachable.
+- Clippy clean, client 91.
+- In the browser:
+  - Ada comes in by the Museum's door, paints a medium "Sunny hills" with
+    the mouse (fill, strokes; the draft saves) and hangs it, and it's on a
+    Salon stand.
+  - Bo comes in by the Gallery's door, straight into the Salon, taps the
+    stand and gives it a ❤.
+  - Ada gives a perch to Natural History, and goes out by the Gallery's
+    door onto the Gallery block.
+
+Next: step 2, bugs and mushrooms and the Naturalist's Journal.
+
+## Bugs, mushrooms and the Naturalist's Journal (2026-10-24)
+
+ADR 0019, step 2 of the Museum. Something different to go out for each
+day, on a quiet server too, with nothing written by the day: what's out
+follows the hour, the weather, the season and the moon.
+
+- **What's out:**
+  - 33 bugs and 21 mushrooms, Common to Mythical, each with habitats,
+    hours, weather and seasons (`commons_sim::nature`).
+  - The Ghost Glowcap only on full-moon nights.
+  - The weather is the client's own, ported bit for bit.
+- **Where:** 118 `forage` spots in the six green blocks (mapgen). Bug
+  spots roll every 10 minutes, mushroom spots every weather spell (more
+  after rain), the same for everyone.
+- **Catching:**
+  - A bug needs a net (40c, from the curator), no wheels, and no running
+    (it may fly off). Beside it, a ring-timing swing that's harder for
+    rarer bugs.
+  - Mushrooms are just picked.
+  - Each can be taken once by each player (`forage_claims`). The server
+    checks the spot, the slot, the zone, the net and the claim, then
+    grants the item through the economy.
+- **Woozy mushrooms:** the Giggle Cap and the Wobble Puff make you laugh
+  or dance, and the world sways for 20 s.
+- **The Naturalist's Journal** (it replaces the album):
+  - Fish, Bugs, Mushrooms and Garden, with counts and "???" silhouettes.
+  - Every entry says where and when to look.
+  - Three titles per section, and "Naturalist of the Commons".
+  - Shows what you've given the museum, and today's weather, season and
+    moon.
+- **Natural History:** four bug cases and three mushroom cases; first
+  givers' specimens are pinned in them.
+- **Data:** migration 0040 (items, `bug_net`, `forage_claims`); routes in
+  `social::nature`. Bugs and mushrooms count as collectables.
+
+Checked:
+- Server:
+  - Unit tests: the hash matches the client's; every kind can be found
+    somewhere, sometime; something is out in every season; the moon and
+    mist; spots read from the map.
+  - API test: the same things out for everyone; "away" until you're in the
+    city; no net, no bug; once each; gone for you but not for others; old
+    slots and bad spots refused; donations of bugs and mushrooms; hints.
+- Clippy clean, client 92.
+- In the browser:
+  - Ada (with a net) walks up to a Pond Skater, swings on the line and
+    catches it ("New in your journal").
+  - She picks a Field Mushroom, and the journal shows both, with hints.
+  - She gives the skater to the museum, and it's pinned in its case.
+
+Next: step 3, fossils.
+
+## Merge: mancro5/commons "Map update + Quality of life + Spawn + Paintball" (2026-10-25)
+
+- **Paintball:** the fork's Splat Yard goes on the **Cinema block** (east
+  of the Market). The Casino keeps its block, where the fork had put the
+  Splat Yard. The cinema placeholder and its outdoor big screen are gone.
+- **Vehicles:** our faster speeds stay (2.2× to 3.5× walking). The
+  skateboard now uses the fork's push-and-glide pace (`SKATE_SPEED_X10`,
+  82).
+- **Protocol v27:** ours first (`Boat`, `BoatState` at 45), then the fork's
+  paintball messages (client 46–52, server 46–48).
+- **Combined from both sides:**
+  - The fork's rounded block corners and the Market signpost, alongside
+    our forage spots and metro entrances.
+  - Their `FLAT_OBJECTS`, plus the concert stage.
+  - Their minimap and paintball camera, plus our hidden-until-arrived
+    world.
+  - Francy, and the croupier.
+- Maps and `protocol.gen.ts` regenerated. All tests, clippy and the client
+  (94) pass. In the browser: into the Splat Yard and the Casino, with no
+  errors.
+
 ## Next: M5 · Crowds
 
 Instancing, orchestrator routing by population, crowd LOD, slow mode,

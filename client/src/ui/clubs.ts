@@ -1,9 +1,11 @@
 // Clubs (ADR 0014): one panel, opened from the 🛡 button or the Club Hall's
 // desk, directory and stairs. Your clubs and invites; founding a club (by
-// renting its room); a club's page: its room and rent, the treasury, the
-// members and their roles, inviting friends, and the board.
+// renting its room); a club's page: this week (the meetup, the goals, the
+// club call), events for everyone, the board, the members and their roles,
+// inviting friends, the treasury and the room and its rent (or a clubhouse
+// on a club lot); and, for everyone, what's on and the clubs of the week.
 
-import { type Clubs, type Detail, type MyClub, type PublicClub, ROLE_NAMES, type Role, roomStatus } from "../clubs";
+import { type ClubEvent, type ClubTier, type Clubs, type Detail, type Leaderboard, type Life, type MyClub, type PublicClub, ROLE_NAMES, type Role, roomStatus } from "../clubs";
 import type { Economy } from "../economy";
 import { ApiError } from "../net/api";
 import type { Social } from "../social";
@@ -16,6 +18,36 @@ export interface ClubsHost {
   /** The club whose room you're in, if any. */
   inRoom(): string | null;
   toast(text: string): void;
+  /** Whether you have a phone (for the club call). */
+  hasPhone(): boolean;
+  /** Rings every member who's online; how many were rung. */
+  callClub(club: string): Promise<number>;
+  /** Walks to a named spot in the city (an event's place, a lot). */
+  walkToSpot(spot: string): void;
+}
+
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+/** "Thursday 20:00", in local time. */
+function when(unix: number): string {
+  const d = new Date(unix * 1000);
+  return `${DAYS[(d.getDay() + 6) % 7]} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+/** A local weekday (0 Monday) and "HH:MM" as the UTC weekday and minute the server keeps. */
+export function toUtc(day: number, time: string): { dow: number; minute: number } {
+  const [h, m] = time.split(":").map(Number);
+  const d = new Date();
+  d.setHours(h || 0, m || 0, 0, 0);
+  d.setDate(d.getDate() + ((day - ((d.getDay() + 6) % 7) + 7) % 7));
+  return { dow: (d.getUTCDay() + 6) % 7, minute: d.getUTCHours() * 60 + d.getUTCMinutes() };
+}
+
+/** The meetup's local weekday (0 Monday) and "HH:MM", from when the next one starts. */
+function localOf(next: number): { day: number; time: string } {
+  const d = new Date(next * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return { day: (d.getDay() + 6) % 7, time: `${pad(d.getHours())}:${pad(d.getMinutes())}` };
 }
 
 type View =
@@ -24,7 +56,11 @@ type View =
   | { kind: "club"; id: string }
   | { kind: "directory" }
   /** The stairs: which of your clubs' rooms to go up to. */
-  | { kind: "rooms" };
+  | { kind: "rooms" }
+  /** What's on: club events, for everyone (C3). */
+  | { kind: "events" }
+  /** The clubs of the week. */
+  | { kind: "leaderboard" };
 
 const errText = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : "That didn't work.");
 
@@ -50,7 +86,8 @@ export class ClubsPanel extends Panel {
   private msg = el("p", "error");
   private loading = 0;
   /** The founding form's choices, kept while you look around. */
-  private form = { name: "", crest: "", color: "" };
+  private form = { name: "", crest: "", color: "", tier: 0, lot: "" };
+  private lotsAsked = false;
 
   constructor(
     private clubs: Clubs,
@@ -76,6 +113,21 @@ export class ClubsPanel extends Panel {
 
   showDirectory() {
     this.go({ kind: "directory" });
+  }
+
+  showEvents() {
+    this.eventList = null;
+    this.go({ kind: "events" });
+  }
+
+  showLeaderboard() {
+    this.board = null;
+    this.go({ kind: "leaderboard" });
+  }
+
+  /** Into a club's room (its clubhouse door, for members). */
+  goToRoom(club: string) {
+    this.host.goToRoom(club);
   }
 
   /** At the stairs: straight up if there's one room to go to, else pick. */
@@ -140,6 +192,8 @@ export class ClubsPanel extends Panel {
     else if (v.kind === "found") this.renderFound();
     else if (v.kind === "club") this.renderClub();
     else if (v.kind === "directory") this.renderDirectory();
+    else if (v.kind === "events") this.renderEvents();
+    else if (v.kind === "leaderboard") this.renderLeaderboard();
     else this.renderRooms();
     this.body.append(this.msg);
   }
@@ -188,7 +242,53 @@ export class ClubsPanel extends Panel {
         button(`Found a club${tier ? ` (first week's rent: ${tier.rent} coins)` : ""}`, () => this.go({ kind: "found" }), c.mine.length ? "small" : "primary"),
       );
     } else this.body.append(el("p", "hint", `You're in ${c.max} clubs, the most anyone can be in.`));
-    this.body.append(button("Club directory", () => this.showDirectory(), "small"));
+    this.body.append(this.clubhousePitch());
+    const more = el("div", "tier-row");
+    more.append(button("📅 What's on", () => this.showEvents(), "small"), button("🏆 Clubs of the week", () => this.showLeaderboard(), "small"), button("Club directory", () => this.showDirectory(), "small"));
+    this.body.append(more);
+  }
+
+  /** "🏠 Clubhouses": what they are, how many lots are free, and the way to one. */
+  private clubhousePitch(): HTMLElement {
+    const c = this.clubs;
+    const box = el("div", "clubhouse-pitch");
+    const house = c.tiers.find((t) => t.lot);
+    if (!house) return box;
+    if (!c.lots.length && !this.lotsAsked) {
+      this.lotsAsked = true;
+      void c
+        .loadLots()
+        .then(() => this.open && this.view.kind === "list" && this.render())
+        .catch(() => {});
+    }
+    const free = c.lots.filter((l) => !l.club).length;
+    box.append(
+      el("h3", "", "🏠 Clubhouses"),
+      el(
+        "p",
+        "hint",
+        `A ${house.name} is your club's own building on one of the city's club lots, its door leading into your room: up to ${house.members} members, ${house.rent} coins a week, and everyone walking past sees your banner.${c.lots.length ? ` ${free} of ${c.lots.length} lots free.` : ""}`,
+      ),
+    );
+    const row = el("div", "tier-row");
+    for (const club of c.mine.filter((m) => m.role === "owner" && !m.room?.plot?.startsWith("lot:"))) {
+      row.append(
+        button(`Move ${club.crest} ${club.name} into one`, () => {
+          this.showClub(club.id);
+          this.pickLot(club.id, house);
+        }, "small primary-sm"),
+      );
+    }
+    if (c.mine.length < c.max) {
+      row.append(
+        button("Found a club with a clubhouse", () => {
+          this.form.tier = house.tier;
+          this.go({ kind: "found" });
+        }, c.mine.length ? "small" : "small primary-sm"),
+      );
+    }
+    if (row.childElementCount) box.append(row);
+    return box;
   }
 
   private renderFound() {
@@ -196,15 +296,40 @@ export class ClubsPanel extends Panel {
     const f = this.form;
     if (!f.crest) f.crest = c.crests[Math.floor(Math.random() * c.crests.length)] ?? "🛡";
     if (!f.color) f.color = c.colors[Math.floor(Math.random() * c.colors.length)] ?? "#3f7a8a";
-    const tier = c.tiers[0];
+    const tier = c.tiers.find((t) => t.tier === f.tier) ?? c.tiers[0];
     this.titleEl.textContent = "🛡 Found a club";
     this.body.append(
       el(
         "p",
         "",
-        `Clubs are rented, never bought: founding one rents a ${tier?.name ?? "club room"} at the Club Hall for its members (up to ${tier?.members ?? 12}). You pay the first week, ${tier?.rent ?? "?"} coins; after that the club's treasury pays, from what members chip in.`,
+        `Clubs are rented, never bought. You pay the first week, ${tier?.rent ?? "?"} coins; after that the club's treasury pays, from what members chip in.`,
       ),
     );
+    // Where it starts: a room upstairs at the Club Hall, or a Clubhouse in the city.
+    const where = el("div", "rows");
+    for (const t of c.tiers.filter((t) => t === c.tiers[0] || t.lot)) {
+      const label = t.lot
+        ? `🏠 A ${t.name}: its own building on a club lot in the city · up to ${t.members} members · ${t.rent}/week`
+        : `🚪 A ${t.name} upstairs at the Club Hall · up to ${t.members} members · ${t.rent}/week`;
+      where.append(button(label, () => ((f.tier = t.tier), this.render()), t === tier ? "small on" : "small"));
+    }
+    this.body.append(el("h3", "", "Where"), where);
+    if (tier?.lot) {
+      if (!c.lots.length) void c.loadLots().then(() => this.open && this.render()).catch(() => {});
+      const free = c.lots.filter((l) => !l.club);
+      if (!free.some((l) => l.lot === f.lot)) f.lot = "";
+      const lots = el("div", "rows");
+      if (!free.length) lots.append(el("p", "hint", c.lots.length ? "Every club lot is taken just now: start in a club room, and move when one's free." : "Looking at the lots…"));
+      for (const l of free) {
+        const row = el("div", "row");
+        row.append(
+          button(`${l.lot === f.lot ? "✓ " : ""}${l.name}`, () => ((f.lot = l.lot), this.render()), l.lot === f.lot ? "small on" : "small"),
+          button("Show me", () => (this.hide(), this.host.walkToSpot(l.lot)), "small"),
+        );
+        lots.append(row);
+      }
+      this.body.append(el("p", "hint", "Pick its lot:"), lots);
+    }
     const preview = el("div", "club-preview");
     const showPreview = () => preview.replaceChildren(crestEl(f, true), el("strong", "", f.name.trim() || "Your club"));
     showPreview();
@@ -238,9 +363,9 @@ export class ClubsPanel extends Panel {
     const go = button(`Found it (${cost} coins)`, () => {
       this.msg.textContent = "";
       go.disabled = true;
-      c.found(f.name.trim(), f.crest, f.color)
+      c.found(f.name.trim(), f.crest, f.color, tier?.tier, tier?.lot ? f.lot : undefined)
         .then((r) => {
-          this.form = { name: "", crest: "", color: "" };
+          this.form = { name: "", crest: "", color: "", tier: 0, lot: "" };
           void this.eco.load().catch(() => {});
           this.host.toast(`🛡 ${r.name} is founded, and its room is yours for a week. Invite your friends!`);
           this.showClub(r.id);
@@ -253,6 +378,9 @@ export class ClubsPanel extends Panel {
     if (this.eco.coins < cost) {
       go.disabled = true;
       this.msg.textContent = `You need ${cost} coins for the first week's rent.`;
+    } else if (tier?.lot && !f.lot) {
+      go.disabled = true;
+      this.msg.textContent = "Pick a lot for the clubhouse.";
     }
     this.body.append(preview, name, el("h3", "", "Crest"), crests, el("h3", "", "Colour"), colors, go, button("Back", () => this.showList(), "small"));
     window.setTimeout(() => name.focus(), 0);
@@ -296,6 +424,277 @@ export class ClubsPanel extends Panel {
     this.body.append(rows, el("p", "hint", "Clubs grow by invitation between friends. Know someone in one? Ask them!"), button("Your clubs", () => this.showList(), "small"));
   }
 
+  /** Choosing a club lot for a Clubhouse. */
+  private picking: { club: string; tier: ClubTier } | null = null;
+
+  private pickLot(club: string, tier: ClubTier) {
+    this.picking = { club, tier };
+    void this.clubs
+      .loadLots()
+      .then(() => this.open && this.render())
+      .catch(() => {});
+    this.render();
+  }
+
+  private renderLots(club: string, tier: ClubTier) {
+    const box = el("div", "lot-pick");
+    box.append(el("p", "", `Pick a club lot for the ${tier.name}. Its door will lead into the club's room, and everyone passing sees your banner.`));
+    const free = this.clubs.lots.filter((l) => !l.club);
+    if (!free.length) box.append(el("p", "hint", this.clubs.lots.length ? "Every club lot is taken just now." : "Looking at the lots…"));
+    for (const l of free) {
+      const row = el("div", "row");
+      row.append(
+        el("span", "name", l.name),
+        button("Show me", () => (this.hide(), this.host.walkToSpot(l.lot)), "small"),
+        button(`Rent it (${tier.rent}/week)`, () => {
+          this.picking = null;
+          this.act(this.clubs.rentRoom(club, tier.tier, l.lot), `🏠 The club's clubhouse stands on ${l.name} now!`);
+        }, "small primary-sm"),
+      );
+      box.append(row);
+    }
+    box.append(button("Never mind", () => ((this.picking = null), this.render()), "small"));
+    this.body.append(box);
+  }
+
+  // ---- what's on, and the clubs of the week -------------------------------
+
+  private eventList: ClubEvent[] | null = null;
+  private board: Leaderboard | null = null;
+
+  private renderEvents() {
+    this.titleEl.textContent = "📅 What's on";
+    if (!this.eventList) {
+      this.body.append(el("p", "hint", "Reading the board…"));
+      void this.clubs
+        .events()
+        .then((e) => {
+          this.eventList = e;
+          if (this.open && this.view.kind === "events") this.render();
+        })
+        .catch((e) => (this.msg.textContent = errText(e)));
+      return;
+    }
+    this.body.append(el("p", "hint", "Events clubs hold for everyone, at public places in the city. Say you're going and you'll be reminded."));
+    if (!this.eventList.length) this.body.append(el("p", "empty", "Nothing planned yet. A club's owner or moderators can plan one from the club's page."));
+    for (const e of this.eventList) this.body.append(this.eventCard(e));
+    this.body.append(button("Your clubs", () => this.showList(), "small"));
+  }
+
+  private eventCard(e: ClubEvent): HTMLElement {
+    const card = el("div", e.live ? "event live" : "event");
+    const head = el("div", "row");
+    const text = el("span", "name");
+    text.append(el("strong", "", e.title), el("span", "hint", ` · ${e.club.name}`));
+    head.append(crestEl(e.club), text);
+    card.append(head);
+    const time = e.live
+      ? `🎉 On now, until ${new Date(e.ends_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+      : `📅 ${when(e.starts_at)}, ${new Date(e.starts_at * 1000).toLocaleDateString([], { day: "numeric", month: "short" })}`;
+    const who = `${e.going} going${e.friends.length ? ` · ${e.friends.join(", ")}` : ""}`;
+    card.append(el("p", "hint", `${time} · at ${e.place_name} · ${who}`));
+    const row = el("div", "tier-row");
+    const toggle = button(e.me ? "✓ Going" : "I'm going", () => {
+      toggle.disabled = true;
+      this.clubs
+        .rsvp(e.id, !e.me)
+        .then((r) => {
+          e.me = r.me;
+          e.going = r.going;
+          if (r.me) this.host.toast(`📅 You're going to “${e.title}”. You'll be reminded 15 minutes before.`);
+          this.render();
+        })
+        .catch((err) => (this.msg.textContent = errText(err)));
+    }, e.me ? "small" : "small primary-sm");
+    row.append(toggle, button("Show me", () => (this.hide(), this.host.walkToSpot(e.place)), "small"));
+    if (e.staff) {
+      row.append(
+        confirmButton("Call it off", "Really call it off?", () =>
+          this.act(this.clubs.cancelEvent(e.club.id, e.id).then(() => (this.eventList = null)), "📅 Called off. Those going are told."),
+        ),
+      );
+    }
+    card.append(row);
+    return card;
+  }
+
+  private renderLeaderboard() {
+    this.titleEl.textContent = "🏆 Clubs of the week";
+    const b = this.board;
+    if (!b) {
+      this.body.append(el("p", "hint", "Adding up the points…"));
+      void this.clubs
+        .leaderboard()
+        .then((r) => {
+          this.board = r;
+          if (this.open && this.view.kind === "leaderboard") this.render();
+        })
+        .catch((e) => (this.msg.textContent = errText(e)));
+      return;
+    }
+    const left = Math.max(0, Math.ceil((b.week_ends - Date.now() / 1000) / 86400));
+    this.body.append(
+      el("p", "hint", `Points this week: 10 per goal reached, 5 per member at the meetup, 1 per 10 minutes together in the room. In ${left} day${left === 1 ? "" : "s"} the top three win ${b.awards.join(", ")} coins for their treasuries.`),
+    );
+    if (b.last.length) {
+      this.body.append(el("h3", "", "Last week"));
+      for (const s of b.last) {
+        const row = el("div", "row club-row");
+        row.append(el("span", "rank", ["🥇", "🥈", "🥉"][s.rank - 1] ?? `${s.rank}`), crestEl(s), el("span", "name", s.name), el("span", "hint", `+${s.coins} coins`));
+        this.body.append(row);
+      }
+    }
+    this.body.append(el("h3", "", "This week"));
+    if (!b.standings.some((s) => s.points > 0)) this.body.append(el("p", "empty", "No points yet this week. Meet up, reach a goal, spend time together!"));
+    const rows = el("div", "rows");
+    for (const s of b.standings.filter((x) => x.points > 0 || x.mine)) {
+      const row = el("div", s.mine ? "row club-row mine" : "row club-row");
+      row.append(el("span", "rank", `${s.rank}.`), crestEl(s), el("span", "name", s.name), el("span", "price", `${s.points}`));
+      rows.append(row);
+    }
+    this.body.append(rows, button("Your clubs", () => this.showList(), "small"));
+  }
+
+  /** The club's events, and planning one (owner and moderators). */
+  private renderClubEvents(d: Detail, staff: boolean) {
+    const id = d.club.id;
+    this.body.append(el("h3", "", "Events for everyone"));
+    if (this.eventList === null) {
+      void this.clubs
+        .events()
+        .then((e) => {
+          this.eventList = e;
+          if (this.open && this.view.kind === "club") this.render();
+        })
+        .catch(() => {});
+    }
+    const mine = (this.eventList ?? []).filter((e) => e.club.id === id);
+    for (const e of mine) this.body.append(this.eventCard(e));
+    if (!mine.length) this.body.append(el("p", "hint", "Hold an event anyone can come to: a fishing contest, a bowling night, a concert at the bandstand."));
+    if (!staff) return;
+    const form = el("div", "event-form");
+    const title = el("input");
+    title.maxLength = 60;
+    title.placeholder = "What's happening (e.g. Fishing contest)";
+    const place = el("select");
+    const lot = this.clubs.lotOf(id);
+    const places = [...this.clubs.places, ...(lot ? [{ key: lot, name: "our clubhouse's lot" }] : [])];
+    if (!places.length) places.push({ key: "stage", name: "the Fairground bandstand" });
+    for (const p of places) {
+      const o = el("option", "", p.name);
+      o.value = p.key;
+      place.append(o);
+    }
+    const day = el("select");
+    for (let i = 0; i < 14; i++) {
+      const d0 = new Date(Date.now() + i * 86400_000);
+      const o = el("option", "", i === 0 ? "Today" : i === 1 ? "Tomorrow" : d0.toLocaleDateString([], { weekday: "long", day: "numeric", month: "short" }));
+      o.value = String(i);
+      day.append(o);
+    }
+    const time = el("input");
+    time.type = "time";
+    time.value = "19:00";
+    const hours = el("select");
+    for (const h of [1, 2]) {
+      const o = el("option", "", h === 1 ? "an hour" : "two hours");
+      o.value = String(h);
+      hours.append(o);
+    }
+    const go = button("Plan it", () => {
+      const [hh, mm] = time.value.split(":").map(Number);
+      const at = new Date(Date.now() + Number(day.value) * 86400_000);
+      at.setHours(hh || 0, mm || 0, 0, 0);
+      this.msg.textContent = "";
+      this.clubs
+        .planEvent(id, title.value.trim(), place.value, Math.floor(at.getTime() / 1000), Number(hours.value))
+        .then(() => {
+          this.eventList = null;
+          this.host.toast("📅 Planned! It's on the What's on board for everyone.");
+          void this.loadClub(id);
+        })
+        .catch((e) => (this.msg.textContent = errText(e)));
+    }, "small primary-sm");
+    form.append(title, place, day, time, hours, go);
+    this.body.append(form);
+  }
+
+  /** This week: the meetup, the goals, the club call and decorating. */
+  private renderWeek(d: Detail, staff: boolean) {
+    const id = d.club.id;
+    const life: Life | undefined = d.life;
+    if (!life) return;
+    this.body.append(el("h3", "", "This week"));
+    const m = life.meetup;
+    const here = this.host.inRoom() === id;
+    if (m?.live_until) {
+      const box = el("div", "meetup live");
+      box.append(el("strong", "", "🎉 The meetup is on now!"), el("span", "hint", ` Until ${new Date(m.live_until * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}. Stay ${m.stay_mins} minutes in the room for ${m.reward} coins.`));
+      if (m.came.length) box.append(el("p", "hint", `Here so far: ${m.came.join(", ")}`));
+      if (!here && d.room) box.append(button("Go up to the room", () => (this.hide(), this.host.goToRoom(id)), "small primary-sm"));
+      this.body.append(box);
+    } else if (m) {
+      this.body.append(el("p", "", `📅 Meetup every ${when(m.next)} (your time), in the club room. Come for ${m.stay_mins} minutes and get ${m.reward} coins.`));
+    } else {
+      this.body.append(el("p", "hint", staff ? "No meetup yet: pick a weekly hour when everyone can come." : "No meetup yet. The owner or a moderator can set one."));
+    }
+    if (staff) {
+      const form = el("div", "meetup-form");
+      const day = el("select");
+      DAYS.forEach((name, i) => {
+        const o = el("option", "", name);
+        o.value = String(i);
+        day.append(o);
+      });
+      const time = el("input");
+      time.type = "time";
+      const cur = m ? localOf(m.next) : { day: 4, time: "20:00" };
+      day.value = String(cur.day);
+      time.value = cur.time;
+      form.append(
+        day,
+        time,
+        button(m ? "Change" : "Set the meetup", () => this.act(this.clubs.setMeetup(id, toUtc(Number(day.value), time.value)), "📅 Meetup set. Everyone's told half an hour before."), "small primary-sm"),
+      );
+      if (m) form.append(button("Cancel it", () => this.act(this.clubs.setMeetup(id, null)), "small"));
+      this.body.append(form);
+    }
+    // The goals.
+    const goals = el("div", "goals");
+    for (const g of life.goals) {
+      const row = el("div", g.done ? "goal done" : "goal");
+      const bar = el("div", "bar");
+      const fill = el("span");
+      fill.style.width = `${Math.round((100 * Math.min(g.progress, g.target)) / Math.max(1, g.target))}%`;
+      bar.append(fill);
+      row.append(el("span", "name", `${g.done ? "✅" : "🎯"} ${g.title}`), el("span", "hint", `${Math.min(g.progress, g.target)}/${g.target} · +${g.reward}`), bar);
+      goals.append(row);
+    }
+    const left = Math.max(0, Math.ceil((life.week_ends - Date.now() / 1000) / 86400));
+    this.body.append(goals, el("p", "hint", `Each goal reached pays the treasury. New goals in ${left} day${left === 1 ? "" : "s"}.`));
+    // The club call, and decorating.
+    const actions = el("div", "tier-row");
+    const online = d.members.filter((x) => x.online && x.id !== this.social.selfId).length;
+    const ring = button(`📞 Call the club (${online} online)`, () => {
+      ring.disabled = true;
+      this.host
+        .callClub(id)
+        .then((n) => this.host.toast(`📞 Ringing ${n} member${n === 1 ? "" : "s"}…`))
+        .catch((e) => (this.msg.textContent = errText(e)))
+        .finally(() => (ring.disabled = false));
+    }, "small");
+    ring.disabled = !this.host.hasPhone() || online === 0;
+    if (!this.host.hasPhone()) ring.title = "You need a phone: the mall's Tools & Gadgets shop has them.";
+    actions.append(ring);
+    this.body.append(actions);
+    const cap = d.tiers.find((t) => t.tier === d.room?.tier)?.furniture ?? 0;
+    if (d.room) {
+      this.body.append(
+        el("p", "hint", `🪑 Furniture: ${life.furniture} of ${cap} pieces. ${here ? "Place things from your bag here; they stay yours." : "Decorate together in the room, from your own bags: each piece stays its owner's."}`),
+      );
+    }
+  }
+
   private renderClub() {
     const d = this.detail;
     if (!d) {
@@ -313,6 +712,8 @@ export class ClubsPanel extends Panel {
     this.body.append(head);
 
     if (d.room?.state === "grace") this.body.append(el("p", "hint warn", `Rent is due and the treasury has ${d.treasury} of ${d.room.rent} coins. Chip in below.`));
+    this.renderWeek(d, staff);
+    this.renderClubEvents(d, staff);
 
     // The board.
     this.body.append(el("h3", "", "Board"));
@@ -397,17 +798,25 @@ export class ClubsPanel extends Panel {
         for (const t of d.tiers) {
           if (t.tier === room.tier) continue;
           const up = t.rent > room.rent;
-          const label = up ? `Move up to a ${t.name} (${t.members} members, ${t.rent}/week, ${t.rent - room.rent} now)` : `Move down to a ${t.name} (${t.members} members, ${t.rent}/week)`;
-          row.append(button(label, () => this.act(c.rentRoom(id, t.tier), `🛡 The club has a ${t.name} now.`), up ? "small primary-sm" : "small"));
+          const where = t.lot ? " on a club lot in the city" : "";
+          const label = up ? `Move up to a ${t.name}${where} (${t.members} members, ${t.rent}/week, ${t.rent - room.rent} now)` : `Move down to a ${t.name} (${t.members} members, ${t.rent}/week)`;
+          row.append(button(label, () => (t.lot ? this.pickLot(id, t) : this.act(c.rentRoom(id, t.tier), `🛡 The club has a ${t.name} now.`)), up ? "small primary-sm" : "small"));
         }
         this.body.append(row);
       }
+      const lot = room.plot.startsWith("lot:") ? room.plot : null;
+      if (lot) {
+        const name = c.lots.find((l) => l.lot === lot)?.name ?? "a club lot";
+        this.body.append(el("p", "hint", `🏠 The clubhouse stands on ${name} in the city: its door leads into this room.`), button("Show me the clubhouse", () => (this.hide(), this.host.walkToSpot(lot)), "small"));
+      }
+      if (this.picking?.club === id) this.renderLots(id, this.picking.tier);
     } else {
       this.body.append(el("p", "hint", "The club has no room just now (the rent wasn't paid). Everything else carries on."));
       if (d.role === "owner") {
         const row = el("div", "tier-row");
-        for (const t of d.tiers) row.append(button(`Rent a ${t.name} (${t.members} members, ${t.rent}/week from the treasury)`, () => this.act(c.rentRoom(id, t.tier), `🛡 The club has a room again!`), "small primary-sm"));
+        for (const t of d.tiers) row.append(button(`Rent a ${t.name} (${t.members} members, ${t.rent}/week from the treasury)`, () => (t.lot ? this.pickLot(id, t) : this.act(c.rentRoom(id, t.tier), `🛡 The club has a room again!`)), "small primary-sm"));
         this.body.append(row);
+        if (this.picking?.club === id) this.renderLots(id, this.picking.tier);
       }
     }
 

@@ -76,12 +76,34 @@ const PUBLIC_DOORS: &[&str] = &[
     "library",
     "club_hall",
     "bowling",
+    "concert_hall",
+    "casino",
+    "museum",
+    "gallery",
     "paintball",
 ];
 
 /// Zones served unless `COMMONS_ZONES` says otherwise: the city, homes, the
 /// public buildings, and the Library's hall and wings (ADR 0012).
-const ZONES: &str = "city,home,mall,bar,arcade,library,library_children,library_lit,library_world,library_history,library_society,library_science,library_arts,library_reference,club_hall,clubroom,bowling,paintball";
+const ZONES: &str = "city,home,mall,bar,arcade,library,library_children,library_lit,library_world,library_history,library_society,library_science,library_arts,library_reference,club_hall,clubroom,bowling,concert_hall,casino,museum,paintball";
+
+/// A metro station, `metro_<key>` (ADR 0016): you come up its stairs.
+fn is_station(place: &str) -> bool {
+    place
+        .strip_prefix("metro_")
+        .is_some_and(|k| (1..=16).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_lowercase()))
+}
+
+/// A club lot's id, `lot:<bx>_<by>` (ADR 0014, C3).
+fn is_club_lot(place: &str) -> bool {
+    place.strip_prefix("lot:").is_some_and(|r| {
+        r.split_once('_').is_some_and(|(x, y)| {
+            [x, y]
+                .iter()
+                .all(|n| !n.is_empty() && n.len() <= 2 && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+    })
+}
 
 #[derive(Deserialize)]
 struct Lot {
@@ -208,16 +230,22 @@ async fn join(
     };
     // Leaving somewhere through a door: step out of that door (best effort).
     // `arrive` is a public place (`place:mall`; a library wing, back into the
-    // hall; a club room, back into the Club Hall), a home's owner, or "home"
-    // for your own.
+    // hall; a club room, back into the Club Hall, or out of a clubhouse's door
+    // on its lot, `place:lot:3_1`; up a metro station's stairs,
+    // `place:metro_lake`), a home's owner, or "home" for your own.
     let arrive = match req.arrive.as_deref() {
         Some(a) if zone == "library" => a
             .strip_prefix("place:")
             .filter(|w| w.starts_with("library_") && state.zones.iter().any(|z| z == w))
             .map(String::from),
         Some("place:clubroom") if zone == "club_hall" => Some("clubroom".to_string()),
+        // The Museum & Gallery has a door on each block: in by the Gallery's, the Salon.
+        Some("place:gallery") if zone == "museum" => Some("gallery".to_string()),
         Some(a) if zone == "city" => match a.strip_prefix("place:") {
-            Some(place) => PUBLIC_DOORS.contains(&place).then(|| place.to_string()),
+            Some(place) => {
+                (PUBLIC_DOORS.contains(&place) || is_club_lot(place) || is_station(place))
+                    .then(|| place.to_string())
+            }
             None => {
                 let owner = if a == "home" { who.sub.as_str() } else { a };
                 ask_social::<Lot>(&state, &format!("/internal/home?player={owner}"))
@@ -230,6 +258,14 @@ async fn join(
     };
     if !state.zones.contains(&zone) {
         return Err(err(StatusCode::NOT_FOUND, "unknown_zone", "no such zone"));
+    }
+    // The casino is for 16 and over (ADR 0017), unless it's been opened to all.
+    if zone == "casino" && who.minor && !config::env_or("COMMONS_CASINO_MINORS", false) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "age",
+            "The casino is for 16 and over.",
+        ));
     }
     let claims = JoinClaims {
         sub: who.sub,
@@ -278,4 +314,34 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%bind, "orchestrator listening");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_club_lot, is_station};
+
+    #[test]
+    fn metro_stations_are_stations_only() {
+        assert!(is_station("metro_lake"));
+        for bad in ["metro_", "metro_Lake", "metro_a1", "lake", "metro_../x"] {
+            assert!(!is_station(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn club_lot_doors_are_lots_only() {
+        assert!(is_club_lot("lot:4_1"));
+        assert!(is_club_lot("lot:12_3"));
+        for bad in [
+            "lot:",
+            "lot:4",
+            "lot:a_1",
+            "lot:4_1_2",
+            "lot:123_1",
+            "home",
+            "lot:4_",
+        ] {
+            assert!(!is_club_lot(bad), "{bad}");
+        }
+    }
 }

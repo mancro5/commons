@@ -6,11 +6,14 @@
 //! Deterministic: rerunning produces the same file. Hand-authored maps will
 //! replace this once `tools/mapedit` exists.
 
+mod casino;
 mod city;
 mod clubs;
+mod concert;
 mod leisure;
 mod library;
 mod mall;
+mod museum;
 
 use commons_sim::map::{MapFile, MapObject, Spawn, StreetGrid};
 use std::path::PathBuf;
@@ -502,6 +505,9 @@ fn main() -> std::io::Result<()> {
     write("library", &library::hall())?;
     write("club_hall", &clubs::lobby())?;
     write("clubroom", &clubs::room())?;
+    write("concert_hall", &concert::hall())?;
+    write("casino", &casino::floor())?;
+    write("museum", &museum::building())?;
     for wing in commons_sim::library::WINGS {
         write(&wing.zone(), &library::wing(&wing))?;
     }

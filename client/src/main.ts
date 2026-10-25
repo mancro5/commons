@@ -15,6 +15,11 @@ import libArtsUrl from "../../assets/maps/library_arts.json?url";
 import libReferenceUrl from "../../assets/maps/library_reference.json?url";
 import clubHallUrl from "../../assets/maps/club_hall.json?url";
 import clubRoomUrl from "../../assets/maps/clubroom.json?url";
+import concertHallUrl from "../../assets/maps/concert_hall.json?url";
+import casinoUrl from "../../assets/maps/casino.json?url";
+import museumUrl from "../../assets/maps/museum.json?url";
+import { Museum } from "./museum";
+import { ArtCard, ArtCataloguePanel, DeskPanel, NaturePanel, StudioPanel } from "./ui/museum";
 import bowlingUrl from "../../assets/maps/bowling.json?url";
 import paintballUrl from "../../assets/maps/paintball.json?url";
 import { Economy } from "./economy";
@@ -33,7 +38,7 @@ import { Town } from "./town";
 import { Gov } from "./gov";
 import { CityMapPanel } from "./ui/citymap";
 import { ReportPanel, StoryPanel, TownHallPanel } from "./ui/gov";
-import { ApartmentsPanel, PostOfficePanel, StallPanel } from "./ui/homes";
+import { ApartmentsPanel, PostOfficePanel, StallPanel, YardPanel } from "./ui/homes";
 import { DirectoryPanel, ShopPanel } from "./ui/mall";
 import { Minimap } from "./ui/minimap";
 import { FoundersPanel, WelcomePanel } from "./ui/welcome";
@@ -45,12 +50,18 @@ import { Calls, PHONE } from "./calls";
 import { IncomingCall, PhonePanel } from "./ui/phone";
 import { Clubs } from "./clubs";
 import { ClubsPanel } from "./ui/clubs";
+import { Concert } from "./concert";
+import { ConcertPanel } from "./ui/concert";
+import { MetroPanel, playRide, stationsOf } from "./ui/metro";
+import { BlackjackPanel, CagePanel, Casino, RoulettePanel, SlotsPanel, Tables } from "./ui/casino";
 import { MOODS, MoodPicker, OfferCard } from "./activities/together";
 import { GATHERINGS, Welcome, nextOccurrence } from "./welcome";
 import { Soundscape } from "./ambient/sound";
 import { Hud } from "./ui/hud";
 import { LOGIN_NOTICE, signIn } from "./ui/login";
-import { ActionMenu, AlbumPanel, BagPanel, MarketPanel, PlaceBanner, PlotMenu, ReelGame } from "./ui/panels";
+import { JournalPanel, NetGame } from "./ui/nature";
+import { Nature } from "./nature";
+import { ActionMenu, BagPanel, MarketPanel, PlaceBanner, PlotMenu, ReelGame } from "./ui/panels";
 import { FriendsPanel, NotificationsPanel } from "./ui/social";
 import { GoalPanel, QuarterPanel, RequestsPanel } from "./ui/town";
 import { EaselPanel } from "./activities/easel";
@@ -82,6 +93,9 @@ const MAP_URLS: Record<string, string> = {
   club_hall: clubHallUrl,
   clubroom: clubRoomUrl,
   bowling: bowlingUrl,
+  concert_hall: concertHallUrl,
+  casino: casinoUrl,
+  museum: museumUrl,
   paintball: paintballUrl,
 };
 const ERR_REPLACED = 6;
@@ -288,7 +302,40 @@ async function main() {
       return g?.zoneId === "clubroom" ? (g.place.owner ?? null) : null;
     },
     toast: (t) => hud.toast(t, 4500),
+    hasPhone: () => eco.qty(PHONE) > 0,
+    callClub: (id) => calls.callClub(id),
+    walkToSpot: (s) => walkToSpot(s),
   });
+  // The clubhouses on the city's club lots (C3).
+  void clubs.loadLots().catch(() => {});
+  clubs.onToast = (t) => hud.toast(t, 6000);
+  // The Museum & Gallery (ADR 0018).
+  const museum = new Museum(auth);
+  const artCard = new ArtCard(museum);
+  const artCatalogue = new ArtCataloguePanel(museum, artCard);
+  const studio = new StudioPanel(museum);
+  const nature = new NaturePanel(museum, eco, () => (game as Game | null)?.fishGiven());
+  const desk = new DeskPanel(museum, artCard, {
+    studio: () => studio.show(),
+    catalogue: () => artCatalogue.show(),
+    nature: () => nature.show(),
+  }, eco);
+  // Bugs and mushrooms, and the Naturalist's Journal (ADR 0019).
+  const forage = new Nature(auth, eco);
+  const casino = new Casino(auth);
+  casino.onPlayed = () => void eco.load().catch(() => {});
+  // The shared tables: live from the server; big wins told to the whole floor.
+  const tables = new Tables(auth, auth.player!.id, social);
+  tables.onCheer = (t) => hud.toast(t, 5000);
+  tables.onCoins = () => void eco.load().catch(() => {});
+  const concert = new Concert(auth, auth.player!.id, social);
+  concert.onToast = (t) => hud.toast(t, 5000);
+  const concertPanel = new ConcertPanel(concert, {
+    walkOnStage: () => void (game as Game | null)?.walkToSpot("stage_spot"),
+    toast: (t) => hud.toast(t, 4500),
+  });
+  // A meetup's reward (and anything else the gateway says changed your coins).
+  social.onPush((m) => m.t === "coins" && void eco.load().catch(() => {}));
   // The 🛡 button lights up while an invite waits or a club's rent is due.
   clubs.onChange(() => hud.setClubs(clubs.invites.length > 0 || clubs.mine.some((c) => c.room?.state === "grace")));
   void clubs.load().catch(() => {});
@@ -330,7 +377,9 @@ async function main() {
       (item) => (game as Game | null)?.bagExtra(item) ?? null,
       () => (game as Game | null)?.openCrate(),
     ),
-    album: new AlbumPanel(eco),
+    album: new JournalPanel(eco, forage, museum),
+    forage,
+    net: new NetGame(),
     market: new MarketPanel(eco),
     plot: new PlotMenu(eco, (x, y, action, item) => game?.plotAction(x, y, action, item)),
     reel: new ReelGame(),
@@ -381,6 +430,28 @@ async function main() {
     phone,
     clubs,
     clubsPanel,
+    concert,
+    concertPanel,
+    yard: new YardPanel(rent, eco, rentHost),
+    casino,
+    slots: new SlotsPanel(casino),
+    roulette: new RoulettePanel(casino, tables),
+    blackjack: new BlackjackPanel(casino, tables),
+    tables,
+    cage: new CagePanel(casino),
+    museum,
+    studio,
+    artCard,
+    artCatalogue,
+    desk,
+    nature,
+    metro: new MetroPanel({
+      map: () => {
+        const g = game as Game | null;
+        return g?.zoneId === "city" ? g.scene.map : null;
+      },
+      ride: (to) => (game as Game | null)?.rideMetro(to.key),
+    }),
   };
   ui.catalogue.reader = reader;
   // The Caretaker's tasks chip, until you're a founder (or the season closes).
@@ -392,6 +463,8 @@ async function main() {
   const notifications = new NotificationsPanel(social, {
     ...friendActions,
     clubInvited: (id) => clubs.invites.some((i) => i.id === id),
+    goToClubRoom: (id) => void travel({ zone: "clubroom", owner: id }),
+    walkToSpot: (s) => walkToSpot(s),
     answerClub: (id, accept) =>
       void clubs
         .answer(id, accept)
@@ -456,9 +529,22 @@ async function main() {
           // Out of a door into the city: you come out of that door (a
           // house, or a public place: the mall, the bar, the arcade, the
           // library). Out of a library wing, you're back at its door in the hall.
-          onTravel: (z) => {
+          onTravel: (z, given) => {
             const from = game as Game | null;
-            const place = from && ["mall", "bar", "arcade", HALL, "club_hall", "bowling", "paintball"].includes(from.zoneId) ? `place:${from.zoneId}` : undefined;
+            // The metro: a short ride underground, then up the stairs at the station.
+            if (given?.startsWith("place:metro_") && from) {
+              const key = given.slice("place:".length);
+              const to = stationsOf(from.scene.map).find((s) => s.key === key);
+              const ride = playRide(to?.name ?? "the next station");
+              void Promise.all([travel({ zone: z, arrive: given }), ride.arrived]).finally(() => ride.done());
+              return;
+            }
+            // Out of a club's room whose clubhouse stands on a lot: out of its door, in the city.
+            const lot = from?.zoneId === "clubroom" && from.place.owner ? clubs.lotOf(from.place.owner) : null;
+            if (z === "club_hall" && lot) return void travel({ zone: "city", arrive: `place:${lot}` });
+            // The Museum & Gallery has a door on each block: in and out by the one you chose.
+            if (given && (z === "museum" || (z === "city" && from?.zoneId === "museum"))) return void travel({ zone: z, arrive: given });
+            const place = from && ["mall", "bar", "arcade", HALL, "club_hall", "bowling", "concert_hall", "casino", "museum", "paintball"].includes(from.zoneId) ? `place:${from.zoneId}` : undefined;
             const arrive =
               (z === HALL && from && wingOfZone(from.zoneId)) || (z === "club_hall" && from?.zoneId === "clubroom")
                 ? `place:${from.zoneId}`

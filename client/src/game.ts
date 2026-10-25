@@ -8,7 +8,7 @@ import { JamPanel, beatTime, playNote } from "./activities/jam";
 import type { WordPanel } from "./activities/word";
 import { Cat } from "./ambient/cat";
 import { Caretaker } from "./ambient/caretaker";
-import { ATTENDANT, BARTENDER, Clerk, FISHERMAN, LIBRARIAN, SHOE_GUY } from "./ambient/clerk";
+import { ATTENDANT, BARTENDER, CROUPIER, Clerk, FISHERMAN, LIBRARIAN, SHOE_GUY } from "./ambient/clerk";
 import { FRANCY_ID, Francy } from "./ambient/francy";
 import { ArcadePanel, BEAT_MS, BOT as ARCADE_BOT, PLAYING as ARCADE_PLAYING } from "./activities/arcade";
 import { PrizePanel } from "./ui/prizes";
@@ -19,7 +19,7 @@ import { PaintballShow } from "./activities/paintball";
 import { CANCELLED, CHOOSING, RpsPicker, beats, pickIcon } from "./activities/rps";
 import { Sky } from "./ambient/sky";
 import { Campfire } from "./activities/campfire";
-import { FOLLOW, type MoodPicker, type OfferCard, STOP_FOLLOW, TOGETHER } from "./activities/together";
+import { BOAT, FOLLOW, type MoodPicker, type OfferCard, STOP_FOLLOW, TOGETHER } from "./activities/together";
 import type { BottlesPanel, WishPanel } from "./ui/dream";
 import type { WardrobePanel } from "./ui/wardrobe";
 import { Critters } from "./ambient/critters";
@@ -58,7 +58,7 @@ import type { DecoratePanel } from "./ui/exterior";
 import { HouseFronts } from "./world/housefronts";
 import { CARDS, wrappedTexture } from "./world/goods";
 import { EMOTES } from "./world/avatars";
-import { rideSpeed } from "./world/vehicles";
+import { BOAT_CAPTAIN, BOAT_SEATS, BOAT_SPEED_X10, rideSpeed } from "./world/vehicles";
 import { itemIconUrl } from "./world/items";
 import { PetLife, petTitle } from "./ambient/petlife";
 import { PET_SOUNDS } from "./world/pets";
@@ -67,7 +67,7 @@ import type { ApartmentsPanel, PostOfficePanel, StallPanel } from "./ui/homes";
 import type { Hud } from "./ui/hud";
 import type { DirectoryPanel, ShopPanel } from "./ui/mall";
 import type { Minimap } from "./ui/minimap";
-import { type ActionMenu, type AlbumPanel, type BagPanel, FishermanPanel, LURE_ITEM, type MarketPanel, Panel, ROD_ITEM, type PlaceBanner, type PlotMenu, type ReelGame, isTyping } from "./ui/panels";
+import { type ActionMenu, type BagPanel, FishermanPanel, LURE_ITEM, type MarketPanel, Panel, ROD_ITEM, type PlaceBanner, type PlotMenu, type ReelGame, isTyping } from "./ui/panels";
 import { Avatar, CAST_SWING_MS, PUMP_MS } from "./world/avatars";
 import { Furniture } from "./world/furniture";
 import { type MapObject, type ZoneMap, groundAt, nearestWalkable, spot, stepTarget, walkable } from "./world/map";
@@ -86,6 +86,19 @@ import type { PhonePanel } from "./ui/phone";
 import { LibraryRoom } from "./world/libraryroom";
 import type { Clubs } from "./clubs";
 import type { ClubsPanel } from "./ui/clubs";
+import type { Concert } from "./concert";
+import type { YardPanel } from "./ui/homes";
+import type { MetroPanel } from "./ui/metro";
+import type { BlackjackPanel, Casino, CagePanel, RoulettePanel, SlotsPanel, Tables } from "./ui/casino";
+import { RouletteFx } from "./world/roulettefx";
+import type { Museum } from "./museum";
+import type { ArtCard, ArtCataloguePanel, DeskPanel, NaturePanel, StudioPanel } from "./ui/museum";
+import { MuseumFx } from "./world/museumfx";
+import { NET_ITEM, type Nature, type Out } from "./nature";
+import type { JournalPanel, NetGame } from "./ui/nature";
+import { NatureFx } from "./world/naturefx";
+import { YardStands } from "./world/yardstands";
+import type { ConcertPanel } from "./ui/concert";
 
 /** Error codes from server/crates/protocol (error_code). */
 const ERR = { NO_PATH: 4, RATE_LIMITED: 5, REPLACED: 6, UNAUTHORIZED: 2, VERSION_MISMATCH: 3 };
@@ -125,7 +138,10 @@ export interface Ui {
   shop: ShopPanel;
   eco: Economy;
   bag: BagPanel;
-  album: AlbumPanel;
+  album: JournalPanel;
+  /** Bugs and mushrooms (ADR 0019): what's out, and the net game. */
+  forage: Nature;
+  net: NetGame;
   market: MarketPanel;
   plot: PlotMenu;
   reel: ReelGame;
@@ -161,6 +177,24 @@ export interface Ui {
   phone: PhonePanel;
   clubs: Clubs;
   clubsPanel: ClubsPanel;
+  concert: Concert;
+  concertPanel: ConcertPanel;
+  yard: YardPanel;
+  metro: MetroPanel;
+  casino: Casino;
+  slots: SlotsPanel;
+  roulette: RoulettePanel;
+  blackjack: BlackjackPanel;
+  /** The casino's shared tables, live from the server. */
+  tables: Tables;
+  /** The Museum & Gallery (ADR 0018). */
+  museum: Museum;
+  studio: StudioPanel;
+  artCard: ArtCard;
+  artCatalogue: ArtCataloguePanel;
+  desk: DeskPanel;
+  nature: NaturePanel;
+  cage: CagePanel;
 }
 
 /** What the Caretaker lets slip about the park's secret places. */
@@ -240,6 +274,42 @@ const LOW_REACH = new Set(["bookcase", "stack_sign"]);
 const cheb = (a: TileXY, b: TileXY) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
 const SITTING = 1;
 const SEAT_GROUND = 0xffffffff;
+/**
+ * The lake rowboats go on (server: `boats::Lake`): the water inside the map's
+ * `boat_lake` bounds, open; everything else blocked. Null with no lake.
+ */
+function waterMapOf(map: ZoneMap): ZoneMap | null {
+  const area = map.objects.find((o) => o.kind === "boat_lake");
+  const water = map.ground_legend.indexOf("water");
+  if (!area || water < 0) return null;
+  const collision = map.collision.map((_, i) => {
+    const x = i % map.width;
+    const y = Math.floor(i / map.width);
+    const inside = x >= area.x && x < area.x + area.w && y >= area.y && y < area.y + area.h;
+    return inside && map.ground[i] === water ? 0 : 1;
+  });
+  return { ...map, collision, streets: undefined };
+}
+
+/** Whether `a` comes before `b`, element by element. */
+function lexLess(a: number[], b: number[]): boolean {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
+}
+
+/** The open tile of `m` nearest `p` within `radius` (mirror of the server's `boats::nearest`). */
+function nearestWater(m: ZoneMap, p: TileXY, radius: number): TileXY | null {
+  let best: { key: number[]; t: TileXY } | null = null;
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (!walkable(m, p.x + dx, p.y + dy)) continue;
+      const key = [Math.max(Math.abs(dx), Math.abs(dy)), Math.abs(dx) + Math.abs(dy), dy, dx];
+      if (!best || lexLess(key, best.key)) best = { key, t: { x: p.x + dx, y: p.y + dy } };
+    }
+  }
+  return best?.t ?? null;
+}
+
 /** Spectators further than this from a table stop following its game. */
 const WATCH_RANGE = 12;
 /** Names are drawn for the nearest few avatars only, to keep crowds readable. */
@@ -260,7 +330,12 @@ const KEY_RESEND_MS = 180;
  * person we followed in (to find again inside), and the people who followed
  * us in (to let follow on without asking again).
  */
-const carried = { leader: null as { name: string; until: number } | null, followers: new Map<string, number>() };
+const carried = {
+  // `left`: the place they went from. Its Game runs a moment longer as we go,
+  // and mustn't look for them there (it would offer to the old place's ids).
+  leader: null as { name: string; until: number; left: object } | null,
+  followers: new Map<string, number>(),
+};
 /** How long after going through a door the two find each other again. */
 const CARRY_MS = 20_000;
 /** Further behind than this (tiles), a follower runs to catch up. */
@@ -317,6 +392,26 @@ export class Game {
   private lastKeySend = 0;
   /** Walks we've predicted and sent, oldest first, awaiting the server's echo. */
   private sentMoves: { x: number; y: number; at: number }[] = [];
+  /** The rowboat we're in (as the server says: `BoatState`), and the lake's water to row on. */
+  private boat: { captain: number; until: number; seats: number[] } | null = null;
+  private waterMap: ZoneMap | null = null;
+  private boatChipAt = 0;
+  private boatNagAt = 0;
+  /** The roulette table in the room: chips, the ball, the croupier's calls. */
+  private rouletteFx: RouletteFx | null = null;
+  /** The Museum & Gallery's paintings and fish, in the room. */
+  private museumFx: MuseumFx | null = null;
+  /** The bugs and mushrooms out in the city (ADR 0019), and when to ask again what's out. */
+  private natureFx: NatureFx | null = null;
+  private natureLoadAt = 0;
+  /** Creeping up on a bug or a mushroom: what, and whether we set off at a run. */
+  private stalking: { o: Out; ran: boolean; since: number } | null = null;
+
+  /** A fish given to the museum: its tank fills (if it's the first), and the bag. */
+  fishGiven() {
+    void this.museumFx?.refreshTanks();
+    void this.ui.eco.load().catch(() => {});
+  }
   /**
    * Sprinting (outdoors): a direction key pressed twice in quick succession,
    * a tile tapped twice, or tiles tapped one after another quickly. It lasts
@@ -351,6 +446,8 @@ export class Game {
   private petLife: PetLife;
   private endingTest = false;
   private houseFronts: HouseFronts | null = null;
+  /** The yard stands by the houses' front doors. */
+  private yardStands: YardStands | null = null;
   /** Garden plots, watered or not, as last seen (to show a can being used). */
   private wateredSeen = new Map<string, boolean>();
   private clerk: Clerk | null = null;
@@ -403,7 +500,8 @@ export class Game {
   /** Dancing next to you when you take on the AI bot at the Dance Off. */
   private danceBot: Avatar | null = null;
   /** A building we're walking to the door of, to go in once we get there. */
-  private entering: { door: TileXY; zone: string } | null = null;
+  /** Walking up to a door, to go through it (into `club`'s room, for a clubhouse). */
+  private entering: { door: TileXY; zone: string; club?: string; arrive?: string } | null = null;
   /** Walking to the way out (the leave button): the exit, and where we stand to use it. */
   private leaving: { exit: MapObject; spot: TileXY } | null = null;
   /** Where the last tap on the world landed, in world pixels (for things that need a precise hit). */
@@ -437,19 +535,25 @@ export class Game {
     private events: {
       onWelcome(): void;
       onDisconnect(reason: CloseReason): void;
-      onTravel(zone: string): void;
+      /** Through a door to `zone`; `arrive` where to come out, if the door says (a metro station). */
+      onTravel(zone: string, arrive?: string): void;
       /** Knock on someone's home: visit them if they've invited you. */
       onVisit(owner: string): void;
     },
   ) {
     this.hud = ui.hud;
     this.scene = new Scene(app, map);
+    // Hidden till we're in it: the camera starts at the map's corner (on the
+    // city's houses), and showing that for a frame or two flashes a stranger's street.
+    this.scene.world.visible = false;
+    this.waterMap = waterMapOf(map);
     ui.minimap.setMap(map);
     // Inside somewhere with a way out: the leave button in the corner.
     ui.hud.setExit(map.objects.some((o) => o.kind.endsWith("_exit")) ? "Leave" : null);
     this.fairyRing = spot(map, "fairy_ring");
     this.props = new Props(this.scene, map, ui.eco);
-    ui.bag.placeable = zoneId === "home" && place.owner === ui.social.selfId;
+    // Your own home, or your club's room (decorated together, ADR 0014 C2).
+    ui.bag.placeable = (zoneId === "home" && place.owner === ui.social.selfId) || zoneId === "clubroom";
     this.furniture = new Furniture(map);
     const screenObj = map.objects.find((o) => o.kind === "big_screen");
     if (screenObj) {
@@ -459,7 +563,7 @@ export class Game {
     // Indoors (the mall, the bar, the arcade, the library): the lights are
     // on, no weather, no birds, no wheels, no sprinting; the arcade and the
     // bowling alley are lit by neon.
-    const indoors = zoneId === "mall" || zoneId === "bar" || zoneId === "arcade" || zoneId.startsWith("library") || zoneId.startsWith("club") || zoneId === "bowling" || zoneId === "paintball";
+    const indoors = zoneId === "mall" || zoneId === "bar" || zoneId === "arcade" || zoneId.startsWith("library") || zoneId.startsWith("club") || zoneId === "bowling" || zoneId === "concert_hall" || zoneId === "casino" || zoneId === "museum" || zoneId === "paintball";
     this.ambient = new Ambient(this.scene, map, indoors);
     this.daynight = new DayNight(app, this.scene, map, indoors, zoneId === "arcade" || zoneId === "bowling");
     this.milestones = new Milestones(this.scene, map, (x, y, s) => this.daynight.addLight(x, y, s), app.stage);
@@ -517,6 +621,7 @@ export class Game {
     this.showToys();
     if (zoneId === "city") {
       this.houseFronts = new HouseFronts(this.scene, map, ui.goods);
+      this.yardStands = new YardStands(this.scene, map, ui.rent, ui.eco);
       void ui.goods.loadHouses().catch(() => {});
     }
     // In through your own front door: a pet out with you is home.
@@ -561,6 +666,21 @@ export class Game {
     }
     const bar = map.objects.find((o) => o.kind === "bar_counter");
     if (bar) this.clerk = new Clerk(map, bar, this.scene, labels, BARTENDER);
+    // The Casino's croupier, behind the roulette table, calls the game for
+    // everyone; the chips and the ball show on the table itself.
+    const wheel = map.objects.find((o) => o.kind === "roulette_table");
+    if (wheel) {
+      this.clerk = new Clerk(map, wheel, this.scene, labels, CROUPIER);
+      const fx = new RouletteFx(this.scene, wheel, ui.tables, {
+        say: (t) => this.clerk?.say(t),
+        cheer: (name) => {
+          for (const a of this.avatars.values()) if (a.info.name === name) a.flash("🎉");
+        },
+      });
+      this.rouletteFx = fx;
+      void ui.tables.load().catch(() => {});
+      this.disposers.push(() => fx.destroy());
+    }
     // What you read shows in your hands; books stay in the library unless
     // they're borrowed.
     // On a call: the phone at your ear, for everyone to see.
@@ -688,6 +808,46 @@ export class Game {
     void ui.welcome.loadFounders().catch(() => {});
     // Club crests by names (asked afresh in each place).
     ui.clubs.forgetBadges();
+    // Bugs and mushrooms out in the green places (ADR 0019).
+    if (zoneId === "city") {
+      const fx = new NatureFx(this.scene, ui.forage);
+      this.natureFx = fx;
+      this.natureLoadAt = 0;
+      this.disposers.push(() => {
+        fx.destroy();
+        this.natureFx = null;
+        this.stalking = null;
+      });
+    }
+    // The Museum & Gallery (ADR 0018): the paintings on the stands, the fish in the tanks.
+    if (zoneId === "museum") {
+      const fx = new MuseumFx(this.scene, ui.museum);
+      this.museumFx = fx;
+      this.disposers.push(() => fx.destroy());
+    }
+    // The Casino (ADR 0017): after half an hour's play, a gentle reminder.
+    if (zoneId === "casino") {
+      const since = performance.now();
+      const timer = window.setInterval(() => {
+        const mins = Math.round((performance.now() - since) / 60_000);
+        void ui.casino
+          .load()
+          .then((s) => this.hud.toast(`🕰️ You've been in the casino ${mins} minutes. Today: ${s.today.net >= 0 ? "+" : ""}${s.today.net} coins. Time for a stretch?`, 8000))
+          .catch(() => {});
+      }, 30 * 60_000);
+      this.disposers.push(() => window.clearInterval(timer));
+    }
+    // The Concert Hall (ADR 0015): hear whoever's on stage; 🎤 by their name.
+    if (zoneId === "concert_hall") {
+      void ui.concert.enterHall().catch(() => {});
+      this.disposers.push(ui.concert.onChange(() => this.showStage()));
+      this.disposers.push(() => void ui.concert.leaveHall());
+    }
+    // The clubhouses on the club lots, as they change (C3).
+    if (zoneId === "city") {
+      this.dressLots(ui.clubs.lots);
+      this.disposers.push(ui.clubs.onLots((lots) => this.dressLots(lots)));
+    }
     this.disposers.push(ui.clubs.onBadges(() => this.applyClubBadges()));
     this.chess = new ChessPanel(document.body, () => this.selfId, {
       move: (table, uci) => this.socket?.send({ t: "GameMove", table, uci }),
@@ -764,6 +924,7 @@ export class Game {
       a.setAway(info.away);
       a.setFounder(this.ui.welcome.founderNamed(info.name)?.no ?? null);
       a.setClub(this.ui.clubs.badgeOf(info.name));
+      if (this.zoneId === "concert_hall") a.setPerforming(this.ui.concert.stage?.name === info.name);
       this.avatars.set(info.id, a);
     }
   }
@@ -771,6 +932,32 @@ export class Game {
   private applyFounders() {
     this.grove?.setFounders(this.ui.welcome.founders);
     for (const a of this.avatars.values()) a.setFounder(this.ui.welcome.founderNamed(a.info.name)?.no ?? null);
+  }
+
+  /** Lights the stage with the performer's name, and 🎤 by theirs. */
+  private showStage() {
+    const s = this.ui.concert.stage;
+    for (const o of this.scene.map.objects) {
+      if (o.kind !== "concert_stage" && o.kind !== "concert_curtain") continue;
+      if ((o.title ?? null) === (s?.name ?? null)) continue;
+      o.title = s?.name;
+      this.scene.redraw(o);
+    }
+    for (const a of this.avatars.values()) a.setPerforming(!!s && a.info.name === s.name);
+  }
+
+  /** Puts each club's house (crest, colour, name) on the lot it rents. */
+  private dressLots(lots: import("./clubs").Lot[]) {
+    for (const o of this.scene.map.objects) {
+      if (o.kind !== "club_house") continue;
+      const c = lots.find((l) => l.lot === o.label)?.club ?? null;
+      if ((o.club ?? null) === (c?.id ?? null)) continue;
+      o.club = c?.id;
+      o.title = c?.name;
+      o.sign = c?.crest;
+      o.color = c?.color;
+      this.scene.redraw(o);
+    }
   }
 
   private applyClubBadges() {
@@ -806,6 +993,7 @@ export class Game {
       const pet = this.ui.pets.mine;
       const actions: [string, () => void][] = [["Go inside", () => this.goTo("home")]];
       actions.push(["Decorate outside 🎨", () => this.near(this.ui.decorate, door, 6).show()]);
+      actions.push(["Your yard stand 🧺", () => this.near(this.ui.yard, door, 6).openFor(lot)]);
       if (pet?.out) actions.push([`Bring ${pet.name} home`, () => void this.petLife.bringHome().catch(() => {})]);
       else if (pet) actions.push([`Take ${pet.name} for a walk 🐾`, () => void this.petLife.takeOut().catch(() => {})]);
       menu.showWith("Your home", "", actions);
@@ -948,6 +1136,124 @@ export class Game {
         walkUp();
         this.near(ui.clubsPanel, front, 8).showDirectory();
         return true;
+      case "club_leaderboard":
+        walkUp();
+        this.near(ui.clubsPanel, front, 8).showLeaderboard();
+        return true;
+      case "club_events":
+        walkUp();
+        this.near(ui.clubsPanel, front, 8).showEvents();
+        return true;
+      // The Casino (ADR 0017): in through its doors (16 and over); inside,
+      // the slot machines, the shared tables (roulette, blackjack) and the cashier.
+      case "casino":
+        this.enter(front, "casino");
+        return true;
+      // The Museum & Gallery (ADR 0018): one building, a door on each block.
+      // In by the Gallery's, you're in the Salon; by the Museum's, the Grand Hall.
+      case "museum":
+        this.enter(front, "museum");
+        return true;
+      case "gallery":
+        this.enter(front, "museum", "place:gallery");
+        return true;
+      case "museum_exit":
+        this.goTo("city", "place:museum");
+        return true;
+      case "gallery_exit":
+        this.goTo("city", "place:gallery");
+        return true;
+      case "salon_s":
+      case "salon_m":
+      case "salon_l":
+      case "fame_stand": {
+        walkUp();
+        const art = this.museumFx?.onStand.get(obj);
+        if (art) this.near(ui.artCard, front, 6).showArt(art);
+        else this.hud.toast(obj.kind === "fame_stand" ? "🏆 This stand waits for a Hall of Fame winner: the week's most-loved paintings go up here." : "🖼 This frame's empty this hour. Paint something at a Studio easel and hang it!", 4000);
+        return true;
+      }
+      case "studio_easel":
+        walkUp();
+        this.near(ui.studio, front, 6).show();
+        return true;
+      case "art_catalogue":
+        walkUp();
+        this.near(ui.artCatalogue, front, 8).show();
+        return true;
+      case "museum_desk":
+        walkUp();
+        this.near(ui.desk, front, 8).show();
+        return true;
+      case "fish_tank":
+        walkUp();
+        this.near(ui.nature, front, 8).showRoom("fish");
+        return true;
+      case "bug_case":
+      case "shroom_case":
+        walkUp();
+        this.near(ui.nature, front, 8).showRoom(obj.kind === "bug_case" ? "bugs" : "shrooms");
+        return true;
+      case "casino_exit":
+        this.goTo("city");
+        return true;
+      case "slot_machine":
+        walkUp();
+        this.near(ui.slots, front, 4).show();
+        return true;
+      case "roulette_table":
+        walkUp();
+        this.near(ui.roulette, front, 6).show();
+        return true;
+      case "blackjack_table": {
+        // Tables are numbered from the left, as the server numbers them.
+        const n = this.scene.map.objects
+          .filter((o) => o.kind === "blackjack_table")
+          .sort((a, b) => a.x - b.x)
+          .indexOf(obj);
+        walkUp();
+        this.near(ui.blackjack.at(Math.max(0, n)), front, 6).show();
+        return true;
+      }
+      case "casino_cage":
+        walkUp();
+        this.near(ui.cage, front, 5).show();
+        return true;
+      // A metro station (ADR 0016): down the stairs, and the map of the lines.
+      case "metro_entrance": {
+        const key = this.scene.map.objects
+          .filter((s) => s.kind === "spot" && s.label?.startsWith("metro_"))
+          .sort((a, b) => Math.hypot(a.x - obj.x, a.y - obj.y) - Math.hypot(b.x - obj.x, b.y - obj.y))[0]?.label;
+        if (!key) return true;
+        const at = { x: obj.x + obj.w, y: obj.y };
+        if (cheb(self.destination, at) > 2) this.walkTo(at);
+        this.near(ui.metro, at, 4).openAt(key);
+        return true;
+      }
+      // The Concert Hall (ADR 0015): in through its doors; inside, the stage.
+      case "concert_hall":
+        this.enter(front, "concert_hall");
+        return true;
+      case "concert_exit":
+        this.goTo("city");
+        return true;
+      case "concert_mic":
+      case "concert_curtain":
+        if (cheb(self.destination, front) > 3 && obj.kind === "concert_mic") this.walkTo(front);
+        this.near(ui.concertPanel, { x: 14, y: 6 }, 9).show();
+        return true;
+      case "club_house": {
+        // A club's house on its lot (C3): members go in; others are told whose it is.
+        const club = obj.club ? ui.clubs.club(obj.club) : null;
+        if (club) {
+          this.enterClubRoom({ x: obj.x + Math.floor(obj.w / 2), y: obj.y + obj.h }, club.id);
+        } else if (obj.club) {
+          this.hud.toast(`🏠 ${obj.sign ?? ""} ${obj.title}'s clubhouse: members only. Their events are on the What's on board at the Club Hall.`, 5000);
+        } else {
+          this.hud.toast("🏗️ A club lot, free to rent: a club can build its clubhouse here (a Clubhouse, at the Club Hall's desk).", 5000);
+        }
+        return true;
+      }
       case "club_stairs":
         walkUp();
         this.near(ui.clubsPanel, front, 8).showRooms();
@@ -1080,6 +1386,8 @@ export class Game {
     if (fisher && this.fisherman) this.openFisherman(fisher);
     const desk = map.objects.find((o) => o.kind === "circulation_desk");
     if (desk) this.near(this.ui.catalogue, { x: desk.x + Math.floor(desk.w / 2), y: desk.y + desk.h }, 8).show();
+    const wheel = map.objects.find((o) => o.kind === "roulette_table");
+    if (wheel) this.near(this.ui.roulette, { x: wheel.x + Math.floor(wheel.w / 2), y: wheel.y + wheel.h }, 8).show();
     return true;
   }
 
@@ -1229,17 +1537,33 @@ export class Game {
   }
 
   /** Walks to a building's door and goes in on arrival (or at once if already there). */
-  private enter(door: TileXY, zone: string) {
+  /** Rides the metro to station `key` (`metro_lake`): followers come too. */
+  rideMetro(key: string) {
+    this.goTo("city", `place:${key}`);
+  }
+
+  /** Into a club's room through its clubhouse's door on the lot (C3). */
+  private enterClubRoom(door: TileXY, club: string) {
+    const self = this.self;
+    if (!self) return;
+    if (cheb(self.destination, door) <= 1 && !self.moving) return this.ui.clubsPanel.goToRoom(club);
+    const spot = nearestWalkable(this.scene.map, door.x, door.y, 2);
+    if (!spot) return;
+    this.moveTo(spot, true);
+    this.entering = { door: spot, zone: "clubroom", club };
+  }
+
+  private enter(door: TileXY, zone: string, arrive?: string) {
     const self = this.self;
     if (!self) return;
     if (cheb(self.destination, door) <= 1 && !self.moving) {
-      this.goTo(zone);
+      this.goTo(zone, arrive);
       return;
     }
     const spot = nearestWalkable(this.scene.map, door.x, door.y, 2);
     if (!spot) return;
     this.moveTo(spot, true);
-    this.entering = { door: spot, zone };
+    this.entering = { door: spot, zone, arrive };
   }
 
   /** The leave button: walk up to the way out, and out we go on arrival. */
@@ -1282,7 +1606,8 @@ export class Game {
     }
     if (self.moving) return;
     this.entering = null;
-    this.goTo(e.zone);
+    if (e.club) this.ui.clubsPanel.goToRoom(e.club);
+    else this.goTo(e.zone, e.arrive);
   }
 
   /** The Caretaker says something now and then when you're close by. */
@@ -1325,13 +1650,13 @@ export class Game {
       if (name) carried.followers.set(name, until);
     }
     if (this.followers.size) this.socket?.send({ t: "Going", zone, arrive: arrive ?? "" });
-    this.events.onTravel(zone);
+    this.events.onTravel(zone, arrive);
   }
 
   /** Who we followed in through a door: once they're here too, follow on. */
   private findLeader() {
     const l = carried.leader;
-    if (!l || this.following !== null) return;
+    if (!l || this.following !== null || l.left === this) return;
     if (performance.now() > l.until) {
       carried.leader = null;
       return;
@@ -1411,6 +1736,8 @@ export class Game {
       this.hud.toast(name ? `👣 You lost sight of ${name}.` : "👣 You lost sight of them.", 3000);
       return;
     }
+    // Out on the lake (them, or us): wait on the bank till they're back.
+    if (this.boat || (them.info.vehicle ?? 0) >= BOAT_CAPTAIN) return;
     const goal = them.destination;
     // Keep up: run when they run, or when we've fallen behind.
     const now = this.socket?.clock.now() ?? 0;
@@ -1499,6 +1826,11 @@ export class Game {
 
   private together(a: number, b: number, kind: number) {
     if (kind === FOLLOW) return this.followStarted(a, b);
+    if (kind === BOAT) {
+      this.avatars.get(a)?.flash("🚣");
+      this.avatars.get(b)?.flash("🚣");
+      return;
+    }
     const t = TOGETHER[kind];
     if (!t) return;
     const pa = this.avatars.get(a);
@@ -1753,7 +2085,7 @@ export class Game {
       await this.ui.rides.set(it?.id ?? 0);
       this.refreshLook();
       this.showRideButton();
-      if (it) this.hud.toast(`${it.name}: off you go! Faster anywhere outdoors; you'll hop off at doors.`, 3500);
+      if (it) this.hud.toast(`${it.name}: off you go! Zip anywhere outdoors; you'll hop off at doors.`, 3500);
     } catch (e) {
       this.hud.toast(e instanceof Error ? e.message : "That didn't work.", 3500);
     }
@@ -2063,8 +2395,11 @@ export class Game {
           this.hud.toast(`+${m.added} ${name}${m.first ? " · new in your album!" : ""}`, 3500);
         }
         break;
+      case "BoatState":
+        this.boatState(m.captain, m.until, m.seats);
+        break;
       case "Error":
-        if (m.code === ERR.NO_PATH) this.hud.toast("Can't get there from here.");
+        if (m.code === ERR.NO_PATH) this.hud.toast(this.boat ? "Can't row there: try nearer the water." : "Can't get there from here.");
         else if (TOAST_CODES.has(m.code)) this.hud.toast(m.message.charAt(0).toUpperCase() + m.message.slice(1) + ".");
         else if (m.code !== ERR.REPLACED && m.code !== ERR.UNAUTHORIZED && m.code !== ERR.VERSION_MISMATCH) {
           console.warn("server error", m.code, m.message);
@@ -2131,7 +2466,7 @@ export class Game {
         const name = this.avatars.get(m.id)?.info.name;
         this.stopFollowing(false);
         if (!name) break;
-        carried.leader = { name, until: performance.now() + CARRY_MS };
+        carried.leader = { name, until: performance.now() + CARRY_MS, left: this };
         this.hud.toast(`👣 After ${name}…`, 2500);
         this.goTo(m.zone, m.arrive || undefined);
         break;
@@ -2297,6 +2632,17 @@ export class Game {
   private moveTo(t: TileXY, marker: boolean) {
     const self = this.self;
     if (!this.socket || !self) return;
+    // In a rowboat: the captain rows; passengers go where the boat goes.
+    if (this.boat) {
+      if (this.boat.captain === this.selfId) return this.rowTo(t, marker);
+      const wall = performance.now();
+      if (wall - this.boatNagAt > 2500) {
+        this.boatNagAt = wall;
+        const who = this.avatars.get(this.boat.captain)?.info.name ?? "The captain";
+        this.hud.toast(`🚣 ${who}'s rowing. Tap "Hop off" when you're by the bank.`, 3000);
+      }
+      return;
+    }
     // Mid-game at a bowling lane (or mid-fight in the arena) you stay put until you leave it.
     if (this.paintball?.capturing || this.arena?.capturing) return;
     if (this.bowlingNow()) {
@@ -2355,6 +2701,70 @@ export class Game {
     this.sentMoves.push({ x: t.x, y: t.y, at: wall });
     this.socket.send({ t: "MoveTo", x: t.x, y: t.y, sprint: this.sprint });
     if (marker) this.scene.showTarget(t);
+  }
+
+  // ---- the Lake's rowboats ---------------------------------------------------------
+
+  /** The boat hire: a rowboat for a while, for a few coins. */
+  private boatMenu(at: TileXY) {
+    if (this.boat) return void this.hud.toast("🚣 You're out in a boat already.", 3000);
+    this.near(this.ui.menu, at, 6).showWith("🚣 Boat hire", "A rowboat for 15 minutes, 10 coins. Invite up to 3 friends aboard and row them round the lake.", [
+      ["Hire a rowboat (10 coins)", () => this.socket?.send({ t: "Boat", op: 1 })],
+    ]);
+  }
+
+  /** Rows (as captain) toward `t`, or the water nearest it; the server does the same. */
+  private rowTo(t: TileXY, marker: boolean) {
+    const self = this.self;
+    const water = this.waterMap;
+    if (!self || !this.socket || !water) return;
+    const goal = nearestWater(water, t, 4);
+    if (!goal) return void this.hud.toast("🚣 Row up to the bank, then tap \"Go ashore\".", 3000);
+    const now = this.socket.clock.now();
+    const cur = self.currentMotion;
+    const sp = cur ? splice(cur, now) : null;
+    let start: TileXY;
+    let t0 = now;
+    if (sp) {
+      start = sp.next;
+      t0 = sp.tPrev;
+    } else {
+      start = cur && now <= cur.t0 ? cur.path[0] : self.destination;
+    }
+    const full = route(water, start, goal);
+    if (!full) return void this.hud.toast("Can't row there.", 2500);
+    if (sp) full.unshift(sp.prev);
+    if (full.length >= 2) self.setMotion({ path: compress(full), t0, speedX10: BOAT_SPEED_X10, sprintIn: 0 }, now);
+    const wall = performance.now();
+    this.sentMoves = this.sentMoves.filter((s) => wall - s.at < 3000);
+    this.sentMoves.push({ x: goal.x, y: goal.y, at: wall });
+    this.socket.send({ t: "MoveTo", x: t.x, y: t.y, sprint: false });
+    if (marker) this.scene.showTarget(goal);
+  }
+
+  /** The server says which boat we're in (captain 0: none). */
+  private boatState(captain: number, until: number, seats: number[]) {
+    const was = this.boat;
+    this.boat = captain ? { captain, until, seats } : null;
+    if (this.boat && !was) {
+      if (this.following !== null) this.stopFollowing(false);
+      const who = this.avatars.get(captain)?.info.name ?? "their";
+      this.hud.toast(captain === this.selfId ? "🚣 Your rowboat! Tap the water to row, and tap a friend to ask them aboard." : `🚣 You're aboard ${who}'s boat. Enjoy the ride!`, 5000);
+    } else if (this.boat && was && captain === this.selfId && seats.length > was.seats.length) {
+      const name = this.avatars.get(seats[seats.length - 1])?.info.name;
+      if (name) this.hud.toast(`🚣 ${name} climbed aboard.`, 3000);
+    }
+    if (!this.boat && was) this.hud.toast("🚣 Back on dry land.", 3000);
+    this.showBoatChip();
+  }
+
+  private showBoatChip() {
+    const b = this.boat;
+    if (!b) return this.hud.setBoat(null);
+    const mins = Math.max(0, Math.ceil((b.until - (this.socket?.clock.now() ?? 0)) / 60_000));
+    const out = () => this.socket?.send({ t: "Boat", op: 2 });
+    if (b.captain === this.selfId) this.hud.setBoat(`🚣 Your rowboat · ${b.seats.length}/${BOAT_SEATS} aboard · ${mins} min left`, "Go ashore", out);
+    else this.hud.setBoat(`🚣 In ${this.avatars.get(b.captain)?.info.name ?? "a"}'s boat · ${mins} min left`, "Hop off", out);
   }
 
   private bindInput() {
@@ -2458,6 +2868,11 @@ export class Game {
         this.socket?.send({ t: "FishHit" });
         return;
       }
+      // Catching a fish (reeling in, or your catch flopping on the bank): a
+      // tap that misses doesn't walk you off, which would end the fishing.
+      if (this.flops.has(this.selfId) || this.ui.reel.active || this.ui.net.active) return;
+      // A bug or a mushroom: creep up on it.
+      if (this.tapNature(wx, wy)) return;
       const t = this.scene.screenToTile(e.global.x, e.global.y);
       if (this.tapBall(e.global.x, e.global.y)) return;
       if (this.tapPet(e.global.x, e.global.y)) return;
@@ -2466,6 +2881,8 @@ export class Game {
       if (this.tapClerk(e.global.x, e.global.y)) return;
       if (this.tapFrancy(e.global.x, e.global.y)) return;
       if (this.tapAvatar(e.global.x, e.global.y)) return;
+      // In a rowboat, a tap is where to row (rowTo finds the water by it).
+      if (this.boat) return this.moveTo(t, true);
       // Taking your own steps ends following someone.
       if (this.following !== null) this.stopFollowing(true);
       if (this.tapGift(t)) return;
@@ -2581,6 +2998,16 @@ export class Game {
       const them = a.info.id;
       // Reading something: see what, and open the same book.
       if (a.reading) actions.unshift(["📖 What are they reading?", () => this.ui.bookCard.showBook(a.reading, null)]);
+      // Our rowboat has a free seat: ask them aboard.
+      if (this.boat?.captain === this.selfId && this.boat.seats.length < BOAT_SEATS && (a.info.vehicle ?? 0) < BOAT_CAPTAIN) {
+        actions.unshift([
+          "🚣 Invite aboard",
+          () => {
+            this.socket?.send({ t: "Offer", to: them, kind: BOAT });
+            this.hud.toast(`🚣 You invited ${name} aboard…`, 3000);
+          },
+        ]);
+      }
       if (this.following === them) actions.unshift(["👣 Stop following", () => this.stopFollowing(true)]);
       else actions.unshift([friend ? "👣 Follow" : "👣 Ask to follow", () => this.askToFollow(them, name, !!friend)]);
       for (const [kind, t] of Object.entries(TOGETHER)) {
@@ -2666,7 +3093,18 @@ export class Game {
       return true;
     }
     const placed = this.props.objectAt(t.x, t.y);
-    if (placed && this.zoneId === "home") {
+    // A house's yard stand, when there's something on it (or it's yours).
+    const stand = map.objects.find((o) => o.kind === "yard_stand" && t.x >= o.x && t.x < o.x + o.w && t.y >= o.y - 1 && t.y <= o.y);
+    const yard = stand?.label ? this.yardStands?.yardAt(stand.label) : null;
+    if (stand?.label && yard && (yard.goods.length || yard.mine)) {
+      if (cheb(self.destination, { x: stand.x, y: stand.y }) > 2) {
+        const spot = nearestWalkable(map, stand.x, stand.y + 1, 2);
+        if (spot) this.moveTo(spot, true);
+      }
+      this.near(ui.yard, stand, 4).openFor(stand.label);
+      return true;
+    }
+    if (placed && (this.zoneId === "home" || this.zoneId === "clubroom")) {
       this.near(ui.menu, t).showWith(ui.eco.name(placed), "", [["Pick up", () => this.socket?.send({ t: "Pickup", x: t.x, y: t.y })]]);
       return true;
     }
@@ -2693,6 +3131,16 @@ export class Game {
       const at = { x: obj.x + Math.floor(obj.w / 2), y: obj.y + obj.h };
       if (obj.kind === "town_hall") void this.near(ui.townhall, at, 8).openAt({ kind: "list" });
       else this.near(ui.story, at).show();
+      return true;
+    }
+    // The boat hire on the Lake (and the boats tied up by the pier).
+    if (obj && (obj.kind === "boat_hire" || obj.kind === "boat_moored")) {
+      const front = obj.kind === "boat_hire" ? { x: obj.x + 1, y: obj.y + obj.h } : (spot(map, "boat_dock") ?? { x: obj.x, y: obj.y });
+      if (cheb(self.destination, front) > 3) {
+        const at = nearestWalkable(map, front.x, front.y, 2);
+        if (at) this.moveTo(at, true);
+      }
+      this.boatMenu(front);
       return true;
     }
     if (obj && (obj.kind === "lantern_stand" || obj.kind === "bottles" || obj.kind === "campfire")) {
@@ -3241,6 +3689,101 @@ export class Game {
     else if (!self.moving) this.socket.send({ t: "Sit", seat: SEAT_GROUND });
   }
 
+  // ---- bugs and mushrooms (ADR 0019) -------------------------------------------------------
+
+  /** Tapped a bug or a mushroom: walk up to it (a bug needs a net, and a quiet approach). */
+  private tapNature(wx: number, wy: number): boolean {
+    const o = this.natureFx?.at(wx, wy);
+    const self = this.self;
+    if (!o || !self) return false;
+    if (!o.shroom && this.ui.eco.qty(NET_ITEM) < 1) {
+      this.hud.toast(`🦋 ${this.known(o) ? `A ${this.ui.eco.name(o.item)}` : "A bug"}! You'll need a bug net to catch it: the Museum's curator sells them.`, 4500);
+      return true;
+    }
+    if (!o.shroom && this.ui.rides.riding) {
+      this.hud.toast("🦗 It would hear your wheels coming: hop off and creep up on foot.", 4000);
+      return true;
+    }
+    // Stop a tile short, on the side we're coming from (a mushroom: right by it).
+    const here = { x: Math.round(self.pos.x), y: Math.round(self.pos.y) };
+    let best: TileXY | null = null;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const t = { x: o.x + dx, y: o.y + dy };
+        if ((dx || dy) && walkable(this.scene.map, t.x, t.y) && (!best || cheb(t, here) < cheb(best, here))) best = t;
+      }
+    }
+    best ??= nearestWalkable(this.scene.map, o.x, o.y, 2);
+    if (!best) return true;
+    if (this.following !== null) this.stopFollowing(true);
+    this.stalking = { o, ran: false, since: performance.now() };
+    if (cheb(here, o) > 1) this.moveTo(best, true);
+    return true;
+  }
+
+  /** Whether you've found one of these before (so it has a name to you). */
+  private known(o: Out): boolean {
+    return this.ui.eco.album.has(o.item);
+  }
+
+  /** Creeping up: once beside it, catch or pick it. A bug hears you running and may be off. */
+  private checkStalk(wallNow: number) {
+    const st = this.stalking;
+    const self = this.self;
+    if (!st || !self) return;
+    if (self.moving && this.sprint) st.ran = true;
+    // Give the walk a moment to begin.
+    if (self.moving || wallNow - st.since < 150) return;
+    this.stalking = null;
+    const o = st.o;
+    const here = { x: Math.round(self.pos.x), y: Math.round(self.pos.y) };
+    if (cheb(here, o) > 1 || wallNow - st.since > 60_000) return;
+    if (!this.ui.forage.out.some((x) => x.spot === o.spot && x.slot === o.slot)) {
+      this.hud.toast("It's gone.", 2500);
+      return;
+    }
+    if (o.shroom) return void this.takeNature(o);
+    const name = this.known(o) ? this.ui.eco.name(o.item) : "bug";
+    // Bugs that can fly or hop don't wait for someone who comes running.
+    const skittish = !o.key.endsWith("_snail") && o.rarity >= 1;
+    if (st.ran && skittish && Math.random() < 0.6) {
+      this.ui.forage.scare(o);
+      this.hud.toast(`💨 The ${name} heard you running and was off! Walk up slowly next time.`, 4000);
+      return;
+    }
+    this.ui.net.play(o.key, this.known(o) ? this.ui.eco.name(o.item) : "A bug", o.rarity, (ok) => {
+      if (ok) return void this.takeNature(o);
+      this.ui.forage.scare(o);
+      this.hud.toast(`💨 Missed! The ${name} got away.`, 3000);
+    });
+  }
+
+  /** The catch, or the pick: into the bag (and the journal). */
+  private async takeNature(o: Out) {
+    try {
+      const r = await this.ui.forage.catch(o);
+      const a = /^[aeiou]/i.test(r.name) ? "an" : "a";
+      this.hud.toast(`${o.shroom ? "🍄 You picked" : "🦋 You caught"} ${a} ${r.name}!${r.first ? " New in your journal 📔" : ""}`, 4000);
+      if (r.first && r.rarity >= 3) this.emote(6);
+      if (r.woozy) this.wooze(r.key);
+    } catch (e) {
+      this.hud.toast(e instanceof Error ? e.message : "It got away.", 3500);
+      this.ui.forage.scare(o);
+    }
+  }
+
+  /** A whiff of spores from a funny mushroom: giggles (or a wobbly dance), and the world sways a while. */
+  private wooze(key: string) {
+    const giggle = key === "giggle_cap";
+    this.hud.toast(giggle ? "🤭 Its spores tickle your nose… you can't stop giggling!" : "🌀 Whoa… a puff of spores, and the world's all wobbly!", 4500);
+    this.emote(giggle ? 2 : 4);
+    const c = this.app.canvas;
+    c.classList.remove("woozy");
+    void c.offsetWidth;
+    c.classList.add("woozy");
+    window.setTimeout(() => c.classList.remove("woozy"), 20_000);
+  }
+
   emote(id: number) {
     this.socket?.send({ t: "Emote", emote: id });
   }
@@ -3319,9 +3862,11 @@ export class Game {
     const cur = self.currentMotion;
     const sp = cur ? splice(cur, now) : null;
     const from = sp ? sp.next : cur && now <= cur.t0 ? cur.path[0] : self.destination;
+    // Rowing, the keys steer over the water.
+    const ground = this.boat?.captain === this.selfId && this.waterMap ? this.waterMap : this.scene.map;
     const target =
-      stepTarget(this.scene.map, from, dx, dy, steps) ??
-      (dx && dy ? stepTarget(this.scene.map, from, dx, 0, steps) ?? stepTarget(this.scene.map, from, 0, dy, steps) : null);
+      stepTarget(ground, from, dx, dy, steps) ??
+      (dx && dy ? stepTarget(ground, from, dx, 0, steps) ?? stepTarget(ground, from, 0, dy, steps) : null);
     if (!target) return;
     // Already headed there (up against something, the stretch can't reach
     // further): asking again would only re-plan the same walk and nudge it.
@@ -3346,6 +3891,7 @@ export class Game {
     if (self) {
       self.update(serverNow, wallNow);
       this.scene.follow(this.paintball ? this.paintball.camera(self.pos) : this.arena ? this.arena.camera(self.pos) : self.pos);
+      this.scene.world.visible = true;
       this.ui.minimap.update(self.pos, self.moving ? this.route : null, wallNow, this.heading, this.others);
     }
     for (const a of this.avatars.values()) a.update(serverNow, wallNow);
@@ -3371,6 +3917,15 @@ export class Game {
     const hour = this.daynight.hour();
     this.weather.update(wallNow, hour);
     this.critters.update(wallNow, this.daynight.dark);
+    if (this.natureFx) {
+      this.natureFx.update(wallNow, this.daynight.dark);
+      if (wallNow > this.natureLoadAt) {
+        // What's out changes every ten minutes (bugs) or two hours (mushrooms): look now and then.
+        this.natureLoadAt = wallNow + 45_000;
+        void this.ui.forage.load().catch(() => {});
+      }
+      this.checkStalk(wallNow);
+    }
     this.cat?.update(Date.now());
     this.petLife.update(wallNow);
     if (this.caretaker) {
@@ -3378,6 +3933,7 @@ export class Game {
       this.caretakerChat(wallNow);
     }
     this.clerk?.update(Date.now(), wallNow);
+    this.rouletteFx?.update();
     this.francy?.update(Date.now(), wallNow);
     if (this.libraryRoom) {
       this.libraryRoom.update(performance.now());
@@ -3387,10 +3943,14 @@ export class Game {
     this.checkEntering();
     this.checkLeaving();
     this.sky.update(wallNow, this.daynight.dark > 0.5);
+    if (this.boat && wallNow > this.boatChipAt) {
+      this.boatChipAt = wallNow + 5000;
+      this.showBoatChip();
+    }
     if (this.following !== null && wallNow > this.followCheckAt) {
       this.followCheckAt = wallNow + 350;
       this.followStep();
-    } else if (carried.leader && wallNow > this.followCheckAt) {
+    } else if (carried.leader && carried.leader.left !== this && wallNow > this.followCheckAt) {
       this.followCheckAt = wallNow + 350;
       this.findLeader();
     }
@@ -3456,6 +4016,7 @@ export class Game {
     this.caretaker?.destroy();
     this.petLife.destroy();
     this.houseFronts?.destroy();
+    this.yardStands?.destroy();
     this.ui.decorate.hide();
     this.clerk?.destroy();
     this.libraryRoom?.destroy();
@@ -3485,6 +4046,7 @@ export class Game {
     this.campfire?.destroy();
     this.sky.destroy();
     this.ui.offer.hide();
+    this.hud.setBoat(null);
     this.hud.setFollow(null);
     document.body.classList.remove("in-nook");
     this.hud.setChatHint(null);

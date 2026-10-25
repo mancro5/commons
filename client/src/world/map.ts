@@ -16,6 +16,8 @@ export interface MapObject {
   isNew?: boolean;
   /** Houses and postboxes: how they've been done up (0: as built). */
   style?: number;
+  /** Houses: the rest of how they're done up (door, flowers, lights: item codes). */
+  looks?: Record<string, number>;
   /** Library bookcases: which wing, and how many books stand in it. */
   wing?: string;
   books?: number;
@@ -25,6 +27,9 @@ export interface MapObject {
   sign?: string;
   /** Club banners: the club's colour (its crest is `sign`). */
   color?: string;
+  /** Clubhouses on club lots: the club whose house it is, and its name (C3). */
+  club?: string;
+  title?: string;
 }
 
 /** The street grid of a city map (mirror of sim::map::StreetGrid). */

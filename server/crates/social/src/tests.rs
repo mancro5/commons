@@ -1257,3 +1257,1407 @@ async fn a_club_is_rented_shared_paid_for_together_and_handed_on() {
     let (st, _) = get(&b, format!("/api/social/clubs/{id}")).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 }
+
+// ---- club life (C2) -------------------------------------------------------------
+
+/// `p` is in club `club`'s room, as a zone would report it.
+fn in_room(s: &State, p: &P, club: &str) {
+    s.hub.set_location(
+        p.id,
+        crate::hub::Location {
+            zone: "clubroom".into(),
+            instance: 1,
+            owner: Some(club.to_string()),
+            label: "Club room".into(),
+        },
+        true,
+        chrono::Utc::now().timestamp_millis(),
+    );
+}
+
+async fn kinds(s: &Arc<State>, p: &P) -> Vec<String> {
+    let (_, n) = call(s, "GET", "/api/social/notifications", &p.token, None).await;
+    n.as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["kind"].as_str().unwrap().to_string())
+        .collect()
+}
+
+async fn grant(s: &State, p: &P, item: i32, n: i32, reason: &str, key: &str) {
+    let mut tx = s.db.begin().await.unwrap();
+    commons_api::economy::apply(
+        &mut tx,
+        &s.catalog,
+        p.id,
+        &[commons_api::economy::Op { item, delta: n }],
+        reason,
+        key,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_club_meets_up_reaches_its_goals_calls_together_and_keeps_its_furniture_straight() {
+    let Some(s) = state().await else { return };
+    let (a, b) = (player(&s).await, player(&s).await);
+    let tag = &a.name[1..7];
+    let post = |p: &P, path: String, body: Value| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        async move { call(&s, "POST", &path, &tok, Some(body)).await }
+    };
+    let (_, r) = post(
+        &a,
+        "/api/social/clubs/found".into(),
+        json!({ "name": format!("Larks {tag}"), "crest": "🌻", "color": "#e9b949" }),
+    )
+    .await;
+    let id = r["id"].as_str().unwrap().to_string();
+    let club = Uuid::parse_str(&id).unwrap();
+    befriend(&s, &a, &b).await;
+    post(
+        &a,
+        format!("/api/social/clubs/{id}/invite"),
+        json!({ "id": b.id.to_string() }),
+    )
+    .await;
+    post(
+        &b,
+        format!("/api/social/clubs/{id}/answer"),
+        json!({ "accept": true }),
+    )
+    .await;
+
+    // The meetup: staff set it. Started five minutes ago (UTC).
+    let now = chrono::Utc::now();
+    let start = now - chrono::Duration::minutes(5);
+    let dow = chrono::Datelike::weekday(&start).num_days_from_monday() as i16;
+    let minute = (chrono::Timelike::hour(&start) * 60 + chrono::Timelike::minute(&start)) as i16;
+    let (st, _) = post(
+        &b,
+        format!("/api/social/clubs/{id}/meetup"),
+        json!({ "dow": dow, "minute": minute }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "members don't set it");
+    let (st, r) = post(
+        &a,
+        format!("/api/social/clubs/{id}/meetup"),
+        json!({ "dow": dow, "minute": minute }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert!(r["meetup"]["live_until"].is_i64(), "it's on now: {r}");
+
+    // Both in the room for ten minutes: the start notice and the reward, once.
+    in_room(&s, &a, &id);
+    in_room(&s, &b, &id);
+    let (ca, cb) = (coins(&s, &a).await, coins(&s, &b).await);
+    crate::clublife::sweep_clubs(&s, now, 4, Some(club))
+        .await
+        .unwrap();
+    assert_eq!(coins(&s, &a).await, ca, "not yet: four minutes");
+    crate::clublife::sweep_clubs(&s, now, 6, Some(club))
+        .await
+        .unwrap();
+    crate::clublife::sweep_clubs(&s, now, 6, Some(club))
+        .await
+        .unwrap();
+    assert_eq!(coins(&s, &a).await, ca + 20);
+    assert_eq!(coins(&s, &b).await, cb + 20, "once each");
+    let k = kinds(&s, &b).await;
+    assert_eq!(k.iter().filter(|k| *k == "club_meetup_now").count(), 1);
+    assert!(k.contains(&"club_meetup_reward".to_string()));
+
+    // Goals: the meetup one is reached (two came); 32 member-minutes so far.
+    let treasury = |s: Arc<State>| async move {
+        sqlx::query_scalar::<_, i32>("SELECT treasury FROM clubs WHERE id = $1")
+            .bind(club)
+            .fetch_one(&s.db)
+            .await
+            .unwrap()
+    };
+    assert_eq!(treasury(s.clone()).await, 15);
+    // Time together (120 minutes), fish (15) and a week's rent in gifts.
+    crate::clublife::sweep_clubs(&s, now, 44, Some(club))
+        .await
+        .unwrap();
+    for i in 0..15 {
+        grant(&s, &a, 100, 1, "fishing", &format!("fish:{tag}:{i}")).await;
+    }
+    post(
+        &b,
+        format!("/api/social/clubs/{id}/donate"),
+        json!({ "coins": 25, "key": "g" }),
+    )
+    .await;
+    crate::clublife::sweep_clubs(&s, now, 1, Some(club))
+        .await
+        .unwrap();
+    crate::clublife::sweep_clubs(&s, now, 1, Some(club))
+        .await
+        .unwrap();
+    assert_eq!(
+        treasury(s.clone()).await,
+        15 + 15 + 10 + 25 + 10,
+        "each goal paid once"
+    );
+    let (_, d) = call(
+        &s,
+        "GET",
+        &format!("/api/social/clubs/{id}"),
+        &a.token,
+        None,
+    )
+    .await;
+    let goals = d["life"]["goals"].as_array().unwrap();
+    assert!(goals.iter().all(|g| g["done"] == true), "{goals:?}");
+    assert_eq!(d["life"]["meetup"]["came"].as_array().unwrap().len(), 2);
+
+    // The club call: everyone online with a phone is rung.
+    give_phone(&s, &a).await;
+    let (st, _) = post(&a, format!("/api/social/clubs/{id}/call"), json!({})).await;
+    assert_eq!(st, StatusCode::CONFLICT, "nobody who can pick up");
+    give_phone(&s, &b).await;
+    let mut rx = online(&s, &b);
+    let (st, r) = post(&a, format!("/api/social/clubs/{id}/call"), json!({})).await;
+    assert_eq!((st, r["rung"].as_i64()), (StatusCode::OK, Some(1)), "{r}");
+    assert!(pushed(&mut rx, "call_ring").is_some());
+    call(
+        &s,
+        "POST",
+        "/api/social/call/leave",
+        &a.token,
+        Some(json!({})),
+    )
+    .await;
+
+    // Furniture B lent the room goes back to B when B leaves.
+    sqlx::query(
+        "INSERT INTO club_objects (club_id, x, y, item_id, placed_by) VALUES ($1, 5, 5, 400, $2)",
+    )
+    .bind(club)
+    .bind(b.id)
+    .execute(&s.db)
+    .await
+    .unwrap();
+    let have = |s: Arc<State>, p: Uuid| async move {
+        sqlx::query_scalar::<_, i32>("SELECT coalesce(sum(qty), 0)::int FROM inventory WHERE player_id = $1 AND item_id = 400")
+            .bind(p)
+            .fetch_one(&s.db)
+            .await
+            .unwrap()
+    };
+    let before = have(s.clone(), b.id).await;
+    post(&b, format!("/api/social/clubs/{id}/leave"), json!({})).await;
+    assert_eq!(have(s.clone(), b.id).await, before + 1);
+    // And A's, when the club closes and the room is given up.
+    sqlx::query(
+        "INSERT INTO club_objects (club_id, x, y, item_id, placed_by) VALUES ($1, 6, 5, 400, $2)",
+    )
+    .bind(club)
+    .bind(a.id)
+    .execute(&s.db)
+    .await
+    .unwrap();
+    let before = have(s.clone(), a.id).await;
+    post(&a, format!("/api/social/clubs/{id}/leave"), json!({})).await;
+    assert_eq!(have(s.clone(), a.id).await, before + 1);
+}
+
+// ---- clubs in the town (C3) --------------------------------------------------------
+
+#[tokio::test]
+async fn clubhouses_events_for_everyone_and_the_clubs_of_the_week() {
+    let Some(s) = state().await else { return };
+    let (a, b, c, d) = (
+        player(&s).await,
+        player(&s).await,
+        player(&s).await,
+        player(&s).await,
+    );
+    let tag = &a.name[1..7];
+    let post = |p: &P, path: String, body: Value| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        async move { call(&s, "POST", &path, &tok, Some(body)).await }
+    };
+    let (_, r) = post(
+        &a,
+        "/api/social/clubs/found".into(),
+        json!({ "name": format!("Owls {tag}"), "crest": "🦉", "color": "#3f7a8a" }),
+    )
+    .await;
+    let id = r["id"].as_str().unwrap().to_string();
+    let club = Uuid::parse_str(&id).unwrap();
+    befriend(&s, &a, &b).await;
+    post(
+        &a,
+        format!("/api/social/clubs/{id}/invite"),
+        json!({ "id": b.id.to_string() }),
+    )
+    .await;
+    post(
+        &b,
+        format!("/api/social/clubs/{id}/answer"),
+        json!({ "accept": true }),
+    )
+    .await;
+
+    // A clubhouse on a free lot: 120 a week, the difference this week (95).
+    let (_, lots) = call(&s, "GET", "/api/social/clubs/lots", &a.token, None).await;
+    let lot = lots["lots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["club"].is_null())
+        .expect("a free lot")["lot"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (st, r) = post(
+        &a,
+        format!("/api/social/clubs/{id}/room"),
+        json!({ "tier": 3 }),
+    )
+    .await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("pick_lot"))
+    );
+    let (st, _) = post(
+        &a,
+        format!("/api/social/clubs/{id}/room"),
+        json!({ "tier": 3, "lot": "lot:99_99" }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    post(
+        &b,
+        format!("/api/social/clubs/{id}/donate"),
+        json!({ "coins": 95, "key": "h" }),
+    )
+    .await;
+    let (st, r) = post(
+        &a,
+        format!("/api/social/clubs/{id}/room"),
+        json!({ "tier": 3, "lot": lot }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["room"]["plot"], lot.as_str());
+    let (_, lots) = call(&s, "GET", "/api/social/clubs/lots", &d.token, None).await;
+    let here = lots["lots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["lot"] == lot.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(
+        here["club"]["name"],
+        format!("Owls {tag}"),
+        "everyone sees whose clubhouse it is"
+    );
+    // Nobody else can have it.
+    let (_, r) = post(
+        &c,
+        "/api/social/clubs/found".into(),
+        json!({ "name": format!("Foxes {tag}"), "crest": "🦊", "color": "#c8553d" }),
+    )
+    .await;
+    let other = r["id"].as_str().unwrap().to_string();
+    sqlx::query("UPDATE clubs SET treasury = 500 WHERE id = $1::uuid")
+        .bind(&other)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let (st, r) = post(
+        &c,
+        format!("/api/social/clubs/{other}/room"),
+        json!({ "tier": 3, "lot": lot }),
+    )
+    .await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("lot_taken"))
+    );
+
+    // Events: staff plan them, at public places or the club's own lot.
+    let soon = chrono::Utc::now() + chrono::Duration::minutes(10);
+    let plan = |p: &P, place: &str, title: &str| {
+        post(
+            p,
+            format!("/api/social/clubs/{id}/events"),
+            json!({ "title": title, "place": place, "starts_at": soon.timestamp(), "hours": 1 }),
+        )
+    };
+    let (st, _) = plan(&b, "stage", "Owl night").await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "members don't plan events");
+    let (st, r) = plan(&a, "the moon", "Owl night").await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("bad_place"))
+    );
+    let (st, r) = plan(&a, "stage", "Owl night").await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let event = r["id"].as_i64().unwrap();
+    let (st, _) = plan(&a, &lot, "Open house").await;
+    assert_eq!(st, StatusCode::OK, "at the club's own lot");
+    // Anyone can go: D isn't in the club, nor anyone's friend.
+    let (st, r) = post(
+        &d,
+        format!("/api/social/events/{event}/rsvp"),
+        json!({ "going": true }),
+    )
+    .await;
+    assert_eq!(
+        (st, r["going"].as_i64()),
+        (StatusCode::OK, Some(2)),
+        "the planner and D"
+    );
+    let (_, ev) = call(&s, "GET", "/api/social/events", &d.token, None).await;
+    let mine = ev["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == event)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (mine["me"].as_bool(), mine["place_name"].as_str()),
+        (Some(true), Some("the Fairground bandstand"))
+    );
+    assert_eq!(
+        mine["friends"].as_array().unwrap().len(),
+        0,
+        "only friends' names"
+    );
+
+    // Reminded 15 minutes before; at the start, those going and the members.
+    let now = chrono::Utc::now();
+    crate::clubtown::event_tick(&s, now).await.unwrap();
+    crate::clubtown::event_tick(&s, now).await.unwrap();
+    let k = kinds(&s, &d).await;
+    assert_eq!(k.iter().filter(|k| *k == "club_event_soon").count(), 1);
+    crate::clubtown::event_tick(&s, now + chrono::Duration::minutes(11))
+        .await
+        .unwrap();
+    crate::clubtown::event_tick(&s, now + chrono::Duration::minutes(12))
+        .await
+        .unwrap();
+    assert_eq!(
+        kinds(&s, &d)
+            .await
+            .iter()
+            .filter(|k| *k == "club_event_now")
+            .count(),
+        1
+    );
+    assert!(
+        kinds(&s, &b).await.contains(&"club_event_now".to_string()),
+        "members hear too"
+    );
+    // Calling one off tells those going.
+    let (_, ev) = call(&s, "GET", "/api/social/events", &d.token, None).await;
+    let house = ev["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["title"] == "Open house")
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    post(
+        &d,
+        format!("/api/social/events/{house}/rsvp"),
+        json!({ "going": true }),
+    )
+    .await;
+    let (st, _) = post(
+        &a,
+        format!("/api/social/clubs/{id}/events/{house}/cancel"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(
+        kinds(&s, &d)
+            .await
+            .contains(&"club_event_cancelled".to_string())
+    );
+
+    // The clubs of the week: a week of its own (far off), where only this
+    // club has points; paid once.
+    let fake_now =
+        chrono::Utc::now() + chrono::Duration::days(7 * (500 + (a.id.as_u128() % 5000) as i64));
+    let last_week = crate::clublife::week_of(fake_now) - chrono::Duration::days(7);
+    sqlx::query("INSERT INTO club_goals_done (club_id, week, goal) VALUES ($1, $2, 'fish')")
+        .bind(club)
+        .bind(last_week)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let before: i32 = sqlx::query_scalar("SELECT treasury FROM clubs WHERE id = $1")
+        .bind(club)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::clubtown::award_last_week(&s, fake_now)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        crate::clubtown::award_last_week(&s, fake_now)
+            .await
+            .unwrap(),
+        0,
+        "once"
+    );
+    let after: i32 = sqlx::query_scalar("SELECT treasury FROM clubs WHERE id = $1")
+        .bind(club)
+        .fetch_one(&s.db)
+        .await
+        .unwrap();
+    assert_eq!(after, before + 30, "first place");
+    assert!(kinds(&s, &a).await.contains(&"club_award".to_string()));
+    let (st, lb) = call(&s, "GET", "/api/social/clubs/leaderboard", &a.token, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(
+        lb["standings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["mine"] == true),
+        "{lb}"
+    );
+
+    // Back down to a room upstairs: the lot is free again.
+    let (st, r) = post(
+        &a,
+        format!("/api/social/clubs/{id}/room"),
+        json!({ "tier": 1 }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (_, lots) = call(&s, "GET", "/api/social/clubs/lots", &d.token, None).await;
+    assert!(
+        lots["lots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|l| l["lot"] == lot.as_str())
+            .unwrap()["club"]
+            .is_null()
+    );
+    for (p, club) in [(&b, &id), (&a, &id), (&c, &other)] {
+        post(p, format!("/api/social/clubs/{club}/leave"), json!({})).await;
+    }
+}
+
+// ---- the Concert Hall (ADR 0015) ------------------------------------------------------
+
+/// `p` is in the Concert Hall's instance `instance` (or out in the city).
+fn at_hall(s: &State, p: &P, instance: Option<u16>) {
+    s.hub.set_location(
+        p.id,
+        crate::hub::Location {
+            zone: if instance.is_some() {
+                "concert_hall"
+            } else {
+                "city"
+            }
+            .into(),
+            instance: instance.unwrap_or(1),
+            owner: None,
+            label: "Concert Hall".into(),
+        },
+        true,
+        chrono::Utc::now().timestamp_millis(),
+    );
+}
+
+#[tokio::test]
+async fn one_performer_on_stage_everyone_in_the_hall_listens() {
+    let Some(s) = state().await else { return };
+    let (a, b, outside) = (player(&s).await, player(&s).await, player(&s).await);
+    let kid = player_born(&s, chrono::Datelike::year(&chrono::Utc::now()) - 12).await;
+    for p in [&a, &b, &kid] {
+        at_hall(&s, p, Some(1));
+    }
+    at_hall(&s, &outside, None);
+    let mut rx = online(&s, &b);
+    let post = |p: &P, path: &str| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        let path = path.to_string();
+        async move { call(&s, "POST", &path, &tok, Some(json!({}))).await }
+    };
+
+    let (st, r) = post(&outside, "/api/social/concert/stage").await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::FORBIDDEN, Some("not_in_hall"))
+    );
+    let (st, r) = post(&kid, "/api/social/concert/stage").await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::FORBIDDEN, Some("age")),
+        "16 and over"
+    );
+    let (st, r) = post(&b, "/api/social/concert/listen").await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("nobody"))
+    );
+
+    // A takes the stage; the hall hears about it.
+    let (st, r) = post(&a, "/api/social/concert/stage").await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert!(r["token"].is_string());
+    assert_eq!(
+        pushed(&mut rx, "concert").unwrap()["stage"]["name"],
+        a.name.as_str()
+    );
+    let (st, r) = post(&b, "/api/social/concert/stage").await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("taken")),
+        "one at a time"
+    );
+    // B listens (a listen-only pass); the kid can't hear live voice yet.
+    let (st, r) = post(&b, "/api/social/concert/listen").await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (st, _) = post(&kid, "/api/social/concert/listen").await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let (_, k) = call(&s, "GET", "/api/social/concert", &kid.token, None).await;
+    assert!(
+        k["why_not_hear"].is_string() && k["why_not_perform"].is_string(),
+        "{k}"
+    );
+    let (st, _) = post(&outside, "/api/social/concert/listen").await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "only those in the hall");
+
+    // A walks out: the set ends, the hall is told, the stage is free.
+    at_hall(&s, &a, None);
+    crate::concert::tick(&s, commons_common::now_unix()).await;
+    assert!(pushed(&mut rx, "concert").unwrap()["stage"].is_null());
+    assert!(s.concert.get(1).is_none());
+    // B's set: an hour at most; stepping down ends it too.
+    let (st, _) = post(&b, "/api/social/concert/stage").await;
+    assert_eq!(st, StatusCode::OK);
+    crate::concert::tick(&s, commons_common::now_unix() + crate::concert::SET_SECS).await;
+    assert!(s.concert.get(1).is_none(), "the hour is up");
+    post(&b, "/api/social/concert/stage").await;
+    let (_, r) = post(&b, "/api/social/concert/leave").await;
+    assert_eq!(r["left"], true);
+    assert!(s.concert.get(1).is_none());
+}
+
+// ---- yard stands -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_yard_stand_sells_from_the_front_of_a_house_and_gives_back_on_moving_out() {
+    let Some(s) = state().await else { return };
+    let (a, b) = (player(&s).await, player(&s).await);
+    let tag = &a.name[1..7];
+    let lot = give_home(&s, &a).await;
+    grant(&s, &a, 100, 3, "fishing", &format!("yard:{tag}")).await;
+    let put = |p: &P, qty: i32, key: &str| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        let key = format!("{key}:{tag}");
+        async move {
+            call(
+                &s,
+                "POST",
+                "/api/social/stalls/put",
+                &tok,
+                Some(json!({ "item": 100, "qty": qty, "price": 7, "key": key, "at": "yard" })),
+            )
+            .await
+        }
+    };
+    // No house, no yard.
+    let (st, r) = put(&b, 1, "b").await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("no_yard"))
+    );
+    let (st, r) = put(&a, 2, "a1").await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    put(&a, 1, "a2").await;
+    // A Cottage's stand holds two things.
+    grant(&s, &a, 101, 1, "fishing", &format!("yard2:{tag}")).await;
+    let (st, r) = call(
+        &s,
+        "POST",
+        "/api/social/stalls/put",
+        &a.token,
+        Some(
+            json!({ "item": 101, "qty": 1, "price": 3, "key": format!("a3:{tag}"), "at": "yard" }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("stall_full"))
+    );
+    // Everyone sees what's on it, by the house.
+    let (_, y) = call(&s, "GET", "/api/social/yards", &b.token, None).await;
+    let mine = y["yards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["lot"] == lot.as_str())
+        .expect("the yard")
+        .clone();
+    assert_eq!(mine["goods"].as_array().unwrap().len(), 2);
+    assert_eq!(mine["name"], a.name.as_str());
+    // B buys one: coins to A, the fish to B.
+    let id = mine["goods"][0]["id"].as_i64().unwrap();
+    let (ca, cb) = (coins(&s, &a).await, coins(&s, &b).await);
+    let (st, r) = call(
+        &s,
+        "POST",
+        "/api/social/stalls/buy",
+        &b.token,
+        Some(json!({ "id": id, "qty": 1, "key": format!("buy:{tag}") })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!((coins(&s, &a).await, coins(&s, &b).await), (ca + 7, cb - 7));
+    assert!(kinds(&s, &a).await.contains(&"stall_sale".to_string()));
+    // The last one of something: the listing goes from the stand.
+    let last = mine["goods"][1]["id"].as_i64().unwrap();
+    let (st, r) = call(
+        &s,
+        "POST",
+        "/api/social/stalls/buy",
+        &b.token,
+        Some(json!({ "id": last, "qty": 1, "key": format!("buy2:{tag}") })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "buying the last one: {r}");
+    let (_, y) = call(&s, "GET", "/api/social/yards", &b.token, None).await;
+    let left = y["yards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["lot"] == lot.as_str())
+        .unwrap()["goods"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(left, 1);
+    // Moving out: what's left on the stand comes back to the bag.
+    let fish = |p: Uuid| {
+        let db = s.db.clone();
+        async move {
+            sqlx::query_scalar::<_, i32>("SELECT coalesce(sum(qty), 0)::int FROM inventory WHERE player_id = $1 AND item_id = 100")
+                .bind(p)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(fish(a.id).await, 0, "all three on the stand");
+    let (st, r) = call(
+        &s,
+        "POST",
+        "/api/social/rent/end",
+        &a.token,
+        Some(json!({ "slot": "home" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(fish(a.id).await, 1, "the one not sold");
+}
+
+// ---- the Casino (ADR 0017) -------------------------------------------------------------
+
+fn in_zone(s: &State, p: &P, zone: &str) {
+    s.hub.set_location(
+        p.id,
+        crate::hub::Location {
+            zone: zone.into(),
+            instance: 1,
+            owner: None,
+            label: zone.into(),
+        },
+        true,
+        chrono::Utc::now().timestamp_millis(),
+    );
+}
+
+#[tokio::test]
+async fn the_casino_is_for_grown_ups_inside_it_within_limits_and_lets_you_take_a_break() {
+    let Some(s) = state().await else { return };
+    let a = player(&s).await;
+    let kid = player_born(&s, chrono::Datelike::year(&chrono::Utc::now()) - 12).await;
+    let tag = &a.name[1..7];
+    grant(&s, &a, 1, 1000, "test", &format!("casino:{tag}")).await;
+    let post = |p: &P, path: &str, body: Value| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        let path = path.to_string();
+        async move { call(&s, "POST", &path, &tok, Some(body)).await }
+    };
+    let spin = |p: &P, bet: i32, key: &str| {
+        post(
+            p,
+            "/api/social/casino/slots",
+            json!({ "bet": bet, "key": format!("{key}:{tag}") }),
+        )
+    };
+
+    // Under 16: turned away (even inside).
+    in_zone(&s, &kid, "casino");
+    let (st, r) = spin(&kid, 5, "k").await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::FORBIDDEN, Some("age"))
+    );
+    // Only inside the casino.
+    in_zone(&s, &a, "city");
+    let (st, r) = spin(&a, 5, "out").await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::FORBIDDEN, Some("not_here"))
+    );
+    in_zone(&s, &a, "casino");
+    for bad in [0, 21] {
+        let (st, _) = spin(&a, bad, &format!("bad{bad}")).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "bet {bad}");
+    }
+    // A spin: the coins move by what it paid, and pressing twice plays once.
+    let before = coins(&s, &a).await;
+    let (st, r) = spin(&a, 5, "s1").await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let payout = r["payout"].as_i64().unwrap() as i32;
+    assert_eq!(r["outcome"]["reels"].as_array().unwrap().len(), 3);
+    assert_eq!(coins(&s, &a).await, before - 5 + payout);
+    let (_, again) = spin(&a, 5, "s1").await;
+    assert_eq!(again["duplicate"], true);
+    assert_eq!(coins(&s, &a).await, before - 5 + payout, "once");
+    // The daily loss limit: today's loss so far plus the bet can't pass 300.
+    let (_, st0) = call(&s, "GET", "/api/social/casino", &a.token, None).await;
+    let lost = -st0["today"]["net"].as_i64().unwrap();
+    sqlx::query("INSERT INTO casino_rounds (player_id, game, bet, payout, outcome, key) VALUES ($1, 'slots', $2, 0, '{}', $3)")
+        .bind(a.id)
+        .bind((295 - lost) as i32)
+        .bind(format!("seed:{tag}"))
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let (st, r) = spin(&a, 10, "over").await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("daily_limit"))
+    );
+    let (st, _) = spin(&a, 5, "upto").await;
+    assert_eq!(st, StatusCode::OK, "up to the limit is fine");
+    // A break: closed to you for the day.
+    let (st, r) = post(&a, "/api/social/casino/break", json!({ "days": 1 })).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (st, r) = spin(&a, 1, "brk").await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::FORBIDDEN, Some("on_a_break"))
+    );
+    let (_, st1) = call(&s, "GET", "/api/social/casino", &a.token, None).await;
+    assert!(
+        st1["break_until"].is_i64() && st1["can_play"] == false,
+        "{st1}"
+    );
+}
+
+#[tokio::test]
+async fn casino_tables_are_played_together_roulette_and_blackjack() {
+    use crate::tables::{BETTING_MS, DEAL_MS, DONE_MS, SPIN_MS, now_ms, tick};
+    let Some(s) = state().await else { return };
+    let (a, b) = (player(&s).await, player(&s).await);
+    let tag = &a.name[1..7];
+    for p in [&a, &b] {
+        grant(&s, p, 1, 1000, "test", &format!("tables:{}", &p.name[1..7])).await;
+        in_zone(&s, p, "casino");
+    }
+    let post = |p: &P, path: &str, body: Value| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        let path = format!("/api/social/casino/{path}");
+        async move { call(&s, "POST", &path, &tok, Some(body)).await }
+    };
+    let view = |p: &P| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        async move {
+            call(&s, "GET", "/api/social/casino/tables", &tok, None)
+                .await
+                .1
+        }
+    };
+
+    // Roulette: both put chips down on the same round.
+    let (ca, cb) = (coins(&s, &a).await, coins(&s, &b).await);
+    let (st, r) = post(
+        &a,
+        "roulette/bet",
+        json!({ "bet": { "on": "red" }, "amount": 10, "key": format!("ra:{tag}") }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["roulette"]["phase"], "betting");
+    let (st, _) = post(
+        &a,
+        "roulette/bet",
+        json!({ "bet": { "on": "red" }, "amount": 10, "key": format!("ra:{tag}") }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "pressed twice");
+    let (st, r) = post(
+        &b,
+        "roulette/bet",
+        json!({ "bet": { "on": "number", "n": 17 }, "amount": 5, "key": format!("rb:{tag}") }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(
+        r["roulette"]["chips"].as_array().unwrap().len(),
+        2,
+        "once each: {r}"
+    );
+    assert_eq!(coins(&s, &a).await, ca - 10, "the chip's on the table");
+    let (st, _) = post(
+        &b,
+        "roulette/bet",
+        json!({ "bet": { "on": "red" }, "amount": 50, "key": format!("rb2:{tag}") }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, r) = post(
+        &b,
+        "roulette/bet",
+        json!({ "bet": { "on": "red" }, "amount": 50, "key": format!("rb3:{tag}") }),
+    )
+    .await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("round_max"))
+    );
+    // One says spin: it waits for the other; both have: it spins.
+    let (_, r) = post(&a, "roulette/spin", json!({})).await;
+    assert_eq!(r["roulette"]["phase"], "betting");
+    let (_, r) = post(&b, "roulette/spin", json!({})).await;
+    assert_eq!(r["roulette"]["phase"], "spinning");
+    let (st, r) = post(
+        &a,
+        "roulette/bet",
+        json!({ "bet": { "on": "odd" }, "amount": 5, "key": format!("late:{tag}") }),
+    )
+    .await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("no_more_bets"))
+    );
+    tick(&s, now_ms() + SPIN_MS + 1).await;
+    let r = view(&a).await;
+    assert_eq!(r["roulette"]["phase"], "open");
+    let n = r["roulette"]["last"]["number"].as_u64().unwrap() as u8;
+    assert_eq!(r["roulette"]["history"], json!([n]), "on the board");
+    let red = commons_sim::casino::is_red(n);
+    assert_eq!(coins(&s, &a).await, ca - 10 + if red { 20 } else { 0 });
+    let b_won = if n == 17 { 180 } else { 0 } + if red { 100 } else { 0 };
+    assert_eq!(coins(&s, &b).await, cb - 55 + b_won);
+    // Alone, betting closes when time's up.
+    post(
+        &a,
+        "roulette/bet",
+        json!({ "bet": { "on": "even" }, "amount": 1, "key": format!("solo:{tag}") }),
+    )
+    .await;
+    tick(&s, now_ms() + BETTING_MS + 1).await;
+    assert_eq!(view(&a).await["roulette"]["phase"], "spinning");
+    tick(&s, now_ms() + BETTING_MS + SPIN_MS + 2).await;
+
+    // Blackjack: two seats, two bets, the hand's dealt; turns in seat order.
+    let (ca, cb) = (coins(&s, &a).await, coins(&s, &b).await);
+    let (st, r) = post(&a, "blackjack/sit", json!({ "table": 0, "seat": 0 })).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (st, r) = post(&b, "blackjack/sit", json!({ "table": 0, "seat": 0 })).await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("taken"))
+    );
+    post(&b, "blackjack/sit", json!({ "table": 0, "seat": 2 })).await;
+    let (st, r) = post(
+        &a,
+        "blackjack/bet",
+        json!({ "amount": 10, "key": format!("ba:{tag}") }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["blackjack"][0]["phase"], "betting", "waiting for b");
+    let (_, r) = post(
+        &b,
+        "blackjack/bet",
+        json!({ "amount": 10, "key": format!("bb:{tag}") }),
+    )
+    .await;
+    let t = &r["blackjack"][0];
+    assert!(t["phase"] == "playing" || t["phase"] == "done", "{t}");
+    if t["phase"] == "playing" {
+        assert_eq!(
+            t["dealer"]["cards"].as_array().unwrap().len(),
+            1,
+            "the hole card's face down"
+        );
+        assert_eq!(t["dealer"]["hidden"], 1);
+    }
+    // Play it out: whoever's turn it is stands; the other can't move for them.
+    for _ in 0..4 {
+        let t = view(&a).await["blackjack"][0].clone();
+        if t["phase"] != "playing" {
+            break;
+        }
+        let (on, off) = if t["turn"] == 0 { (&a, &b) } else { (&b, &a) };
+        let (st, r) = post(off, "blackjack/act", json!({ "action": "stand" })).await;
+        assert_eq!(
+            (st, r["error"].as_str()),
+            (StatusCode::CONFLICT, Some("not_your_turn"))
+        );
+        let (st, r) = post(on, "blackjack/act", json!({ "action": "stand" })).await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+    }
+    let t = view(&a).await["blackjack"][0].clone();
+    assert_eq!(t["phase"], "done", "{t}");
+    let paid = |i: usize| t["seats"][i]["result"]["paid"].as_i64().unwrap() as i32;
+    assert_eq!(coins(&s, &a).await, ca - 10 + paid(0));
+    assert_eq!(coins(&s, &b).await, cb - 10 + paid(2));
+    assert!(
+        t["dealer"]["total"].as_u64().unwrap() >= 17,
+        "the dealer draws to 17: {t}"
+    );
+    // The felt clears for the next hand.
+    tick(&s, now_ms() + DONE_MS + 1).await;
+    let t = view(&a).await["blackjack"][0].clone();
+    assert_eq!(
+        (t["phase"].as_str(), t["seats"][0]["bet"].as_i64()),
+        (Some("betting"), Some(0))
+    );
+
+    // Leaving the casino with a bet not yet dealt: it comes back, the seat's free.
+    let ca = coins(&s, &a).await;
+    post(
+        &a,
+        "blackjack/bet",
+        json!({ "amount": 7, "key": format!("leave:{tag}") }),
+    )
+    .await;
+    assert_eq!(coins(&s, &a).await, ca - 7);
+    in_zone(&s, &a, "city");
+    tick(&s, now_ms()).await;
+    assert_eq!(coins(&s, &a).await, ca, "refunded");
+    in_zone(&s, &a, "casino");
+    assert!(view(&a).await["blackjack"][0]["seats"][0].is_null());
+    // b alone: dealt once the wait's over.
+    let cb = coins(&s, &b).await;
+    post(
+        &b,
+        "blackjack/bet",
+        json!({ "amount": 4, "key": format!("solo:{tag}") }),
+    )
+    .await;
+    let t = view(&b).await["blackjack"][0].clone();
+    assert!(t["phase"] != "betting", "alone, it's dealt at once: {t}");
+    // Timing out stands for you.
+    if t["phase"] == "playing" {
+        tick(&s, now_ms() + crate::tables::TURN_MS + 1).await;
+    }
+    let t = view(&b).await["blackjack"][0].clone();
+    assert_eq!(t["phase"], "done", "{t}");
+    assert_eq!(
+        coins(&s, &b).await,
+        cb - 4 + t["seats"][2]["result"]["paid"].as_i64().unwrap() as i32
+    );
+    let _ = DEAL_MS;
+
+    // A restart mid-round gives the bets back.
+    tick(&s, now_ms() + DONE_MS + 1).await;
+    let cb = coins(&s, &b).await;
+    post(
+        &b,
+        "roulette/bet",
+        json!({ "bet": { "on": "red" }, "amount": 9, "key": format!("crash:{tag}") }),
+    )
+    .await;
+    assert_eq!(coins(&s, &b).await, cb - 9);
+    crate::tables::refund_unsettled(&s, Some(b.id)).await;
+    assert_eq!(coins(&s, &b).await, cb);
+}
+
+#[tokio::test]
+async fn a_club_can_be_founded_straight_into_a_clubhouse() {
+    let Some(s) = state().await else { return };
+    let a = player(&s).await;
+    let tag = &a.name[1..7];
+    grant(&s, &a, 1, 500, "test", &format!("clubhouse:{tag}")).await;
+    let found = |body: Value| {
+        let s = s.clone();
+        let tok = a.token.clone();
+        async move { call(&s, "POST", "/api/social/clubs/found", &tok, Some(body)).await }
+    };
+    let (_, lots) = call(&s, "GET", "/api/social/clubs/lots", &a.token, None).await;
+    let Some(lot) = lots["lots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["club"].is_null())
+        .map(|l| l["lot"].as_str().unwrap().to_string())
+    else {
+        return; // every lot taken by other tests just now
+    };
+    // A Clubhouse needs its lot, and a real one.
+    let base =
+        json!({ "name": format!("Moles {tag}"), "crest": "🦉", "color": "#3f7a8a", "tier": 3 });
+    let (st, r) = found(base.clone()).await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("pick_lot"))
+    );
+    let mut bad = base.clone();
+    bad["lot"] = json!("lot:99_99");
+    let (st, _) = found(bad).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    // On a free lot: the founder pays the first week (120), and it stands there.
+    let before = coins(&s, &a).await;
+    let mut ok = base.clone();
+    ok["lot"] = json!(lot);
+    let (st, r) = found(ok).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(coins(&s, &a).await, before - 120);
+    let (_, lots) = call(&s, "GET", "/api/social/clubs/lots", &a.token, None).await;
+    let here = lots["lots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["lot"] == lot.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(here["club"]["name"], format!("Moles {tag}"));
+    // (Free the lot again for the other tests.)
+    sqlx::query("UPDATE leases SET state = 'ended' WHERE plot = $1")
+        .bind(&lot)
+        .execute(&s.db)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn the_museum_hangs_paintings_in_turn_hearts_them_and_keeps_the_best() {
+    use base64::Engine;
+    let b64 = |v: &[u8]| base64::engine::general_purpose::STANDARD.encode(v);
+    let Some(s) = state().await else { return };
+    let (a, b) = (player(&s).await, player(&s).await);
+    let post = |p: &P, path: &str, body: Value| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        let path = format!("/api/social/museum/{path}");
+        async move { call(&s, "POST", &path, &tok, Some(body)).await }
+    };
+    let get = |p: &P, path: &str| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        let path = if path.is_empty() {
+            "/api/social/museum".to_string()
+        } else {
+            format!("/api/social/museum/{path}")
+        };
+        async move { call(&s, "GET", &path, &tok, None).await }
+    };
+
+    // A draft, kept: blank to start, then as painted.
+    let (_, d) = get(&a, "drafts/32").await;
+    assert_eq!(d["cells"], b64(&[0u8; 32 * 32]));
+    let mut cells = vec![0u8; 32 * 32];
+    for c in cells.iter_mut().take(200) {
+        *c = 7;
+    }
+    let (st, _) = post(&a, "drafts/32", json!({ "cells": b64(&cells) })).await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, _) = post(&a, "drafts/32", json!({ "cells": b64(&[40u8; 32 * 32]) })).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "colours off the palette");
+    let (st, _) = post(&a, "drafts/24", json!({ "cells": b64(&[0u8; 24 * 24]) })).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "no such size");
+
+    // Entering it: a bare canvas won't do; a painted one hangs, with the week's theme.
+    let (st, r) = post(
+        &a,
+        "submit",
+        json!({ "size": 32, "title": "Dawn", "cells": b64(&[0u8; 1024]) }),
+    )
+    .await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("too_bare"))
+    );
+    let (st, r) = post(
+        &a,
+        "submit",
+        json!({ "size": 32, "title": "Dawn", "cells": b64(&cells) }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let first = r["id"].as_i64().unwrap();
+    assert!(r["theme"].is_string());
+    // One entry per size: a new one takes the last one's place.
+    let (_, r) = post(
+        &a,
+        "submit",
+        json!({ "size": 32, "title": "Dusk", "cells": b64(&cells) }),
+    )
+    .await;
+    let dusk = r["id"].as_i64().unwrap();
+    let (_, st0) = get(&a, "").await;
+    let mine: Vec<i64> = st0["mine"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(mine, vec![dusk], "Dawn retired: {st0}");
+    assert!(
+        st0["mine"][0]["showings"]
+            .as_array()
+            .is_some_and(|s| !s.is_empty()),
+        "when it's on the wall"
+    );
+    let _ = first;
+
+    // In the catalogue, and (with few entries, or in its turn) on the wall.
+    let (_, c) = get(&b, "catalogue?size=32").await;
+    assert!(c["art"].as_array().unwrap().iter().any(|x| x["id"] == dusk));
+    let (_, w) = get(&b, "salon").await;
+    assert_eq!(w["walls"].as_array().unwrap().len(), 3);
+
+    // Hearts: not your own; one each, and they can be taken back.
+    let (st, r) = post(&a, &format!("art/{dusk}/heart"), json!({ "on": true })).await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("own"))
+    );
+    let (_, r) = post(&b, &format!("art/{dusk}/heart"), json!({ "on": true })).await;
+    assert_eq!(r["hearts"], 1);
+    let (_, r) = post(&b, &format!("art/{dusk}/heart"), json!({ "on": true })).await;
+    assert_eq!(r["hearts"], 1, "once each");
+    let (_, r) = get(&b, &format!("art/{dusk}")).await;
+    assert_eq!(r["hearted"], true);
+
+    // The Hall of Fame: the week's most loved, chosen once, with a prize.
+    // (A week far off, so other runs don't share it.)
+    let year = 3000 + (rand::random::<u32>() % 5000) as i32;
+    let today = chrono::NaiveDate::from_isoywd_opt(year, 10, chrono::Weekday::Wed).unwrap();
+    let last = crate::museum::week_of(today - chrono::Duration::days(7));
+    sqlx::query("UPDATE artworks SET week = $1 WHERE id = $2")
+        .bind(&last)
+        .bind(dusk)
+        .execute(&s.db)
+        .await
+        .unwrap();
+    let before = coins(&s, &a).await;
+    crate::museum::settle(&s, today).await.unwrap();
+    crate::museum::settle(&s, today).await.unwrap();
+    assert_eq!(
+        coins(&s, &a).await,
+        before + crate::museum::PRIZES[0],
+        "paid once"
+    );
+    let (_, f) = get(&b, "fame").await;
+    assert!(
+        f["art"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["id"] == dusk && x["fame"] == 1)
+    );
+
+    // A report takes it down at once.
+    let (st, _) = post(&a, &format!("art/{dusk}/report"), json!({})).await;
+    assert_eq!(st, StatusCode::CONFLICT, "not your own");
+    let (st, _) = post(&b, &format!("art/{dusk}/report"), json!({})).await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, c) = get(&b, "catalogue?size=32").await;
+    assert!(!c["art"].as_array().unwrap().iter().any(|x| x["id"] == dusk));
+
+    // Natural history: one of each fish, from the bag.
+    let (st, r) = post(&a, "donate", json!({ "item": 101 })).await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("none"))
+    );
+    grant(
+        &s,
+        &a,
+        101,
+        2,
+        "test",
+        &format!("museum:fish:{}", &a.name[1..7]),
+    )
+    .await;
+    let (st, r) = post(&a, "donate", json!({ "item": 101 })).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (st, r) = post(&a, "donate", json!({ "item": 101 })).await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("given"))
+    );
+    let (st, _) = post(&a, "donate", json!({ "item": 1 })).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "coins aren't fish");
+    let (_, n) = get(&a, "nature").await;
+    let perch = n["fish"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["item"] == 101)
+        .unwrap()
+        .clone();
+    assert_eq!(perch["given"], true);
+    assert!(perch["first"]["name"].is_string());
+}
+
+// ---- bugs and mushrooms (ADR 0019) ------------------------------------------------------------
+
+#[tokio::test]
+async fn bugs_and_mushrooms_are_out_for_everyone_and_each_can_be_taken_once_by_each() {
+    let Some(s) = state().await else { return };
+    let (a, b) = (player(&s).await, player(&s).await);
+    let (st, out) = call(&s, "GET", "/api/social/nature/out", &a.token, None).await;
+    assert_eq!(st, StatusCode::OK, "{out}");
+    let list = out["out"].as_array().unwrap().clone();
+    assert!(!list.is_empty(), "nothing out at all: {out}");
+    assert!(out["moon"].is_string() && out["season"].is_string());
+    // Everyone sees the same things out.
+    let (_, out_b) = call(&s, "GET", "/api/social/nature/out", &b.token, None).await;
+    assert_eq!(out_b["out"], out["out"]);
+
+    let catch = |p: &P, it: &Value| {
+        let s = s.clone();
+        let tok = p.token.clone();
+        let body = json!({ "spot": it["spot"], "slot": it["slot"] });
+        async move { call(&s, "POST", "/api/social/nature/catch", &tok, Some(body)).await }
+    };
+    let city = |p: &P| {
+        s.hub.set_location(
+            p.id,
+            crate::hub::Location {
+                zone: "city".into(),
+                instance: 1,
+                owner: None,
+                label: "City".into(),
+            },
+            true,
+            chrono::Utc::now().timestamp_millis(),
+        )
+    };
+    let it = &list[0];
+    // You have to be out in the city.
+    let (st, r) = catch(&a, it).await;
+    assert_eq!(
+        (st, r["error"].as_str()),
+        (StatusCode::CONFLICT, Some("away"))
+    );
+    city(&a);
+    city(&b);
+    // A bug needs a net.
+    if let Some(bug) = list.iter().find(|i| i["shroom"] == false) {
+        let (st, r) = catch(&a, bug).await;
+        assert_eq!(
+            (st, r["error"].as_str()),
+            (StatusCode::CONFLICT, Some("no_net"))
+        );
+        sqlx::query("INSERT INTO inventory (player_id, item_id, qty) VALUES ($1, 960, 1)")
+            .bind(a.id)
+            .execute(&s.db)
+            .await
+            .unwrap();
+    }
+    for it in list.iter().take(3) {
+        let (st, r) = catch(&a, it).await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+        assert_eq!(r["key"], it["key"]);
+        // Once each.
+        let (st, r) = catch(&a, it).await;
+        assert_eq!(
+            (st, r["error"].as_str()),
+            (StatusCode::CONFLICT, Some("taken"))
+        );
+    }
+    let first = &list[0];
+    // It's gone for a, not for b.
+    let (_, out) = call(&s, "GET", "/api/social/nature/out", &a.token, None).await;
+    assert!(
+        !out["out"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["spot"] == first["spot"])
+    );
+    let (_, out) = call(&s, "GET", "/api/social/nature/out", &b.token, None).await;
+    assert!(
+        out["out"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["spot"] == first["spot"])
+    );
+    // A slot long gone, and a spot that isn't one.
+    let (st, _) = catch(
+        &b,
+        &json!({ "spot": first["spot"], "slot": first["slot"].as_i64().unwrap() - 5 }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    let (st, _) = catch(&b, &json!({ "spot": 1, "slot": first["slot"] })).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    // The museum takes one of each, and Natural History lists bugs and mushrooms.
+    let (st, r) = call(
+        &s,
+        "POST",
+        "/api/social/museum/donate",
+        &a.token,
+        Some(json!({ "item": first["item"] })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (_, n) = call(&s, "GET", "/api/social/museum/nature", &a.token, None).await;
+    let section = if first["shroom"] == true {
+        "shrooms"
+    } else {
+        "bugs"
+    };
+    let entry = n[section]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["item"] == first["item"])
+        .unwrap()
+        .clone();
+    assert_eq!(entry["given"], true);
+    assert_eq!(
+        n["bugs"].as_array().unwrap().len(),
+        commons_sim::nature::BUGS.len()
+    );
+    assert_eq!(
+        n["shrooms"].as_array().unwrap().len(),
+        commons_sim::nature::SHROOMS.len()
+    );
+    // Hints for the journal, for every kind.
+    let (_, h) = call(&s, "GET", "/api/social/nature/hints", &a.token, None).await;
+    assert!(h["golden_scarab"].as_str().unwrap().contains("Meadow"));
+}

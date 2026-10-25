@@ -271,6 +271,30 @@ export function describe(n: Notification): string {
       return `${who} invited you to join ${n.body.crest ?? "🛡"} ${n.body.club ?? "their club"}`;
     case "club_removed":
       return `You're no longer a member of ${n.body.club ?? "a club"}`;
+    case "club_meetup_soon":
+      return `${n.body.crest ?? "🛡"} ${n.body.club ?? "Your club"}'s meetup starts in half an hour, in the club room`;
+    case "club_meetup_now":
+      return `${n.body.crest ?? "🛡"} ${n.body.club ?? "Your club"}'s meetup has started: come up to the club room!`;
+    case "club_event_soon": {
+      const b = n.body as { crest?: string; title?: string; place_name?: string };
+      return `${b.crest ?? "📅"} “${b.title}” starts in 15 minutes, at ${b.place_name ?? "its place"}`;
+    }
+    case "club_event_now": {
+      const b = n.body as { crest?: string; title?: string; place_name?: string; club?: string };
+      return `${b.crest ?? "📅"} ${b.club ?? "A club"}'s “${b.title}” has started, at ${b.place_name ?? "its place"}: come along!`;
+    }
+    case "club_event_cancelled": {
+      const b = n.body as { crest?: string; title?: string; club?: string };
+      return `${b.crest ?? "📅"} ${b.club ?? "A club"} called off “${b.title}”`;
+    }
+    case "club_award": {
+      const b = n.body as { crest?: string; club?: string; rank?: number; coins?: number };
+      return `🏆 ${b.crest ?? ""} ${b.club ?? "Your club"} was ${["first", "second", "third"][(b.rank ?? 1) - 1]} of the clubs last week: +${b.coins ?? 0} coins for the treasury!`;
+    }
+    case "club_meetup_reward": {
+      const b = n.body as { club?: string; crest?: string; coins?: number };
+      return `${b.crest ?? "🛡"} Thanks for coming to ${b.club ?? "the meetup"}: +${b.coins ?? 20} coins`;
+    }
     case "rent_due": {
       const b = n.body as { what?: string; rent?: number; club?: string };
       if (b.club) return `Rent for ${b.what} is due: ${b.rent ?? "some"} coins from the treasury. Ask members to chip in, then pay at the Club Hall 🛡`;

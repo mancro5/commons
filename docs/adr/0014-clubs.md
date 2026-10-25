@@ -28,13 +28,37 @@ renting a room, and the rent itself keeps clubs meaningful.
 | Badge | Your club's crest by your name, for the club you choose to show. |
 | Board | Short posts for members, filtered like chat; the owner and moderators can remove any. |
 
+## C2: club life
+
+| Part | What |
+|---|---|
+| Meetup | The owner or a moderator sets one weekly hour (a weekday and a time, kept in UTC, shown in local time). Members get a reminder 30 minutes before and a notice when it starts. Whoever spends 10 minutes of that hour in the club room gets 20 coins, once per meetup. Attendance comes from the zones' presence reports, not from clients. |
+| Goals | Four a week (from Monday, UTC), the same for every club: come to the meetup together (as many members as the club has, up to 3), spend time together in the room (120 member-minutes), catch fish (15 between the members), and fill the treasury (donations worth a week's rent). Each one reached pays 10–15 coins into the treasury, once a week: an active club's rent partly pays itself. |
+| Club call | A members' button rings every member who's online into one call (up to eight), on the phone rules of ADR 0013: a phone each, nobody blocking anybody, the age rules. Club members needn't be friends with each other. |
+| Decorating | Members place furniture from their own bags in the club room, up to the room's tier (16 pieces, or 32 in a Big club room). A piece stays its placer's: they or a moderator can pick it up and it goes back to the placer's bag, as it does when they leave the club or the room is given up. |
+
+## C3: clubs in the town
+
+| Part | What |
+|---|---|
+| Clubhouses | The club lots in the city are the biggest tier: a Clubhouse (40 members, 40 pieces of furniture, 120 coins a week, from the treasury). The owner picks a free lot; the club's house stands there under its banner, its door leads into the club's room, and leaving the room you come out of it. One club per lot; moving back down frees it. |
+| Clubs of the week | Club points each week: 10 per goal reached, 5 per member who came to the meetup, 1 per 10 member-minutes in the room. The leaderboard in the Club Hall shows the standings; when the week ends the top three are the clubs of the week (a 🏆 in the directory) and their treasuries get 30, 20 and 10 coins, once. |
+| Events | The owner and moderators plan events open to everyone: a title (filtered like chat), a time in the next two weeks, an hour or two long, and a public place: the Fairground stage or pitch, the Arena, the Club Hall steps, the wishing well, or the club's own lot. Everyone sees what's on (the Club Hall's board and the 🛡 panel); anyone can say they're going and is reminded 15 minutes before and when it starts. |
+
+Events are only ever held at public places in the city, where everyone can
+already meet and chat; club rooms stay members-only. So opening events to
+strangers adds no new way for strangers to be alone together, and the care
+review ADR 0013 asked for before that still applies to anything that would.
+Who's going is shown as a count, with only your friends' names.
+
 ## Care
 
 - Invites go only between friends; club boards and room chat are filtered
   as chat is everywhere. Block and report work in clubs as anywhere.
-- Under-16s can be in clubs like anywhere else in the town; before clubs
-  open to strangers (public events in C3) this needs the same review as
-  phone calls (ADR 0013).
+- Under-16s can be in clubs like anywhere else in the town. Club events
+  (C3) happen only at public places, so they open nothing private to
+  strangers; anything that would needs the same review as phone calls
+  (ADR 0013).
 
 ## Milestones
 

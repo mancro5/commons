@@ -122,6 +122,7 @@ struct Stacks {
     /// Left edge of each bank.
     bank_x: [u16; 2],
     first_row: u16,
+    rows: u16,
 }
 
 impl Stacks {
@@ -138,10 +139,17 @@ impl Stacks {
             per_bank,
             bank_x: [a, b],
             first_row: 2,
+            rows: wing.rows,
         }
     }
     fn row_y(&self, r: u16) -> u16 {
         self.first_row + r * 3
+    }
+    /// Where the `r`th row of bookcases (by number) stands: the first ones
+    /// nearest the door (in the south wall), so you walk in among the full
+    /// shelves, and any still waiting for books are at the back.
+    fn shelf_row_y(&self, r: u16) -> u16 {
+        self.row_y(self.rows - 1 - r)
     }
     fn case(&self, n: u16) -> (u16, u16) {
         let cols = self.per_bank * self.banks;
@@ -149,7 +157,7 @@ impl Stacks {
         let bank = c / self.per_bank;
         (
             self.bank_x[bank as usize] + (c % self.per_bank) * 2,
-            self.row_y(r),
+            self.shelf_row_y(r),
         )
     }
     fn width(&self) -> u16 {
@@ -180,7 +188,7 @@ pub fn wing(wing: &Wing) -> MapFile {
     // A sign at each end of a row facing the central aisle (one bank: at the
     // right end), saying which bookcases (and so which books) it holds.
     for r in 0..wing.rows {
-        let y = st.row_y(r);
+        let y = st.shelf_row_y(r);
         let first = r * wing.cols;
         for bank in 0..st.banks {
             let (a, z) = (

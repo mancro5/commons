@@ -26,7 +26,7 @@ pub const COIN: i32 = 1;
 /// Coins and seeds every new player starts with.
 pub const WELCOME: &[(i32, i32)] = &[(COIN, 100), (200, 3)];
 /// Kinds that count towards the album.
-const COLLECTABLE: &[&str] = &["fish", "plant", "junk"];
+const COLLECTABLE: &[&str] = &["fish", "plant", "junk", "bug", "shroom"];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Item {

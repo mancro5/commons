@@ -101,17 +101,29 @@ impl Instance {
             Some(_) if outdoors != test => ride & !vehicles::TEST_RIDE,
             _ => 0,
         };
+        // In a boat, you're seen in the boat (your wheels wait ashore).
+        let vehicle = if a.vehicle >= commons_protocol::boat::CAPTAIN {
+            a.vehicle
+        } else {
+            vehicle
+        };
         a.ride = ride;
         if commons_protocol::NPC_LOOKS.contains(&look)
             || (a.look == look && a.style == style && a.pet == pet && a.vehicle == vehicle)
         {
             return;
         }
+        let repace = a.vehicle != vehicle;
         a.look = look;
         a.style = style;
         a.pet = pet;
         a.vehicle = vehicle;
         self.look_changed(id);
+        // On or off wheels mid-walk: the rest of the walk at the new pace.
+        if repace {
+            let now = self.clock.now_ms();
+            self.repace(id, now);
+        }
     }
 
     /// The tools avatar `id` uses and the kit it owns, from the API.
@@ -127,7 +139,7 @@ impl Instance {
     }
 
     /// Everyone nearby sees avatar `id` as it is now.
-    fn look_changed(&mut self, id: u32) {
+    pub(super) fn look_changed(&mut self, id: u32) {
         let a = &self.avatars[&id];
         let msg = ServerMsg::LookChanged {
             id,
@@ -155,6 +167,7 @@ impl Instance {
         let range = match kind {
             together::FOLLOW | together::STOP_FOLLOW => FOLLOW_RANGE,
             together::RPS => RPS_RANGE,
+            together::BOAT => super::boats::BOARD_RANGE,
             _ => TOGETHER_RANGE,
         };
         match (self.avatars.get(&a), self.avatars.get(&b)) {
@@ -170,7 +183,19 @@ impl Instance {
         if !(1..=together::MAX).contains(&kind) || to == id || !self.avatars.contains_key(&to) {
             return;
         }
-        if !self
+        // Come aboard: only from a captain with a seat free, to someone ashore.
+        if kind == together::BOAT {
+            let free = self
+                .boats
+                .iter()
+                .any(|b| b.captain == id && b.seats.len() < commons_protocol::boat::SEATS);
+            if !free {
+                return self.error(id, error_code::NOT_ALLOWED, "no free seat in your boat");
+            }
+            if self.aboard(to) {
+                return self.error(id, error_code::NOT_ALLOWED, "they're in a boat already");
+            }
+        } else if !self
             .avatars
             .get_mut(&id)
             .unwrap()
@@ -209,6 +234,10 @@ impl Instance {
         }
         if kind == together::RPS {
             return self.rps_start(from, id, now);
+        }
+        // `from`'s boat: climb aboard.
+        if kind == together::BOAT {
+            return self.board(from, id, now);
         }
         // `from` asked to walk after `id`.
         if kind == together::FOLLOW {
@@ -577,6 +606,44 @@ mod tests {
                 _ => None,
             })
             .unwrap()
+    }
+
+    #[test]
+    fn getting_on_wheels_mid_walk_speeds_up_the_rest_of_it() {
+        use commons_sim::vehicles::speed_x10;
+        let bike = speed_x10(3).unwrap();
+        let mut inst = instance_for(Arc::new(ZoneDef::new(
+            crate::instance::OUTDOORS.into(),
+            map(64, 32),
+            None,
+        )));
+        let _a = connect(&mut inst, 1, "a", (20, 12));
+        crate::instance::tests::place(&mut inst, 1, (2, 2));
+        inst.handle(Cmd::Msg {
+            conn: 1,
+            msg: ClientMsg::MoveTo {
+                x: 60,
+                y: 2,
+                sprint: false,
+            },
+        });
+        let walk = inst.avatars[&1].motion.clone().unwrap();
+        assert_eq!(walk.speed_x10, WALK_SPEED_X10);
+        // A few steps on, the bike: the same walk, at the bike's pace.
+        let later = walk.t0 + 1500;
+        inst.step(later);
+        let now = inst.clock.now_ms().max(later);
+        inst.wear(1, 0, 0, 0, 3);
+        let ride = inst.avatars[&1].motion.clone().expect("still going");
+        assert_eq!(ride.speed_x10, bike);
+        assert_eq!(ride.path.last(), Some(&(60, 2)), "to the same place");
+        assert!(ride.path[0].0 >= 2 && !ride.is_done(now));
+        // And off it again: back to walking.
+        inst.wear(1, 0, 0, 0, 0);
+        assert_eq!(
+            inst.avatars[&1].motion.as_ref().unwrap().speed_x10,
+            WALK_SPEED_X10
+        );
     }
 
     #[test]

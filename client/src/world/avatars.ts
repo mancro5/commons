@@ -9,7 +9,7 @@ import { type Motion, type TileXY, headingAt, posAt, sprintingAt } from "./motio
 import type { Scene } from "./scene";
 import { moodIcon } from "../activities/together";
 import { Follower, type PetSprite } from "./pets";
-import { RIDE_POSE, vehicleTexture } from "./vehicles";
+import { BOAT_CAPTAIN, BOAT_PASSENGER, RIDE_POSE, vehicleTexture } from "./vehicles";
 import { heldCanTexture } from "./goods";
 
 export const EMOTES: Record<number, { icon: string; label: string }> = {
@@ -64,6 +64,16 @@ const FISHING = 2;
 const SKATEBOARD = 5;
 /** Rods by `tool` code: the plain one, cherrywood, carbon, golden. */
 const ROD_COLORS = [0x7a5230, 0xa0473f, 0x2f3440, 0xf2c94c];
+/** In a rowboat: where each passenger seat is (px from the captain), and
+ * the boat's middle (it's drawn round that, bow toward where they face). */
+const SEAT_X = [11, 33, -33];
+const BOAT_MID = 11;
+
+/** On wheels: a puff of dust this often, each lasting this long. */
+const PUFF_EVERY_MS = 70;
+const PUFF_MS = 420;
+const REDUCED_MOTION = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 /** How far the board lifts you: a 2-pixel deck on 4-pixel wheels. */
 const BOARD_RISE = 4;
 /** Pixels rolled per quarter turn of a wheel (about a quarter of its rim). */
@@ -187,6 +197,10 @@ export class Avatar {
   private canUntil = 0;
   private rod = new Graphics();
   private board = new Graphics();
+  /** On wheels: dust kicked up behind, and streaks for the speed. */
+  private trail = new Graphics();
+  private puffs: { x: number; y: number; at: number; dir: number }[] = [];
+  private lastPuff = 0;
   /** Rock paper scissors: a fist pumping in front of you, from `pumpAt`. */
   private hand = new Graphics();
   /** The library book open in our hands (its Gutenberg number; 0: none). */
@@ -237,7 +251,7 @@ export class Avatar {
     this.stack.appendChild(this.nameEl);
     this.label.appendChild(this.stack);
     labels.appendChild(this.label);
-    scene.sorted.addChild(this.sprite, this.rod, this.board, this.hand, this.book, this.phone);
+    scene.sorted.addChild(this.trail, this.sprite, this.rod, this.board, this.hand, this.book, this.phone);
     this.apply(info, now);
   }
 
@@ -292,6 +306,25 @@ export class Avatar {
       mark = document.createElement("span");
       mark.className = "calling";
       mark.textContent = "📞";
+      this.nameEl.appendChild(mark);
+      this.nameW = 0;
+    }
+  }
+
+  /** On the Concert Hall's stage (ADR 0015): 🎤 by the name. */
+  setPerforming(on: boolean) {
+    let mark = this.nameEl.querySelector<HTMLSpanElement>(".performing");
+    if (!on) {
+      if (mark) {
+        mark.remove();
+        this.nameW = 0;
+      }
+      return;
+    }
+    if (!mark) {
+      mark = document.createElement("span");
+      mark.className = "performing";
+      mark.textContent = "🎤";
       this.nameEl.appendChild(mark);
       this.nameW = 0;
     }
@@ -630,6 +663,11 @@ export class Avatar {
           : robot?.pop
             ? 1
             : 0;
+    // Afloat: passengers sit along the boat; everyone aboard bobs on the water.
+    const afloat = vehicle >= BOAT_CAPTAIN;
+    const seat = vehicle >= BOAT_PASSENGER ? vehicle - BOAT_PASSENGER : -1;
+    if (seat >= 0) leanX += SEAT_X[seat] ?? 0;
+    const wave = afloat ? Math.round(Math.sin(wallNow / 450)) : 0;
     const feetX = x * TILE + TILE / 2 + leanX;
     // Seated avatars sit on the bench's slats, drawn just in front of it.
     const feetY = y * TILE + TILE - (sitting ? 6 : 4) + leanY;
@@ -641,7 +679,7 @@ export class Avatar {
     // Asleep on their feet, in whole pixels only (no tilting or stretching):
     // a slow breath sinks them a pixel and back; every few seconds they sag
     // a pixel lower still, then jerk awake a pixel up for a blink, and settle.
-    this.sprite.position.set(Math.round(feetX + sway), Math.round(feetY + bob - (fighting?.lift ?? 0)));
+    this.sprite.position.set(Math.round(feetX + sway), Math.round(feetY + bob + wave - (fighting?.lift ?? 0)));
     // The robot turns on the beat: every four beats it faces the other way.
     this.sprite.scale.x = robot && Math.floor(beat / 4) % 2 === 1 ? -this.facing : this.facing;
     this.sprite.zIndex = sitting ? y * TILE + TILE : feetY + 0.5;
@@ -650,12 +688,14 @@ export class Avatar {
     this.drawFist(feetX, Math.round(feetY + bob), wallNow);
     this.drawBook(feetX, Math.round(feetY + bob));
     this.drawPhone(feetX, Math.round(feetY + bob));
-    this.updateWheels(ride ? vehicle : 0, feetX, feetY, walking, wallNow);
+    this.updateWheels(ride && seat < 0 ? vehicle : 0, feetX, feetY + wave, walking, wallNow);
+    this.drawTrail(walking && !!vehicle && seat < 0, feetX, feetY, wallNow, afloat);
     this.updateCan(feetX, feetY, wallNow);
     this.updatePet({ x, y }, wallNow);
 
     // DOM label above the head.
-    const s = this.scene.tileToScreen(x + 0.5, y + 1 - 4 / TILE - 34 / TILE);
+    // Afloat, names spread along the boat (the front seat's a little higher, clear of the captain's).
+    const s = this.scene.tileToScreen(x + 0.5 + (seat >= 0 ? (SEAT_X[seat] ?? 0) / TILE : 0), y + 1 - 4 / TILE - 34 / TILE - (seat === 0 ? 12 / TILE : 0));
     this.label.style.transform = `translate3d(${Math.round(s.x)}px, ${Math.round(s.y)}px, 0)`;
     this.nameEl.hidden = !this.showName;
     if (this.bubble && wallNow > this.bubbleUntil) {
@@ -858,11 +898,55 @@ export class Avatar {
     }
     const w = this.wheels;
     w.visible = true;
-    w.texture = vehicleTexture(code, moving ? ((Math.floor(now / 90) % 2) as 0 | 1) : 0);
+    if (code === BOAT_CAPTAIN) {
+      // The rowboat round everyone aboard, the oars dipping as they row.
+      w.texture = vehicleTexture(code, moving ? ((Math.floor(now / 300) % 2) as 0 | 1) : 0);
+      w.position.set(Math.round(feetX + BOAT_MID), Math.round(feetY + 8));
+      w.scale.x = this.facing;
+      w.zIndex = feetY + 0.6;
+      return;
+    }
+    w.texture = vehicleTexture(code, moving ? ((Math.floor(now / 50) % 2) as 0 | 1) : 0);
     w.position.set(Math.round(feetX), Math.round(feetY + 3));
     w.scale.x = this.facing;
     // In front of the rider's legs.
     w.zIndex = feetY + 0.6;
+  }
+
+  /**
+   * Riding fast: little puffs of dust left behind the wheels, fading and
+   * spreading, and a couple of streaks just behind the rider while moving.
+   */
+  private drawTrail(moving: boolean, feetX: number, feetY: number, now: number, water = false) {
+    const g = this.trail.clear();
+    if (moving && now - this.lastPuff > PUFF_EVERY_MS && !REDUCED_MOTION) {
+      this.lastPuff = now;
+      // A boat leaves its wake behind the stern; wheels kick up dust behind them.
+      const back = water ? BOAT_MID - this.facing * 46 : -this.facing * 9;
+      this.puffs.push({ x: feetX + back, y: feetY + (water ? 6 : 2), at: now, dir: -this.facing });
+    }
+    this.puffs = this.puffs.filter((p) => now - p.at < (water ? PUFF_MS * 2 : PUFF_MS));
+    if (!this.puffs.length && !moving) return;
+    for (const p of this.puffs) {
+      const t = (now - p.at) / (water ? PUFF_MS * 2 : PUFF_MS);
+      if (water) {
+        // Ripples spreading on the water.
+        g.ellipse(Math.round(p.x + p.dir * t * 4), Math.round(p.y), 3 + t * 9, 1 + t * 2).stroke({ color: 0xeaf6ff, alpha: 0.8 * (1 - t), width: 1 });
+        continue;
+      }
+      const r = 2 + t * 4;
+      g.circle(Math.round(p.x + p.dir * t * 6), Math.round(p.y - t * 4), r).fill({ color: 0xb8ab8c, alpha: 0.7 * (1 - t) });
+    }
+    if (moving && !water && !REDUCED_MOTION) {
+      // Streaks behind, at chest and knee height, flickering a little.
+      const back = -this.facing;
+      const flick = Math.floor(now / 60) % 2;
+      for (const [dy, len] of [[-22, 10 + flick * 3], [-12, 7 + (1 - flick) * 3]]) {
+        const x0 = Math.round(feetX + back * 9);
+        g.rect(back > 0 ? x0 : x0 - len, Math.round(feetY + dy), len, 1).fill({ color: 0xffffff, alpha: 0.6 });
+      }
+    }
+    this.trail.zIndex = feetY - 0.5;
   }
 
   /** Watering a plant: the can shows for a moment. */
@@ -948,6 +1032,7 @@ export class Avatar {
     this.sprite.destroy();
     this.rod.destroy();
     this.board.destroy();
+    this.trail.destroy();
     this.hand.destroy();
     this.book.destroy();
     this.phone.destroy();

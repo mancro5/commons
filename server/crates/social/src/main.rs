@@ -3,13 +3,20 @@
 //! client, independent of the zone they're in.
 
 mod calls;
+mod casino;
+mod clublife;
 mod clubs;
+mod clubtown;
+mod concert;
 mod db;
 mod homes;
 mod hub;
+mod museum;
+mod nature;
 mod rent;
 mod routes;
 mod stalls;
+mod tables;
 #[cfg(test)]
 mod tests;
 
@@ -30,6 +37,10 @@ pub struct State {
     pub calls: calls::Calls,
     /// Where calls' voices go; `None`: the phone lines are down.
     pub livekit: Option<commons_common::voice::LiveKit>,
+    /// Who's on the Concert Hall's stages (ADR 0015).
+    pub concert: concert::Stages,
+    /// The Casino's tables, every instance's (ADR 0017, K2).
+    pub tables: tables::Tables,
     dm_limits: Mutex<HashMap<Uuid, Bucket>>,
     ring_limits: Mutex<HashMap<Uuid, Bucket>>,
     started: Instant,
@@ -44,6 +55,8 @@ impl State {
             hub: hub::Hub::default(),
             calls: calls::Calls::default(),
             livekit: commons_common::voice::LiveKit::from_env(),
+            concert: concert::Stages::default(),
+            tables: tables::Tables::default(),
             dm_limits: Mutex::new(HashMap::new()),
             ring_limits: Mutex::new(HashMap::new()),
             started: routes::started(),
@@ -64,6 +77,9 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(State::new(db, config::secret(), catalog));
     rent::spawn_sweeper(state.clone());
     calls::spawn_ring_timeouts(state.clone());
+    clublife::spawn_sweeper(state.clone());
+    concert::spawn_ticker(state.clone());
+    tables::spawn_ticker(state.clone());
     let app = routes::routes()
         .with_state(state)
         .merge(telemetry::routes(prom));

@@ -83,6 +83,52 @@ function box(ctx: CanvasRenderingContext2D, wrap: number, x: number, y: number, 
 }
 
 function fencePiece(ctx: CanvasRenderingContext2D, code: number, x: number, y: number, w: number) {
+  if (code === 3) {
+    // A white post-and-rail fence: three rails, a post every 16 px.
+    for (const ry of [y + 2, y + 6]) {
+      px(ctx, O, x, ry, w, 3);
+      px(ctx, "#fbf6ea", x, ry + 1, w, 1);
+    }
+    for (let i = x; i < x + w - 2; i += 16) {
+      px(ctx, O, i, y, 4, 13);
+      px(ctx, "#fbf6ea", i + 1, y + 1, 2, 11);
+    }
+    return;
+  }
+  if (code === 4) {
+    // Wrought iron: thin black bars with spear tips, and a gilt knob now and then.
+    px(ctx, O, x, y + 4, w, 1);
+    px(ctx, O, x, y + 10, w, 2);
+    for (let i = x + 1; i < x + w - 1; i += 4) {
+      px(ctx, "#2a2a30", i, y + 2, 1, 10);
+      px(ctx, "#2a2a30", i - 1, y + 2, 3, 1);
+      px(ctx, "#2a2a30", i, y + 1, 1, 1);
+    }
+    for (let i = x + 1; i < x + w - 1; i += 16) px(ctx, "#d8b45a", i, y, 1, 2);
+    return;
+  }
+  if (code === 5) {
+    // A flowering hedge: a low hedge thick with blossom.
+    px(ctx, O, x, y + 1, w, 10);
+    px(ctx, "#4f7d43", x + 1, y + 2, w - 2, 8);
+    for (let i = x + 2; i < x + w - 2; i += 3) {
+      px(ctx, "#6b9a59", i, y + 3 + (i % 2), 2, 2);
+      if (i % 6 === 2) px(ctx, ["#f28c9b", "#fff6e6", "#f6d64a"][(i / 6) % 3 | 0], i + 1, y + 2 + ((i * 7) % 5), 2, 2);
+    }
+    return;
+  }
+  if (code === 6) {
+    // A dry-stone wall: rows of rounded stones, a mossy cap.
+    px(ctx, O, x, y, w, 12);
+    for (let row = 0; row < 3; row++) {
+      for (let i = x + 1 + (row % 2) * 4; i < x + w - 1; i += 8) {
+        const sw = Math.min(7, x + w - 1 - i);
+        if (sw > 0) px(ctx, ["#b9b2a0", "#a8a08c", "#c9c2b0"][(i + row) % 3], i, y + 1 + row * 4, sw, 3);
+      }
+    }
+    for (let i = x + 1; i < x + w - 1; i += 5) px(ctx, "#6b9a59", i, y, 3, 1);
+    return;
+  }
   if (code === 2) {
     // A low hedge.
     px(ctx, O, x, y + 2, w, 8);
@@ -117,6 +163,40 @@ function yard(ctx: CanvasRenderingContext2D, code: number, x: number, y: number)
       px(ctx, "#b2aa96", x + 6, y + 7, 2, 7);
       px(ctx, O, x + 3, y + 13, 8, 2);
       px(ctx, "#e39b4a", x + 9, y + 1, 3, 2);
+      break;
+    case 4: // A garden bench.
+      px(ctx, O, x, y + 6, 15, 3);
+      px(ctx, "#a0703f", x + 1, y + 7, 13, 1);
+      px(ctx, O, x, y + 2, 15, 3);
+      px(ctx, "#a0703f", x + 1, y + 3, 13, 1);
+      for (const lx of [x + 1, x + 12]) px(ctx, O, lx, y + 9, 2, 6);
+      px(ctx, O, x + 1, y + 4, 1, 3);
+      px(ctx, O, x + 13, y + 4, 1, 3);
+      break;
+    case 5: // Sunflowers, tall, three of them.
+      for (const [sx, top] of [[x + 2, y + 1], [x + 7, y], [x + 12, y + 3]] as [number, number][]) {
+        px(ctx, "#4f7d43", sx, top + 4, 1, 16 - top - 4);
+        px(ctx, "#6b9a59", sx + 1, top + 9, 2, 1);
+        px(ctx, O, sx - 2, top, 5, 5);
+        px(ctx, "#f6c343", sx - 2, top + 1, 5, 3);
+        px(ctx, "#f6c343", sx - 1, top, 3, 5);
+        px(ctx, "#7a4a2a", sx - 1, top + 1, 3, 3);
+      }
+      break;
+    case 6: // A street lamp of your own.
+      px(ctx, O, x + 6, y + 4, 3, 12);
+      px(ctx, "#3a3a42", x + 7, y + 4, 1, 11);
+      px(ctx, O, x + 4, y, 7, 5);
+      px(ctx, "#ffe9a8", x + 5, y + 1, 5, 3);
+      px(ctx, O, x + 3, y + 14, 9, 2);
+      break;
+    case 7: // A little pond with a lily pad.
+      px(ctx, O, x, y + 8, 16, 7);
+      px(ctx, "#b9b2a0", x + 1, y + 9, 14, 5);
+      px(ctx, "#5e9fc0", x + 2, y + 10, 12, 3);
+      px(ctx, "#9fd0e8", x + 3, y + 10, 4, 1);
+      px(ctx, "#5d8a4e", x + 9, y + 11, 3, 2);
+      px(ctx, "#f28c9b", x + 10, y + 10, 1, 1);
       break;
     case 3: // A flower arch.
       for (let i = 0; i < 14; i++) {
@@ -201,7 +281,34 @@ function exterior(ctx: CanvasRenderingContext2D, slot: string, code: number) {
     px(ctx, walls, 6, 1, 3, 3);
   } else if (slot === "fence") fencePiece(ctx, code, 1, 3, 15);
   else if (slot === "yard") yard(ctx, code, 1, 0);
-  else {
+  else if (slot === "door") {
+    // A front door in its colour, with its knob.
+    const c = DOOR_PAINT[code] ?? DOOR_PAINT[1];
+    px(ctx, O, 3, 1, 10, 15);
+    px(ctx, c, 4, 2, 8, 14);
+    px(ctx, "#f6d98a", 6, 3, 4, 3);
+    px(ctx, "#f6c343", 10, 9, 1, 1);
+  } else if (slot === "flowers") {
+    // A window box of them.
+    const f = FLOWER_SETS[code] ?? FLOWER_SETS[1];
+    px(ctx, O, 1, 9, 14, 6);
+    px(ctx, "#8a5a33", 2, 10, 12, 4);
+    for (let i = 0; i < 6; i++) {
+      px(ctx, "#4f7a3e", 2 + i * 2, 5, 1, 4);
+      px(ctx, f.colors[i % f.colors.length], 2 + i * 2, 3 + (i % 2) * 2, 2, 2);
+    }
+  } else if (slot === "path") {
+    pathPiece(ctx, code, 2, 0, 12, 16, 1);
+  } else if (slot === "lights") {
+    const l = LIGHTS[code] ?? LIGHTS[1];
+    px(ctx, O, 0, 3, 16, 1);
+    for (let i = 0; i < 4; i++) {
+      const bx = 1 + i * 4;
+      const by = 4 + (i % 2);
+      px(ctx, O, bx, by, 3, 4);
+      px(ctx, l.bulbs[i % l.bulbs.length], bx + 1, by + 1, 1, 2);
+    }
+  } else {
     const c = POSTBOX[code] ?? POSTBOX[0];
     px(ctx, O, 7, 9, 2, 7);
     px(ctx, O, 3, 2, 10, 8);
@@ -216,12 +323,75 @@ export const FACADES: Record<number, [string, string]> = {
   2: ["#f2d0d4", "#a0473f"],
   3: ["#cfe2ef", "#3f5f7a"],
   4: ["#f6e3a1", "#c27a3c"],
+  5: ["#e2d6f2", "#6a5a8a"],
+  6: ["#d4f0e2", "#3f7a6a"],
+  7: ["#fbf4e2", "#8a5a3a"],
+  8: ["#c9785a", "#4a4f5a"],
 };
+/** Front doors by code. */
+export const DOOR_PAINT: Record<number, string> = {
+  1: "#c8343e",
+  2: "#2f7a4a",
+  3: "#e8b83a",
+  4: "#8a5a33",
+  5: "#2a3a6a",
+};
+/** Window boxes and flower beds by code: their flowers, and whether roses climb the walls. */
+export const FLOWER_SETS: Record<number, { colors: string[]; climbing?: boolean }> = {
+  1: { colors: ["#e8566b", "#f28c9b", "#ffffff"] },
+  2: { colors: ["#9b7fd4", "#c9a7f4", "#e2d6f2"] },
+  3: { colors: ["#f6c343", "#f6a83a", "#7a4a2a"] },
+  4: { colors: ["#e23d4e", "#f28c9b", "#ffffff"], climbing: true },
+};
+/** Paths to the front door by code: stones, the joints between, and lanterns along it. */
+export const PATHS: Record<number, { stone: string; joint: string; lanterns?: boolean }> = {
+  1: { stone: "#c9c2b0", joint: "#8f8a7a" },
+  2: { stone: "#b5644a", joint: "#7a3f2e" },
+  3: { stone: "#c9c2b0", joint: "#8f8a7a", lanterns: true },
+};
+/** Lights on the house by code: the bulbs' colours, and whether it's lanterns by the door instead. */
+export const LIGHTS: Record<number, { bulbs: string[]; lanterns?: boolean }> = {
+  1: { bulbs: ["#ffe9a8"] },
+  2: { bulbs: ["#f28c9b", "#9fd0e8", "#f6d64a", "#b7e07a"] },
+  3: { bulbs: ["#ffe9a8"], lanterns: true },
+};
+
+/** A path's stones, `w`×`h` px at `x`, `y` (`k`: pixels per art pixel). */
+function pathPiece(ctx: CanvasRenderingContext2D, code: number, x: number, y: number, w: number, h: number, k: number) {
+  const p = PATHS[code] ?? PATHS[1];
+  px(ctx, p.joint, x, y, w, h);
+  const sh = 4 * k;
+  for (let row = 0, yy = y; yy < y + h; yy += sh, row++) {
+    const sw = (code === 2 ? 6 : 5) * k;
+    for (let xx = x + (row % 2) * Math.floor(sw / 2); xx < x + w; xx += sw) {
+      const ww = Math.min(sw - k, x + w - xx);
+      if (ww > 0) px(ctx, p.stone, xx, yy, ww, sh - k);
+    }
+  }
+}
+
+/** The path from the front door down to the fence, `tilesW`×`tilesH` (px: ×32), with lanterns along it if it has them. */
+export function pathTexture(code: number, w: number, h: number): Texture {
+  return cached(`path:${code}:${w}:${h}`, () =>
+    canvas(w, h, (ctx) => {
+      pathPiece(ctx, code, 0, 0, w, h, 2);
+      if (PATHS[code]?.lanterns) {
+        for (const lx of [0, w - 6]) {
+          for (let ly = 10; ly < h - 6; ly += 26) {
+            px(ctx, O, lx, ly, 6, 8);
+            px(ctx, "#ffe9a8", lx + 1, ly + 1, 4, 5);
+          }
+        }
+      }
+    }),
+  );
+}
 /** Postbox colours by code: body, lid. */
 export const POSTBOX: Record<number, [string, string]> = {
   0: ["#c8553d", "#e07a5f"],
   1: ["#3f6f9a", "#6a9cc4"],
   2: ["#8a6a4a", "#b08a5a"],
+  3: ["#d8b45a", "#f2d68a"],
 };
 
 /** The 16×16 icon of one of these goods; false if it isn't one. */
