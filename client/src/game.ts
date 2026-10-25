@@ -330,7 +330,12 @@ const KEY_RESEND_MS = 180;
  * person we followed in (to find again inside), and the people who followed
  * us in (to let follow on without asking again).
  */
-const carried = { leader: null as { name: string; until: number } | null, followers: new Map<string, number>() };
+const carried = {
+  // `left`: the place they went from. Its Game runs a moment longer as we go,
+  // and mustn't look for them there (it would offer to the old place's ids).
+  leader: null as { name: string; until: number; left: object } | null,
+  followers: new Map<string, number>(),
+};
 /** How long after going through a door the two find each other again. */
 const CARRY_MS = 20_000;
 /** Further behind than this (tiles), a follower runs to catch up. */
@@ -1650,7 +1655,7 @@ export class Game {
   /** Who we followed in through a door: once they're here too, follow on. */
   private findLeader() {
     const l = carried.leader;
-    if (!l || this.following !== null) return;
+    if (!l || this.following !== null || l.left === this) return;
     if (performance.now() > l.until) {
       carried.leader = null;
       return;
@@ -2460,7 +2465,7 @@ export class Game {
         const name = this.avatars.get(m.id)?.info.name;
         this.stopFollowing(false);
         if (!name) break;
-        carried.leader = { name, until: performance.now() + CARRY_MS };
+        carried.leader = { name, until: performance.now() + CARRY_MS, left: this };
         this.hud.toast(`👣 After ${name}…`, 2500);
         this.goTo(m.zone, m.arrive || undefined);
         break;
@@ -3937,7 +3942,7 @@ export class Game {
     if (this.following !== null && wallNow > this.followCheckAt) {
       this.followCheckAt = wallNow + 350;
       this.followStep();
-    } else if (carried.leader && wallNow > this.followCheckAt) {
+    } else if (carried.leader && carried.leader.left !== this && wallNow > this.followCheckAt) {
       this.followCheckAt = wallNow + 350;
       this.findLeader();
     }
