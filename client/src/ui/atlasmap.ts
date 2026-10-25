@@ -31,7 +31,8 @@ const GROUND_KIND: Record<string, number> = {
 };
 const TREES = new Set(["tree", "pine", "apple_tree", "willow", "willow_curtain", "pine_secret", "bush", "hedge"]);
 /** Objects with no symbol of their own (markers, small props). */
-const HIDDEN = new Set(["spot", "nook", "grove_slot", "signpost", "postbox", "dept", "shopfront", "arena", "lamp"]);
+// (`boat_lake` only marks the water the rowboats go on, and `forage` where bugs and mushrooms turn up.)
+const HIDDEN = new Set(["spot", "nook", "grove_slot", "signpost", "postbox", "dept", "shopfront", "arena", "lamp", "boat_lake", "boat_moored", "yard_stand", "forage"]);
 
 /** Ground colours: grass, trees (under their crowns), water, road, kerb, paving, soil. */
 const PAPER = ["#cfd3a0", "#bcc48c", "#9cbfc0", "#a3927a", "#e6d9b6", "#ece0c0", "#c8a878"];
@@ -111,6 +112,12 @@ const ROOFS: Record<string, string> = {
   arcade_hall: "#4a3a62",
   bowling_alley: "#2f7a76",
   paintball_hall: "#a8423d",
+  casino: "#7a2a4a",
+  museum: "#b8ad94",
+  gallery: "#c98a5a",
+  concert_hall: "#5a3a6a",
+  boat_hire: "#4f86b0",
+  metro_entrance: "#c8342e",
   mall_entrance: "#8a5236",
   apartments: "#a8503f",
   post_office: "#4a5a78",
