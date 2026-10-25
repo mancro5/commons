@@ -203,6 +203,7 @@ export class ArcadePanel extends Panel {
     muted: () => boolean,
   ) {
     super("🕹️ Arcade", "arcade");
+    this.sticky = true;
     this.enlargeable(this.canvas);
     this.music = new DanceMusic(muted);
     this.canvas.width = CW;

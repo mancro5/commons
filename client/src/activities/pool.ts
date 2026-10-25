@@ -395,6 +395,7 @@ export class PoolPanel extends Panel {
     ) => void,
   ) {
     super("🎱 Pool", "pool");
+    this.sticky = true;
     // the power meter sits beside the table
     this.enlargeable(this.canvas, 40);
     this.canvas.width = W * SCALE + RIM * 2;

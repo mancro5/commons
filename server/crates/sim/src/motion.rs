@@ -9,6 +9,18 @@ use crate::TilePos;
 pub const WALK_SPEED_X10: u8 = 40;
 /// Sprinting (asked for by the player, outdoors; see `sprint_in`).
 pub const SPRINT_SPEED_X10: u8 = 58;
+/// Setting off on a skateboard. A skate (a motion at this speed) picks up
+/// speed as it goes, to three times this over `SKATE_RAMP_MS`, and glides to
+/// a stop at its end, braking at `SKATE_BRAKE`: further the faster it was
+/// going. For a skate, `sprint_in` is how far along that ramp it starts
+/// (ms of pushing already done: its momentum, carried from the last stretch).
+pub const SKATE_SPEED_X10: u8 = 82;
+/// How long the push from setting-off speed to top speed takes.
+pub const SKATE_RAMP_MS: u32 = 7_000;
+/// Top skating speed, as a multiple of setting off.
+const SKATE_TOP: f64 = 3.0;
+/// Braking on a skateboard, in tiles per ms² (42 tiles/s²).
+const SKATE_BRAKE: f64 = 42e-6;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Motion {
@@ -26,7 +38,134 @@ fn seg_len(a: TilePos, b: TilePos) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
+/// The skating profile of a motion of length `len`, ramp at `ramp0` (see
+/// `SKATE_SPEED_X10`). Speeds in tiles per ms. Mirrored in motion.ts.
+struct Skate {
+    /// Speed at the start, and its acceleration (while ramping up).
+    v0: f64,
+    acc: f64,
+    /// Ramp time left at the start (ms).
+    ramp_left: f64,
+    /// Where braking starts (tiles), when (ms), at what speed, and how hard.
+    brake_at: f64,
+    brake_t: f64,
+    brake_v: f64,
+    brake: f64,
+    len: f64,
+}
+
+impl Skate {
+    fn new(ramp0: f64, len: f64) -> Skate {
+        let base = SKATE_SPEED_X10 as f64 / 10_000.0;
+        let top = base * SKATE_TOP;
+        let acc = (top - base) / SKATE_RAMP_MS as f64;
+        let ramp0 = ramp0.clamp(0.0, SKATE_RAMP_MS as f64);
+        let mut s = Skate {
+            v0: base + acc * ramp0,
+            acc,
+            ramp_left: SKATE_RAMP_MS as f64 - ramp0,
+            brake_at: 0.0,
+            brake_t: 0.0,
+            brake_v: 0.0,
+            brake: SKATE_BRAKE,
+            len,
+        };
+        // Brake where the glide just reaches the end: s + v(s)²/2b = len.
+        let stops = |s: &Skate, d: f64| {
+            let v = s.speed_after(s.time_to(d));
+            d + v * v / (2.0 * SKATE_BRAKE)
+        };
+        if stops(&s, 0.0) >= len {
+            // Too short to glide at the usual rate: brake just hard enough.
+            s.brake = if len > 0.0 {
+                s.v0 * s.v0 / (2.0 * len)
+            } else {
+                1.0
+            };
+        } else {
+            let (mut lo, mut hi) = (0.0, len);
+            for _ in 0..40 {
+                let mid = (lo + hi) / 2.0;
+                if stops(&s, mid) < len {
+                    lo = mid
+                } else {
+                    hi = mid
+                }
+            }
+            s.brake_at = lo;
+        }
+        s.brake_t = s.time_to(s.brake_at);
+        s.brake_v = s.speed_after(s.brake_t);
+        s
+    }
+
+    /// Speed `dt` ms in, before braking.
+    fn speed_after(&self, dt: f64) -> f64 {
+        self.v0 + self.acc * dt.min(self.ramp_left)
+    }
+
+    /// Distance `dt` ms in, before braking.
+    fn dist_by(&self, dt: f64) -> f64 {
+        let r = dt.min(self.ramp_left);
+        let d = self.v0 * r + self.acc / 2.0 * r * r;
+        d + (dt - r).max(0.0) * (self.v0 + self.acc * self.ramp_left)
+    }
+
+    /// Time to cover `d` tiles, before braking.
+    fn time_to(&self, d: f64) -> f64 {
+        let ramp_d = self.v0 * self.ramp_left + self.acc / 2.0 * self.ramp_left * self.ramp_left;
+        if d <= ramp_d && self.acc > 0.0 {
+            (-self.v0 + (self.v0 * self.v0 + 2.0 * self.acc * d).sqrt()) / self.acc
+        } else {
+            self.ramp_left + (d - ramp_d) / (self.v0 + self.acc * self.ramp_left)
+        }
+    }
+
+    fn dist_at(&self, dt: f64) -> f64 {
+        if dt <= self.brake_t {
+            return self.dist_by(dt);
+        }
+        let u = (dt - self.brake_t).min(self.brake_v / self.brake);
+        (self.brake_at + self.brake_v * u - self.brake / 2.0 * u * u).min(self.len)
+    }
+
+    fn time_for(&self, d: f64) -> f64 {
+        if d <= self.brake_at {
+            return self.time_to(d);
+        }
+        let rem = (d - self.brake_at).min(self.len - self.brake_at);
+        let disc = (self.brake_v * self.brake_v - 2.0 * self.brake * rem).max(0.0);
+        self.brake_t + (self.brake_v - disc.sqrt()) / self.brake
+    }
+
+    /// Speed at `dt` ms in (braking included).
+    fn speed_at(&self, dt: f64) -> f64 {
+        if dt <= self.brake_t {
+            self.speed_after(dt)
+        } else {
+            (self.brake_v - self.brake * (dt - self.brake_t)).max(0.0)
+        }
+    }
+}
+
 impl Motion {
+    fn len(&self) -> f64 {
+        self.path.windows(2).map(|w| seg_len(w[0], w[1])).sum()
+    }
+
+    fn skate(&self) -> Option<Skate> {
+        (self.speed_x10 == SKATE_SPEED_X10).then(|| Skate::new(self.sprint_in as f64, self.len()))
+    }
+
+    /// For a skate, how far along its ramp its speed at `t` is (ms of pushing):
+    /// a new stretch joining it at `t` carries on at that speed. 0 otherwise.
+    pub fn skate_ramp_at(&self, t: u32) -> u16 {
+        let Some(s) = self.skate() else { return 0 };
+        let v = s.speed_at(t.saturating_sub(self.t0) as f64);
+        let base = SKATE_SPEED_X10 as f64 / 10_000.0;
+        (((v - base) / s.acc).clamp(0.0, SKATE_RAMP_MS as f64)).round() as u16
+    }
+
     fn ms_per_tile(&self) -> f64 {
         10_000.0 / self.speed_x10.max(1) as f64
     }
@@ -37,6 +176,9 @@ impl Motion {
             return 0.0;
         }
         let dt = (t - self.t0) as f64;
+        if let Some(sk) = self.skate() {
+            return sk.dist_at(dt);
+        }
         let s = self.sprint_in as f64;
         if self.sprint_in == 0 || dt <= s {
             return dt / self.ms_per_tile();
@@ -46,6 +188,9 @@ impl Motion {
 
     /// When `d` tiles have been covered (ms after `t0`): the inverse of `dist_at`.
     fn time_for(&self, d: f64) -> f64 {
+        if let Some(sk) = self.skate() {
+            return sk.time_for(d);
+        }
         let s = self.sprint_in as f64;
         let walked = s / self.ms_per_tile();
         if self.sprint_in == 0 || d <= walked {
@@ -57,12 +202,13 @@ impl Motion {
     /// Whether they're sprinting at `t`.
     pub fn sprinting_at(&self, t: u32) -> bool {
         self.speed_x10 == SPRINT_SPEED_X10
-            || (self.sprint_in > 0 && t > self.t0 + self.sprint_in as u32)
+            || (self.speed_x10 != SKATE_SPEED_X10
+                && self.sprint_in > 0
+                && t > self.t0 + self.sprint_in as u32)
     }
 
     pub fn duration_ms(&self) -> u32 {
-        let len: f64 = self.path.windows(2).map(|w| seg_len(w[0], w[1])).sum();
-        self.time_for(len).ceil() as u32
+        self.time_for(self.len()).ceil() as u32
     }
 
     pub fn end_t(&self) -> u32 {
@@ -143,6 +289,74 @@ impl Motion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn skate(len: u16, ramp0: u16) -> Motion {
+        Motion {
+            path: vec![(0, 0), (len, 0)],
+            t0: 1000,
+            speed_x10: SKATE_SPEED_X10,
+            sprint_in: ramp0,
+        }
+    }
+
+    /// Pinned for motion.test.ts, which checks the client mirror gives the same.
+    #[test]
+    fn skate_numbers_for_the_client_mirror() {
+        for (len, ramp0, end, mid, at3000) in [
+            (200u16, 0u16, 11757u32, 77.980693, 35.142857),
+            (10, 3000, 1823, 6.456822, 10.0),
+            (3, 0, 1455, 1.921763, 3.0),
+            (40, 7000, 2919, 23.5914, 40.0),
+        ] {
+            let m = skate(len, ramp0);
+            assert_eq!(m.end_t(), end);
+            assert!((m.pos_at(1000 + (end - 1000) / 2).0 - mid).abs() < 1e-5);
+            assert!((m.pos_at(4000).0 - at3000).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn a_skate_picks_up_speed_then_glides_to_a_stop() {
+        let m = skate(200, 0);
+        let speed = |t: u32| (m.pos_at(t + 100).0 - m.pos_at(t).0) * 10.0; // tiles a second
+        let start = speed(1000);
+        assert!(
+            (start - 8.2).abs() < 0.6,
+            "sets off at skating speed: {start}"
+        );
+        let later = speed(1000 + SKATE_RAMP_MS + 500);
+        assert!(
+            (later - 24.6).abs() < 0.6,
+            "three times as fast once pushed up: {later}"
+        );
+        let end = m.end_t();
+        assert!(
+            speed(end - 150) < later / 2.0,
+            "slowing to a stop at the end"
+        );
+        assert_eq!(m.tile_at(end), (200, 0));
+        // The glide at top speed is a good few tiles long; from setting off, short.
+        let quick = skate(200, SKATE_RAMP_MS as u16);
+        let (x, _) = quick.pos_at(quick.end_t() - 300);
+        assert!(200.0 - x > 1.5, "a long glide from top speed ({x})");
+        let slow = skate(3, 0);
+        let (x, _) = slow.pos_at(slow.end_t() - 100);
+        assert!(
+            200.0 - x > 0.0 && 3.0 - x < 0.8,
+            "a short glide from setting off ({x})"
+        );
+    }
+
+    #[test]
+    fn a_skate_carries_its_speed_into_the_next_stretch() {
+        let m = skate(200, 0);
+        let t = 1000 + 4_000;
+        let ramp = m.skate_ramp_at(t);
+        assert!((3_900..=4_100).contains(&ramp), "momentum carried: {ramp}");
+        // Splicing keeps the timing exact, as for walking.
+        let (prev, next, t_prev) = m.splice(t).unwrap();
+        assert!(t_prev <= t && next.0 == prev.0 + 1);
+    }
 
     #[test]
     fn walks_at_speed() {

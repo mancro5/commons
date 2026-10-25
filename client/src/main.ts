@@ -21,6 +21,7 @@ import museumUrl from "../../assets/maps/museum.json?url";
 import { Museum } from "./museum";
 import { ArtCard, ArtCataloguePanel, DeskPanel, NaturePanel, StudioPanel } from "./ui/museum";
 import bowlingUrl from "../../assets/maps/bowling.json?url";
+import paintballUrl from "../../assets/maps/paintball.json?url";
 import { Economy } from "./economy";
 import { Game, type Ui } from "./game";
 import { Homes } from "./homes";
@@ -95,6 +96,7 @@ const MAP_URLS: Record<string, string> = {
   concert_hall: concertHallUrl,
   casino: casinoUrl,
   museum: museumUrl,
+  paintball: paintballUrl,
 };
 const ERR_REPLACED = 6;
 const ERR_VERSION = 3;
@@ -196,6 +198,7 @@ async function main() {
     onEmote: (id) => game?.emote(id),
     onSit: () => game?.toggleSit(),
     onRide: () => game?.toggleRide(),
+    onLeave: () => game?.leaveBuilding(),
     onToys: () => game?.pickToy(),
     onBag: () => ui.bag.toggle(),
     onAlbum: () => ui.album.toggle(),
@@ -225,7 +228,7 @@ async function main() {
       const here = g?.position;
       if (!g?.scene.map.streets || !here) return null;
       const home = homes.mine ? spot(g.scene.map, `door:${homes.mine}`) : null;
-      return { map: g.scene.map, here, home };
+      return { map: g.scene.map, here, home, route: g.route, heading: g.heading, others: g.others };
     },
     walk: (t) => (game as Game | null)?.walkTo(t),
     toCity: () => void travel({ zone: "city" }),
@@ -541,7 +544,7 @@ async function main() {
             if (z === "club_hall" && lot) return void travel({ zone: "city", arrive: `place:${lot}` });
             // The Museum & Gallery has a door on each block: in and out by the one you chose.
             if (given && (z === "museum" || (z === "city" && from?.zoneId === "museum"))) return void travel({ zone: z, arrive: given });
-            const place = from && ["mall", "bar", "arcade", HALL, "club_hall", "bowling", "concert_hall", "casino", "museum"].includes(from.zoneId) ? `place:${from.zoneId}` : undefined;
+            const place = from && ["mall", "bar", "arcade", HALL, "club_hall", "bowling", "concert_hall", "casino", "museum", "paintball"].includes(from.zoneId) ? `place:${from.zoneId}` : undefined;
             const arrive =
               (z === HALL && from && wingOfZone(from.zoneId)) || (z === "club_hall" && from?.zoneId === "clubroom")
                 ? `place:${from.zoneId}`

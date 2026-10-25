@@ -9,11 +9,13 @@ import type { WordPanel } from "./activities/word";
 import { Cat } from "./ambient/cat";
 import { Caretaker } from "./ambient/caretaker";
 import { ATTENDANT, BARTENDER, CROUPIER, Clerk, FISHERMAN, LIBRARIAN, SHOE_GUY } from "./ambient/clerk";
+import { FRANCY_ID, Francy } from "./ambient/francy";
 import { ArcadePanel, BEAT_MS, BOT as ARCADE_BOT, PLAYING as ARCADE_PLAYING } from "./activities/arcade";
 import { PrizePanel } from "./ui/prizes";
 import { PoolPanel } from "./activities/pool";
 import { BOT as BOWL_BOT, BowlingPanel, scoreSoFar } from "./activities/bowling";
 import { ArenaShow } from "./activities/arena";
+import { PaintballShow } from "./activities/paintball";
 import { CANCELLED, CHOOSING, RpsPicker, beats, pickIcon } from "./activities/rps";
 import { Sky } from "./ambient/sky";
 import { Campfire } from "./activities/campfire";
@@ -41,6 +43,8 @@ import { Grove } from "./world/grove";
 import { tier } from "./ui/rarity";
 import { CatchShows } from "./world/catchfx";
 import { FlopShows } from "./world/flopfx";
+import { FountainFx } from "./world/fountainfx";
+import { PondFx } from "./world/pondfx";
 import { LuckyCrate } from "./world/luckyfx";
 import { LureShows } from "./world/lurefx";
 import { LaneBalls } from "./world/bowlfx";
@@ -67,7 +71,7 @@ import { type ActionMenu, type BagPanel, FishermanPanel, LURE_ITEM, type MarketP
 import { Avatar, CAST_SWING_MS, PUMP_MS } from "./world/avatars";
 import { Furniture } from "./world/furniture";
 import { type MapObject, type ZoneMap, groundAt, nearestWalkable, spot, stepTarget, walkable } from "./world/map";
-import { type TileXY, WALK_SPEED_X10, endT, splice, sprintProfile, sprintingAt } from "./world/motion";
+import { SKATE_SPEED_X10, type TileXY, WALK_SPEED_X10, endT, glideTiles, headingAt, retimed, routeAhead, skateRampAt, speedAt, splice, sprintProfile, sprintingAt } from "./world/motion";
 import { compress, route } from "./world/path";
 import { Props } from "./world/props";
 import { giftBoxTexture } from "./world/items";
@@ -312,6 +316,10 @@ const WATCH_RANGE = 12;
 const MAX_NAMES = 25;
 /** How far ahead a held arrow key plans the walk (twice that on a board). */
 const KEY_STEPS = 6;
+/** Keyboard look-ahead on a skateboard: past the longest glide (top speed), with room to spare. */
+const SKATE_KEY_STEPS = 20;
+/** How long a diagonal's other key gets to come up too (ms). */
+const KEY_RELEASE_GRACE_MS = 90;
 /** No input for this long and you're away from the keyboard (you doze off). */
 const AWAY_AFTER_MS = 60_000;
 /** Map objects that are game machines (the server numbers them in map order, as here). */
@@ -339,6 +347,32 @@ const KEY_DIRS: Record<string, TileXY> = {
   ArrowRight: { x: 1, y: 0 }, KeyD: { x: 1, y: 0 },
 };
 
+/** A chunky pixel gold coin (cached as an image URL). */
+let coinUrl = "";
+function coinIcon(): string {
+  if (coinUrl) return coinUrl;
+  const c = document.createElement("canvas");
+  c.width = c.height = 12;
+  const x = c.getContext("2d")!;
+  const p = (col: string, px: number, py: number, w = 1, h = 1) => {
+    x.fillStyle = col;
+    x.fillRect(px, py, w, h);
+  };
+  p("#7a4a0a", 3, 0, 6, 12);
+  p("#7a4a0a", 1, 2, 10, 8);
+  p("#7a4a0a", 2, 1, 8, 10);
+  p("#f6c343", 3, 1, 6, 10);
+  p("#f6c343", 2, 2, 8, 8);
+  p("#ffe58a", 3, 2, 3, 1);
+  p("#ffe58a", 2, 3, 1, 3);
+  p("#d99a1a", 4, 4, 4, 1);
+  p("#d99a1a", 5, 4, 2, 4);
+  p("#d99a1a", 4, 8, 4, 1);
+  p("#c27a12", 8, 7, 2, 2);
+  coinUrl = c.toDataURL();
+  return coinUrl;
+}
+
 export class Game {
   readonly scene: Scene;
   /** The fairy ring's clearing, found by walking into it. */
@@ -348,6 +382,8 @@ export class Game {
   private selfId = 0;
   private keys = new Set<string>();
   private lastKeyDir = "";
+  /** When a held direction key last came up (letting go of a diagonal, see keyboardMove). */
+  private keyUpAt = -Infinity;
   private lastKeySend = 0;
   /** Walks we've predicted and sent, oldest first, awaiting the server's echo. */
   private sentMoves: { x: number; y: number; at: number }[] = [];
@@ -420,6 +456,8 @@ export class Game {
   private bowling: BowlingPanel | null = null;
   /** The gladiator arena out in the park. */
   private arena: ArenaShow | null = null;
+  /** Paintball at the Splat Yard. */
+  private paintball: PaintballShow | null = null;
   /** Shoes from the alley's counter (just for fun: the shoe man remembers). */
   private rentedShoes = false;
   /** When we last reminded a bowler they can't walk off mid-game. */
@@ -434,6 +472,8 @@ export class Game {
   private richToast: { item: number; text: string; until: number } | null = null;
   /** The lucky crate sitting somewhere in the park, if any. */
   private lucky: LuckyCrate;
+  /** The Market fountain's running water, where the map has one. */
+  private fountain: FountainFx | null = null;
   /** Rare fish flopping on the bank, to be hit; and where each angler's line went in. */
   private flops: FlopShows;
   /** Glimmer lures in the water. */
@@ -443,6 +483,12 @@ export class Game {
   private castAt = new Map<number, TileXY>();
   /** The fisherman on the pier, who buys your catch. */
   private fisherman: FishermanPanel | null = null;
+  /** Fisherman Franci on his dock by the little pond. */
+  private francy: Francy | null = null;
+  /** The stones round Franci's pond, and its frogs. */
+  private pond: PondFx | null = null;
+  /** Which fisherman the shop was opened from (they answer when you buy or sell). */
+  private shopFrom: "pier" | "franci" = "pier";
   private prizes: PrizePanel | null = null;
   /** The Dance Off machine: its number, the light-up floor and the scoreboard over it. */
   private dance: { cab: number; floor: MapObject; lights: Graphics; board: Text } | null = null;
@@ -451,6 +497,10 @@ export class Game {
   /** A building we're walking to the door of, to go in once we get there. */
   /** Walking up to a door, to go through it (into `club`'s room, for a clubhouse). */
   private entering: { door: TileXY; zone: string; club?: string; arrive?: string } | null = null;
+  /** Walking to the way out (the leave button): the exit, and where we stand to use it. */
+  private leaving: { exit: MapObject; spot: TileXY } | null = null;
+  /** Where the last tap on the world landed, in world pixels (for things that need a precise hit). */
+  private lastTapWorld: { x: number; y: number } | null = null;
   /** When your own wooziness wears off. */
   private soberTimer = 0;
   private grove: Grove | null = null;
@@ -493,6 +543,8 @@ export class Game {
     this.scene.world.visible = false;
     this.waterMap = waterMapOf(map);
     ui.minimap.setMap(map);
+    // Inside somewhere with a way out: the leave button in the corner.
+    ui.hud.setExit(map.objects.some((o) => o.kind.endsWith("_exit")) ? "Leave" : null);
     this.fairyRing = spot(map, "fairy_ring");
     this.props = new Props(this.scene, map, ui.eco);
     // Your own home, or your club's room (decorated together, ADR 0014 C2).
@@ -506,7 +558,7 @@ export class Game {
     // Indoors (the mall, the bar, the arcade, the library): the lights are
     // on, no weather, no birds, no wheels, no sprinting; the arcade and the
     // bowling alley are lit by neon.
-    const indoors = zoneId === "mall" || zoneId === "bar" || zoneId === "arcade" || zoneId.startsWith("library") || zoneId.startsWith("club") || zoneId === "bowling" || zoneId === "concert_hall" || zoneId === "casino" || zoneId === "museum";
+    const indoors = zoneId === "mall" || zoneId === "bar" || zoneId === "arcade" || zoneId.startsWith("library") || zoneId.startsWith("club") || zoneId === "bowling" || zoneId === "concert_hall" || zoneId === "casino" || zoneId === "museum" || zoneId === "paintball";
     this.ambient = new Ambient(this.scene, map, indoors);
     this.daynight = new DayNight(app, this.scene, map, indoors, zoneId === "arcade" || zoneId === "bowling");
     this.milestones = new Milestones(this.scene, map, (x, y, s) => this.daynight.addLight(x, y, s), app.stage);
@@ -520,8 +572,10 @@ export class Game {
     this.weather = new Weather(app, this.scene, map, indoors);
     this.catches = new CatchShows(this.scene);
     this.lucky = new LuckyCrate(this.scene);
+    const fountain = map.objects.find((o) => o.kind === "fountain");
+    if (fountain) this.fountain = new FountainFx(this.scene, fountain);
     this.flops = new FlopShows(this.scene);
-    this.lures = new LureShows(this.scene, map);
+    this.lures = new LureShows(this.scene, map, (x, y) => this.daynight.addGlow(x, y, 3.4, 2.9, 0x5ff0ff, 0.55));
     this.laneBalls = new LaneBalls(this.scene);
     this.critters = new Critters(app, this.scene, map);
     if (zoneId === "city") {
@@ -567,18 +621,41 @@ export class Game {
     }
     // In through your own front door: a pet out with you is home.
     if (zoneId === "home" && place.owner === ui.social.selfId && ui.pets.mine?.out) void this.petLife.bringHome().catch(() => {});
+    // Fisherman Franci, fishing off his dock on the little pond by the Apartments
+    // (his catches leap out of the water to him, as yours do).
+    const francySpot = map.objects.find((o) => o.kind === "francy");
+    if (francySpot) {
+      this.francy = new Francy(francySpot, this.scene, labels, this.props, (from, head) => {
+        const pool = ui.eco.ofKind("fish", "junk").filter((i) => (i.rarity ?? 0) <= 2);
+        const it = pool[Math.floor(Math.random() * pool.length)];
+        if (!it) return null;
+        this.catches.start(from, head, it.key, it.name, it.rarity ?? 0, it.kind);
+        return it;
+      });
+      const pond = new PondFx(
+        this.scene,
+        map,
+        francySpot,
+        () => this.self?.pos ?? null,
+        () => [...this.avatars.values()].map((a) => a.pos),
+      );
+      if (pond.active) this.pond = pond;
+    }
     // The fisherman stands still on his spot (a one-tile "counter" just below it).
     const fisher = map.objects.find((o) => o.kind === "fisherman");
-    if (fisher) {
-      this.clerk = new Clerk(map, { ...fisher, x: fisher.x - 1, y: fisher.y + 1, w: 3, h: 1 }, this.scene, labels, FISHERMAN);
+    if (fisher) this.clerk = new Clerk(map, { ...fisher, x: fisher.x - 1, y: fisher.y + 1, w: 3, h: 1 }, this.scene, labels, FISHERMAN);
+    // Either fisherman buys your catch and sells the rod and lures (whoever
+    // you asked does the talking).
+    if (fisher || francySpot) {
+      const say = (text: string) => (this.shopFrom === "franci" ? this.francy?.say(text) : this.clerk?.say(text));
       this.fisherman = new FishermanPanel(ui.eco, (coins, best) => {
-        this.clerk?.say(coins >= 8 ? `Now that's a catch! ${coins} coins for you.` : `${coins} coins, as promised. Thanks!`);
+        say(coins >= 8 ? `Now that's a catch! ${coins} coins for you.` : `${coins} coins, as promised. Thanks!`);
         this.hud.toast(`🎣 Sold to the fisherman: +${coins} coins (best: ${best.name})`, 3500);
       }, () => {
-        this.clerk?.say("She's a beauty. Fish'll practically jump onto that hook!");
+        say("She's a beauty. Fish'll practically jump onto that hook!");
         this.hud.toast("🎣 You bought the Angler's Rod! Fish bite sooner and you get an extra swing.", 4500);
       }, () => {
-        this.clerk?.say("Toss that in where you fish. They can't resist the shine!");
+        say("Toss that in where you fish. They can't resist the shine!");
         this.hud.toast("✨ A Glimmer Lure! Tap the water and choose to throw it in.", 4500);
       });
     }
@@ -672,6 +749,19 @@ export class Game {
         (m) => this.socket?.send(m),
       );
     }
+    if (map.objects.some((o) => o.kind === "pb_field")) {
+      this.paintball = new PaintballShow(
+        this.scene,
+        map,
+        labels,
+        app.canvas,
+        () => this.selfId,
+        (id) => this.avatars.get(id),
+        (id) => this.avatars.get(id)?.info.name ?? "someone",
+        () => this.socket?.clock.now() ?? 0,
+        (m) => this.socket?.send(m),
+      );
+    }
     const shoes = map.objects.find((o) => o.kind === "shoe_counter");
     if (shoes) this.clerk = new Clerk(map, shoes, this.scene, labels, SHOE_GUY);
     if (map.objects.some((o) => o.kind === "pool_table")) {
@@ -696,6 +786,18 @@ export class Game {
       });
     // Founders: trees in the grove and a leaf by their names.
     this.disposers.push(ui.welcome.onChange(() => this.applyFounders()));
+    // Money in, from anywhere (a sale, a prize, a win): a coin over your head
+    // and a cha-ching. (Not for the balance first arriving as the game loads.)
+    let lastCoins = ui.eco.coins;
+    let coinsKnown = ui.eco.items.size > 0;
+    this.disposers.push(
+      ui.eco.onChange(() => {
+        const now = ui.eco.coins;
+        if (coinsKnown && now > lastCoins) this.coinPop(now - lastCoins);
+        lastCoins = now;
+        coinsKnown ||= ui.eco.items.size > 0;
+      }),
+    );
     this.applyFounders();
     void ui.welcome.loadFounders().catch(() => {});
     // Club crests by names (asked afresh in each place).
@@ -767,6 +869,32 @@ export class Game {
   get position(): TileXY | null {
     const a = this.self;
     return a ? { x: Math.round(a.pos.x), y: Math.round(a.pos.y) } : null;
+  }
+
+  /** Which way the player last faced, walking (radians, 0 = east; south to start). */
+  private headingAngle = Math.PI / 2;
+
+  /** Which way the player faces (radians): the way they're walking, or last walked. */
+  get heading(): number {
+    const m = this.self?.currentMotion;
+    const now = this.socket?.clock.now();
+    const h = m && now !== undefined ? headingAt(m, now) : null;
+    if (h) this.headingAngle = Math.atan2(h.y, h.x);
+    return this.headingAngle;
+  }
+
+  /** Where everyone else in view is (tiles), for the maps. */
+  get others(): TileXY[] {
+    return [...this.avatars.values()].filter((a) => a.info.id !== this.selfId && a.info.id > 0).map((a) => a.pos);
+  }
+
+  /** The rest of the player's walk (where they are, then each turn ahead), or null standing still. */
+  get route(): TileXY[] | null {
+    const m = this.self?.currentMotion;
+    const now = this.socket?.clock.now();
+    if (!m || now === undefined) return null;
+    const r = routeAhead(m, now);
+    return r.length >= 2 ? r : null;
   }
 
   private get self(): Avatar | undefined {
@@ -1196,6 +1324,47 @@ export class Game {
   }
 
   /** Tapping the clerk: a word of help, and the racks open. */
+  /** A gold coin spinning up over your head, "+N coins", and a cha-ching. */
+  private coinPop(amount: number) {
+    sfx.cash(1, amount);
+    const self = this.self;
+    if (!self) return;
+    const at = this.scene.tileToScreen(self.pos.x + 0.5, self.pos.y);
+    const el = document.createElement("div");
+    el.className = "coin-pop";
+    el.style.left = `${Math.round(at.x)}px`;
+    el.style.top = `${Math.round(at.y - 52)}px`; // above the name tag
+    const coin = document.createElement("img");
+    coin.src = coinIcon();
+    coin.alt = "";
+    const label = document.createElement("span");
+    label.textContent = `+${amount.toLocaleString()}`;
+    el.append(coin, label);
+    document.body.appendChild(el);
+    window.setTimeout(() => el.remove(), 1700);
+  }
+
+  /** Tapping Fisherman Franci: a word from him, and his shop (sell fish, buy the rod and lures). */
+  private tapFrancy(sx: number, sy: number): boolean {
+    if (!this.francy) return false;
+    const x = (sx - this.scene.world.position.x) / this.scene.scale / TILE;
+    const y = (sy - this.scene.world.position.y) / this.scene.scale / TILE;
+    if (!this.francy.hit(x, y)) return false;
+    this.francy.chat();
+    const at = this.francy.tile;
+    const self = this.self;
+    if (self && cheb(self.destination, at) > 2) {
+      const near = nearestWalkable(this.scene.map, at.x + 1, at.y, 2);
+      if (near) this.moveTo(near, true);
+    }
+    if (this.fisherman) {
+      this.shopFrom = "franci";
+      void this.ui.eco.loadAlbum().catch(() => {});
+      this.near(this.fisherman, at, 5).show();
+    }
+    return true;
+  }
+
   private tapClerk(sx: number, sy: number): boolean {
     if (!this.clerk) return false;
     const x = (sx - this.scene.world.position.x) / this.scene.scale / TILE;
@@ -1316,6 +1485,7 @@ export class Game {
 
   /** Walk up to the fisherman and see what he'll give for your catch. */
   private openFisherman(spot: MapObject) {
+    this.shopFrom = "pier";
     const self = this.self;
     const at = { x: spot.x, y: spot.y };
     if (self && cheb(self.destination, at) > 2) {
@@ -1388,6 +1558,35 @@ export class Game {
     if (!spot) return;
     this.moveTo(spot, true);
     this.entering = { door: spot, zone, arrive };
+  }
+
+  /** The leave button: walk up to the way out, and out we go on arrival. */
+  leaveBuilding() {
+    const self = this.self;
+    const exit = this.scene.map.objects.find((o) => o.kind.endsWith("_exit"));
+    if (!self || !exit) return;
+    const door = { x: exit.x + Math.floor(exit.w / 2), y: exit.y };
+    const spot = nearestWalkable(this.scene.map, door.x, door.y - 1, 3) ?? nearestWalkable(this.scene.map, door.x, door.y, 3);
+    if (!spot) return void this.tapCollect(door);
+    if (this.following !== null) this.stopFollowing(true);
+    this.leaving = { exit, spot };
+    this.hud.toast("🚪 Heading for the door…", 1500);
+    if (cheb(self.destination, spot) === 0 && !self.moving) return;
+    this.moveTo(spot, true);
+  }
+
+  /** Out through the door once we've walked up to it (the leave button). */
+  private checkLeaving() {
+    const l = this.leaving;
+    const self = this.self;
+    if (!l || !self) return;
+    if (self.destination.x !== l.spot.x || self.destination.y !== l.spot.y) {
+      this.leaving = null; // walked somewhere else instead
+      return;
+    }
+    if (self.moving) return;
+    this.leaving = null;
+    this.tapCollect({ x: l.exit.x + Math.floor(l.exit.w / 2), y: l.exit.y });
   }
 
   /** Goes in once we've walked up to the door we're entering. */
@@ -2046,11 +2245,26 @@ export class Game {
           const end = m.path[m.path.length - 1];
           // (Same speed, and both breaking into a sprint or neither: a sprint's start
           // can differ by a few ms without anyone seeing it.)
-          const samePace = a.currentMotion?.speedX10 === m.speedX10 && !(a.currentMotion?.sprintIn ?? 0) === !m.sprintIn;
+          // Already there and standing (we often arrive before the echo does):
+          // there's no pace to differ, and taking it would pull us back a step.
+          const cur = a.currentMotion;
+          const samePace = !cur || (cur.speedX10 === m.speedX10 && !(cur.sprintIn ?? 0) === !m.sprintIn);
           const i = this.sentMoves.findIndex((s) => s.x === end.x && s.y === end.y);
           if (i >= 0) {
+            // An echo of a walk we've since replaced (a newer one of ours is
+            // already on its way) is old news, whatever its pace.
+            const stale = i < this.sentMoves.length - 1;
             this.sentMoves.splice(0, i + 1);
-            if (samePace) break;
+            if (samePace || stale) break;
+            // Our walk, at another pace (breaking into a sprint, on wheels):
+            // we're drawn a little ahead of the server (we set off the moment
+            // the key went down), so keep our route and spot and just change
+            // pace from here, rather than jumping back to where it has us.
+            const re = cur ? retimed(cur, now, m.speedX10, m.sprintIn) : null;
+            if (re) {
+              a.setMotion(re, now);
+              break;
+            }
           }
           const dest = a.destination;
           if (end.x === dest.x && end.y === dest.y && samePace) break;
@@ -2084,7 +2298,12 @@ export class Game {
       case "StateChange": {
         const a = this.avatars.get(m.id);
         if (!a) break;
-        a.setState(m.state, { x: m.x, y: m.y });
+        // Up from a seat or the water to walk somewhere: we set off already
+        // (the walk is ours, in flight), so the posture changes but we don't
+        // snap back to where we stood: that left us frozen here while the
+        // server walked us on, and jumping there later.
+        const walkingOff = m.id === this.selfId && m.state === 0 && (a.moving || this.sentMoves.length > 0);
+        a.setState(m.state, { x: m.x, y: m.y }, walkingOff);
         // Walking off mid-cast ends fishing without a FishEvent.
         if (m.state !== FISHING) this.props.reelIn(m.id);
         if (m.id === this.selfId) this.onSelfState(m.state, { x: m.x, y: m.y });
@@ -2265,6 +2484,15 @@ export class Game {
       case "ArenaState":
         this.arena?.onState(m);
         break;
+      case "PbState":
+        this.paintball?.onState(m);
+        break;
+      case "PbShot":
+        this.paintball?.onShot(m);
+        break;
+      case "PbEvent":
+        this.paintball?.onEvent(m);
+        break;
       case "ArenaEvent":
         this.arena?.onEvent(m);
         break;
@@ -2410,6 +2638,7 @@ export class Game {
       return;
     }
     // Mid-game at a bowling lane (or mid-fight in the arena) you stay put until you leave it.
+    if (this.paintball?.capturing) return;
     if (this.bowlingNow() || this.arena?.players.includes(this.selfId)) {
       const wall = performance.now();
       if (wall - this.bowlNagAt > 2500) {
@@ -2448,15 +2677,18 @@ export class Game {
       return;
     }
     if (sp) full.unshift(sp.prev);
-    // On wheels where they apply; on foot outdoors, a sprint if asked for
-    // (the server works it out the same way).
+    // On wheels where they apply; on foot (indoors too), a sprint if asked
+    // for (the server works it out the same way).
     const ridden = this.predictSpeed(full);
     const pace =
-      ridden !== WALK_SPEED_X10
-        ? { speedX10: ridden, sprintIn: 0 }
-        : this.sprint && this.zoneId === "city"
-          ? sprintProfile(sp ? cur : null, t0, now)
-          : { speedX10: WALK_SPEED_X10, sprintIn: 0 };
+      ridden === SKATE_SPEED_X10
+        ? // A skate keeps the speed it has built up (as the server works it out).
+          { speedX10: ridden, sprintIn: sp ? skateRampAt(cur, t0) : 0 }
+        : ridden !== WALK_SPEED_X10
+          ? { speedX10: ridden, sprintIn: 0 }
+          : this.sprint
+            ? sprintProfile(sp ? cur : null, t0, now)
+            : { speedX10: WALK_SPEED_X10, sprintIn: 0 };
     if (full.length >= 2) self.setMotion({ path: compress(full), t0, ...pace }, now);
     const wall = performance.now();
     this.sentMoves = this.sentMoves.filter((s) => wall - s.at < 3000);
@@ -2562,7 +2794,8 @@ export class Game {
       return Math.hypot(a.x - b.x, a.y - b.y);
     };
     const touchDown = (e: PointerEvent) => {
-      if (e.pointerType !== "touch") return;
+      // (On the paintball field the thumbs are on the sticks: no pinching.)
+      if (e.pointerType !== "touch" || this.paintball?.capturing) return;
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size === 2) pinch = { dist: Math.max(20, spread()), from: this.scene.zoomLevel };
     };
@@ -2615,11 +2848,16 @@ export class Game {
     const tap = (e: FederatedPointerEvent) => {
       // A pinch isn't a tap.
       if (touches.size > 1 || performance.now() - pinchedAt < 350) return;
+      // Out on the paintball field: the mouse aims and shoots, it doesn't walk.
+      if (this.paintball?.capturing) return;
+      // A menu or shop open: a tap on the world closes it, and that's all.
+      if (Panel.dismissOnWorldTap()) return;
       // Tapping anywhere else puts the lure back in the bag: its menu and highlight go.
       this.closeLureMenu();
       // Your fish flopping on the bank: hit it.
       const wx = (e.global.x - this.scene.world.position.x) / this.scene.scale;
       const wy = (e.global.y - this.scene.world.position.y) / this.scene.scale;
+      this.lastTapWorld = { x: wx, y: wy };
       if (this.flops.hits(this.selfId, wx, wy)) {
         this.socket?.send({ t: "FishHit" });
         return;
@@ -2635,6 +2873,7 @@ export class Game {
       if (this.tapCat(e.global.x, e.global.y)) return;
       if (this.tapCaretaker(e.global.x, e.global.y)) return;
       if (this.tapClerk(e.global.x, e.global.y)) return;
+      if (this.tapFrancy(e.global.x, e.global.y)) return;
       if (this.tapAvatar(e.global.x, e.global.y)) return;
       // In a rowboat, a tap is where to row (rowTo finds the water by it).
       if (this.boat) return this.moveTo(t, true);
@@ -2650,6 +2889,17 @@ export class Game {
       // Someone already there: stand beside them instead, on the free side nearest us.
       const spot = nearestWalkable(this.scene.map, t.x, t.y, 2);
       const target = spot && this.occupied(spot) ? (this.besideOf(spot) ?? spot) : spot;
+      // Fishing: with a fish on the line, the ground isn't what you meant; a tap
+      // right beside you is a slip; further off, you mean to go: rod away, off
+      // you walk (never staying put now to jump there later).
+      const me = this.self;
+      if (me && me.state === FISHING && target) {
+        if (this.ui.reel.active || this.flops.has(this.selfId)) return;
+        if (cheb(me.destination, target) <= 1) return;
+        this.ui.reel.stop();
+        me.setState(0, me.destination, true);
+        this.props.reelIn(this.selfId);
+      }
       // Tapping twice, or tile after tile in quick succession: sprint there.
       const wall = performance.now();
       if (wall - this.lastTapAt < SPRINT_ASK_MS) this.askSprint();
@@ -2691,7 +2941,9 @@ export class Game {
         this.keys.add(e.code);
       }
     };
-    const up = (e: KeyboardEvent) => this.keys.delete(e.code);
+    const up = (e: KeyboardEvent) => {
+      if (this.keys.delete(e.code)) this.keyUpAt = performance.now();
+    };
     const blur = () => this.keys.clear();
     const resize = () => this.scene.resize();
     // The mouse wheel zooms (a trackpad's many small scrolls add up to a step).
@@ -2806,6 +3058,24 @@ export class Game {
   // ---- collecting: fishing, gardens, market, homes ---------------------------
 
   /** Handles taps on M3 things; returns true if the tap was used. */
+  /**
+   * Whether the last tap landed on the fountain itself (its basin or the
+   * pedestal, as drawn), not just near it: it opens a panel, so a tap beside
+   * it walks you instead.
+   */
+  private onFountain(o: MapObject): boolean {
+    const p = this.lastTapWorld;
+    if (!p) return false;
+    const cx = (o.x + o.w / 2) * TILE;
+    // The basin, as art.ts draws it (rim and wall), and the pedestal above.
+    const cy = o.y * TILE + (o.h * TILE) / 2 - 4 + 3;
+    const rx = (o.w * TILE) / 2 - 4;
+    const ry = rx * 0.72 + 5;
+    const inBasin = ((p.x - cx) / rx) ** 2 + ((p.y - cy) / ry) ** 2 <= 1;
+    const inPedestal = Math.abs(p.x - cx) < 13 && p.y > cy - 66 && p.y <= cy;
+    return inBasin || inPedestal;
+  }
+
   private tapCollect(t: TileXY): boolean {
     const map = this.scene.map;
     const self = this.self;
@@ -2840,7 +3110,7 @@ export class Game {
     }
     // Map objects: the drawn art reaches a couple of tiles above the footprint.
     // (Not the arena's ring: you walk about inside it; its sign is what you tap.)
-    const obj = map.objects.find((o) => !MARKERS.has(o.kind) && o.kind !== "arena" && t.x >= o.x && t.x < o.x + o.w && t.y >= o.y - (LOW_REACH.has(o.kind) ? 1 : 2) && t.y < o.y + o.h);
+    const obj = map.objects.find((o) => !MARKERS.has(o.kind) && o.kind !== "arena" && t.x >= o.x && t.x < o.x + o.w && t.y >= o.y - (LOW_REACH.has(o.kind) ? 1 : 2) && t.y < o.y + o.h && (o.kind !== "fountain" || this.onFountain(o)));
     if (obj?.kind === "market_cart") {
       const spot = this.furniture.approach({ x: obj.x, y: obj.y + 1 }, self.destination) ?? { x: obj.x, y: obj.y + 1 };
       if (cheb(self.destination, { x: obj.x, y: obj.y }) > 3) this.moveTo(spot, true);
@@ -2922,6 +3192,23 @@ export class Game {
         if (spot) this.moveTo(spot, true);
       }
       this.arena.openSign();
+      return true;
+    }
+    // The Splat Yard: in to the paintball; out again (not mid-match).
+    if (obj?.kind === "paintball_hall") {
+      this.enter({ x: obj.x + Math.floor(obj.w / 2), y: obj.y + obj.h }, "paintball");
+      return true;
+    }
+    if (obj?.kind === "pb_exit") {
+      if (this.paintball?.capturing) {
+        this.hud.toast("🎯 You're mid-match! Leave it from the lobby first.", 3000);
+        return true;
+      }
+      this.goTo("city");
+      return true;
+    }
+    if (obj?.kind === "pb_desk" || obj?.kind === "pb_field") {
+      this.hud.toast("🎯 Pick a team in the Splat Yard panel, then hit Play!", 2500);
       return true;
     }
     // The bowling alley: in through the doors; inside, the lanes and the shoe counter.
@@ -3507,8 +3794,19 @@ export class Game {
       // finishing the look-ahead segment.
       if (self && this.lastKeyDir && this.socket) {
         const m = self.currentMotion;
-        const sp = m ? splice(m, this.socket.clock.now()) : null;
-        if (sp) this.moveTo(sp.next, false);
+        const now = this.socket.clock.now();
+        const sp = m ? splice(m, now) : null;
+        if (sp && m) {
+          // On a skateboard you can't stop dead: you glide on the way you were
+          // going, further the faster you were (braking all the way).
+          let to = sp.next;
+          if (m.speedX10 === SKATE_SPEED_X10) {
+            const [gx, gy] = this.lastKeyDir.split(",").map(Number);
+            const glide = Math.round(glideTiles(speedAt(m, now)));
+            if (glide > 0) to = stepTarget(this.scene.map, sp.next, gx, gy, glide) ?? sp.next;
+          }
+          this.moveTo(to, false);
+        }
         this.sprint = false;
       }
       this.lastKeyDir = "";
@@ -3526,12 +3824,23 @@ export class Game {
     const dirKey = `${dx},${dy}`;
     const dest = self.destination;
     const remaining = Math.hypot(dest.x - self.pos.x, dest.y - self.pos.y);
-    // On wheels we cover ground faster, so plan further ahead.
-    const steps = self.info.vehicle ? KEY_STEPS * 2 : KEY_STEPS;
+    // On wheels we cover ground faster, so plan further ahead; on a
+    // skateboard far enough that the stretch never runs short (it would
+    // start braking for its end).
+    const curM = self.currentMotion;
+    const skating = curM?.speedX10 === SKATE_SPEED_X10;
+    const steps = skating ? SKATE_KEY_STEPS : self.info.vehicle ? KEY_STEPS * 2 : KEY_STEPS;
+    const brakeRoom = skating && curM && this.socket ? glideTiles(speedAt(curM, this.socket.clock.now())) + 6 : 0;
     // Turning answers at once; going straight, the next stretch is planned
     // well before this one runs out, so the walk never eases off.
     const turned = dirKey !== this.lastKeyDir;
-    const due = turned || remaining < steps / 2;
+    // Letting go of a diagonal: the two keys never come up at quite the same
+    // moment, and the one still held for those few milliseconds isn't a turn
+    // (it made the walk jerk aside and back). Give the other key a moment.
+    const [ldx, ldy] = this.lastKeyDir.split(",").map(Number);
+    const easing = turned && ldx !== 0 && ldy !== 0 && (dx === 0 || dy === 0) && (dx === ldx || dy === ldy);
+    if (easing && wallNow - this.keyUpAt < KEY_RELEASE_GRACE_MS) return;
+    const due = turned || remaining < Math.max(steps / 2, brakeRoom);
     if (!due || (!turned && wallNow - this.lastKeySend < KEY_RESEND_MS)) return;
     // Plan from exactly where the new stretch will start (the tile we're
     // stepping into, as moveTo splices it), so the walk goes dead straight
@@ -3546,6 +3855,9 @@ export class Game {
       stepTarget(ground, from, dx, dy, steps) ??
       (dx && dy ? stepTarget(ground, from, dx, 0, steps) ?? stepTarget(ground, from, 0, dy, steps) : null);
     if (!target) return;
+    // Already headed there (up against something, the stretch can't reach
+    // further): asking again would only re-plan the same walk and nudge it.
+    if (!turned && target.x === self.destination.x && target.y === self.destination.y) return;
     this.lastKeyDir = dirKey;
     this.lastKeySend = wallNow;
     this.moveTo(target, false);
@@ -3559,14 +3871,15 @@ export class Game {
     this.keyboardMove(wallNow);
     // The arena first: it places the fighters, so they're drawn (and the camera follows) where their gear is.
     this.arena?.update(serverNow, wallNow);
+    this.paintball?.update(serverNow, wallNow);
 
     // Move the camera first so every label is placed against this frame's view.
     const self = this.self;
     if (self) {
       self.update(serverNow, wallNow);
-      this.scene.follow(self.pos);
+      this.scene.follow(this.paintball ? this.paintball.camera(self.pos) : self.pos);
       this.scene.world.visible = true;
-      this.ui.minimap.update(self.pos, self.moving ? self.destination : null, wallNow);
+      this.ui.minimap.update(self.pos, self.moving ? this.route : null, wallNow, this.heading, this.others);
     }
     for (const a of this.avatars.values()) a.update(serverNow, wallNow);
 
@@ -3583,7 +3896,7 @@ export class Game {
       this.hud.setNearby(this.avatars.size);
     }
     this.scene.update();
-    this.props.update(wallNow, (id) => this.avatars.get(id)?.rodTip ?? null);
+    this.props.update(wallNow, (id) => (id === FRANCY_ID ? this.francy?.rodTip : this.avatars.get(id)?.rodTip) ?? null);
     this.ambient.update(this.app.ticker.deltaMS, wallNow);
     this.daynight.update();
     this.milestones.update(wallNow, this.daynight.dark);
@@ -3608,12 +3921,14 @@ export class Game {
     }
     this.clerk?.update(Date.now(), wallNow);
     this.rouletteFx?.update();
+    this.francy?.update(Date.now(), wallNow);
     if (this.libraryRoom) {
       this.libraryRoom.update(performance.now());
       this.libraryArrived();
     }
     this.danceFloor(serverNow);
     this.checkEntering();
+    this.checkLeaving();
     this.sky.update(wallNow, this.daynight.dark > 0.5);
     if (this.boat && wallNow > this.boatChipAt) {
       this.boatChipAt = wallNow + 5000;
@@ -3652,6 +3967,8 @@ export class Game {
     }
     this.lures.update(serverNow, wallNow);
     this.lucky.update(serverNow, wallNow);
+    this.fountain?.update(wallNow);
+    this.pond?.update(performance.now());
     this.laneBalls.update(wallNow);
     if (wallNow > this.playingCheckAt) {
       this.playingCheckAt = wallNow + 300;
@@ -3697,12 +4014,17 @@ export class Game {
     this.pool?.destroy();
     this.bowling?.destroy();
     this.arena?.destroy();
+    this.paintball?.destroy();
     this.arcade?.destroy();
     this.fisherman?.destroy();
+    this.francy?.destroy();
+    this.pond?.destroy();
+    this.pond = null;
     this.catches.destroy();
     this.flops.destroy();
     this.lures.destroy();
     this.lucky.destroy();
+    this.fountain?.destroy();
     this.laneBalls.destroy();
     this.danceBot?.destroy();
     this.prizes?.destroy();
@@ -3721,6 +4043,7 @@ export class Game {
     this.ui.reel.stop();
     this.ui.place.hide();
     this.ui.minimap.setMap(null);
+    this.ui.hud.setExit(null);
     this.app.stage.removeChild(this.scene.world);
     this.scene.destroy();
   }

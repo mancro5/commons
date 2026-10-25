@@ -80,11 +80,12 @@ const PUBLIC_DOORS: &[&str] = &[
     "casino",
     "museum",
     "gallery",
+    "paintball",
 ];
 
 /// Zones served unless `COMMONS_ZONES` says otherwise: the city, homes, the
 /// public buildings, and the Library's hall and wings (ADR 0012).
-const ZONES: &str = "city,home,mall,bar,arcade,library,library_children,library_lit,library_world,library_history,library_society,library_science,library_arts,library_reference,club_hall,clubroom,bowling,concert_hall,casino,museum";
+const ZONES: &str = "city,home,mall,bar,arcade,library,library_children,library_lit,library_world,library_history,library_society,library_science,library_arts,library_reference,club_hall,clubroom,bowling,concert_hall,casino,museum,paintball";
 
 /// A metro station, `metro_<key>` (ADR 0016): you come up its stairs.
 fn is_station(place: &str) -> bool {

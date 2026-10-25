@@ -14,12 +14,13 @@ pub mod mall;
 pub mod map;
 pub mod motion;
 pub mod nature;
+pub mod paintball;
 pub mod path;
 pub mod pool;
 pub mod vehicles;
 
 pub use map::{Grid, MapFile, StreetGrid};
-pub use motion::{Motion, SPRINT_SPEED_X10, WALK_SPEED_X10};
+pub use motion::{Motion, SKATE_SPEED_X10, SPRINT_SPEED_X10, WALK_SPEED_X10};
 pub use path::{compress, find_path, route};
 
 pub type TilePos = (u16, u16);

@@ -60,6 +60,8 @@ interface Lure {
   nextLeap: number;
   leaps: Leap[];
   rings: Ring[];
+  /** Its glow after dark. */
+  glow: Sprite | null;
 }
 
 /** Where a lure would go: its circle, fading in while you choose, and out after. */
@@ -92,6 +94,8 @@ export class LureShows {
   constructor(
     private scene: Scene,
     private map: ZoneMap,
+    /** An aqua glow for the night (as the fountain's), round a lure. */
+    private nightGlow: (x: number, y: number) => Sprite | null = () => null,
   ) {}
 
   /** A lure at `at`, until instance time `ends`. */
@@ -116,7 +120,8 @@ export class LureShows {
     });
     top.addChild(timer);
     this.scene.world.addChild(top);
-    this.lures.set(key, { water, top, timer, shown: "", glimmer, tiles, centre, ends, nextLeap: 0, leaps: [], rings: [] });
+    const glow = this.nightGlow(centre.x, centre.y);
+    this.lures.set(key, { water, top, timer, shown: "", glimmer, tiles, centre, ends, nextLeap: 0, leaps: [], rings: [], glow });
   }
 
   /** The water tiles of a lure's circle round `at`. */
@@ -297,6 +302,8 @@ export class LureShows {
   private paintWater(blocks: Map<string, Block>, wallNow: number) {
     for (const l of this.lures.values()) l.water.clear();
     const breathe = 0.5 + 0.5 * Math.sin(wallNow / 600);
+    // Its glow in the dark breathes with the water.
+    for (const l of this.lures.values()) if (l.glow) l.glow.alpha = 0.5 + 0.16 * breathe;
     const spin = wallNow / 1400;
     for (const b of blocks.values()) {
       const g = b.l.water;
@@ -326,6 +333,7 @@ export class LureShows {
     if (!l) return;
     l.water.destroy();
     l.top.destroy({ children: true });
+    l.glow?.destroy();
     this.lures.delete(key);
   }
 

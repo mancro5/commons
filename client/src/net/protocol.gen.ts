@@ -2,7 +2,7 @@
 // Do not edit by hand.
 /* eslint-disable */
 
-export const PROTOCOL_VERSION = 26;
+export const PROTOCOL_VERSION = 27;
 export const CELL_TILES = 16;
 
 export class Writer {
@@ -140,6 +140,88 @@ export function decArenaFighter(r: Reader): ArenaFighter {
   };
 }
 
+export interface PbPlayer {
+  id: number;
+  team: number;
+  x: number;
+  y: number;
+  aim: number;
+  hp: number;
+  ammo: number;
+  flags: number;
+  power: number;
+  powerMs: number;
+  respawnMs: number;
+  dashMs: number;
+  reloadMs: number;
+  kills: number;
+  deaths: number;
+  streak: number;
+  fix: number;
+}
+
+export function encPbPlayer(w: Writer, v: PbPlayer) {
+  w.u32(v.id);
+  w.u8(v.team);
+  w.u16(v.x);
+  w.u16(v.y);
+  w.u16(v.aim);
+  w.u8(v.hp);
+  w.u8(v.ammo);
+  w.u8(v.flags);
+  w.u8(v.power);
+  w.u16(v.powerMs);
+  w.u16(v.respawnMs);
+  w.u16(v.dashMs);
+  w.u16(v.reloadMs);
+  w.u8(v.kills);
+  w.u8(v.deaths);
+  w.u8(v.streak);
+  w.u8(v.fix);
+}
+
+export function decPbPlayer(r: Reader): PbPlayer {
+  return {
+    id: r.u32(),
+    team: r.u8(),
+    x: r.u16(),
+    y: r.u16(),
+    aim: r.u16(),
+    hp: r.u8(),
+    ammo: r.u8(),
+    flags: r.u8(),
+    power: r.u8(),
+    powerMs: r.u16(),
+    respawnMs: r.u16(),
+    dashMs: r.u16(),
+    reloadMs: r.u16(),
+    kills: r.u8(),
+    deaths: r.u8(),
+    streak: r.u8(),
+    fix: r.u8(),
+  };
+}
+
+export interface PbPickup {
+  kind: number;
+  x: number;
+  y: number;
+}
+
+export function encPbPickup(w: Writer, v: PbPickup) {
+  w.u8(v.kind);
+  w.u16(v.x);
+  w.u16(v.y);
+}
+
+export function decPbPickup(r: Reader): PbPickup {
+  return {
+    kind: r.u8(),
+    x: r.u16(),
+    y: r.u16(),
+  };
+}
+
 export interface EntityInfo {
   id: number;
   name: string;
@@ -250,6 +332,13 @@ export type ClientMsg =
   | { t: "ArenaAct"; act: number }
   | { t: "OpenCrate" }
   | { t: "Boat"; op: number }
+  | { t: "PbJoin"; team: number }
+  | { t: "PbLeave" }
+  | { t: "PbStart"; bots: boolean }
+  | { t: "PbMove"; x: number; y: number; aim: number }
+  | { t: "PbFire"; shot: number; x: number; y: number; aim: number }
+  | { t: "PbDash" }
+  | { t: "PbReload" }
   ;
 
 export function encodeClientMsg(m: ClientMsg): Uint8Array {
@@ -455,6 +544,36 @@ export function encodeClientMsg(m: ClientMsg): Uint8Array {
       w.u8(45);
       w.u8(m.op);
       break;
+    case "PbJoin":
+      w.u8(46);
+      w.u8(m.team);
+      break;
+    case "PbLeave":
+      w.u8(47);
+      break;
+    case "PbStart":
+      w.u8(48);
+      w.bool(m.bots);
+      break;
+    case "PbMove":
+      w.u8(49);
+      w.u16(m.x);
+      w.u16(m.y);
+      w.u16(m.aim);
+      break;
+    case "PbFire":
+      w.u8(50);
+      w.u16(m.shot);
+      w.u16(m.x);
+      w.u16(m.y);
+      w.u16(m.aim);
+      break;
+    case "PbDash":
+      w.u8(51);
+      break;
+    case "PbReload":
+      w.u8(52);
+      break;
   }
   return w.finish();
 }
@@ -596,6 +715,27 @@ export function decodeClientMsg(b: Uint8Array): ClientMsg {
     case 45:
       m = { t: "Boat", op: r.u8() };
       break;
+    case 46:
+      m = { t: "PbJoin", team: r.u8() };
+      break;
+    case 47:
+      m = { t: "PbLeave" };
+      break;
+    case 48:
+      m = { t: "PbStart", bots: r.bool() };
+      break;
+    case 49:
+      m = { t: "PbMove", x: r.u16(), y: r.u16(), aim: r.u16() };
+      break;
+    case 50:
+      m = { t: "PbFire", shot: r.u16(), x: r.u16(), y: r.u16(), aim: r.u16() };
+      break;
+    case 51:
+      m = { t: "PbDash" };
+      break;
+    case 52:
+      m = { t: "PbReload" };
+      break;
     default:
       throw new Error(`protocol: unknown ClientMsg tag ${tag}`);
   }
@@ -649,6 +789,9 @@ export type ServerMsg =
   | { t: "LuckyFound"; id: number; x: number; y: number }
   | { t: "LuckyOpened"; coins: number }
   | { t: "BoatState"; captain: number; until: number; seats: number[] }
+  | { t: "PbState"; status: number; now: number; phaseMs: number; blue: number; red: number; winner: number; slots: number[]; players: PbPlayer[]; pickups: PbPickup[] }
+  | { t: "PbShot"; by: number; shot: number; x: number; y: number; aim: number; kind: number }
+  | { t: "PbEvent"; kind: number; a: number; b: number; x: number; y: number; n: number }
   ;
 
 export function encodeServerMsg(m: ServerMsg): Uint8Array {
@@ -962,6 +1105,36 @@ export function encodeServerMsg(m: ServerMsg): Uint8Array {
       w.u32(m.until);
       w.vec(m.seats, (x) => w.u32(x));
       break;
+    case "PbState":
+      w.u8(46);
+      w.u8(m.status);
+      w.u32(m.now);
+      w.u32(m.phaseMs);
+      w.u8(m.blue);
+      w.u8(m.red);
+      w.u8(m.winner);
+      w.vec(m.slots, (x) => w.u32(x));
+      w.vec(m.players, (x) => encPbPlayer(w, x));
+      w.vec(m.pickups, (x) => encPbPickup(w, x));
+      break;
+    case "PbShot":
+      w.u8(47);
+      w.u32(m.by);
+      w.u16(m.shot);
+      w.u16(m.x);
+      w.u16(m.y);
+      w.u16(m.aim);
+      w.u8(m.kind);
+      break;
+    case "PbEvent":
+      w.u8(48);
+      w.u8(m.kind);
+      w.u32(m.a);
+      w.u32(m.b);
+      w.u16(m.x);
+      w.u16(m.y);
+      w.u16(m.n);
+      break;
   }
   return w.finish();
 }
@@ -1105,6 +1278,15 @@ export function decodeServerMsg(b: Uint8Array): ServerMsg {
       break;
     case 45:
       m = { t: "BoatState", captain: r.u32(), until: r.u32(), seats: r.vec(() => r.u32()) };
+      break;
+    case 46:
+      m = { t: "PbState", status: r.u8(), now: r.u32(), phaseMs: r.u32(), blue: r.u8(), red: r.u8(), winner: r.u8(), slots: r.vec(() => r.u32()), players: r.vec(() => decPbPlayer(r)), pickups: r.vec(() => decPbPickup(r)) };
+      break;
+    case 47:
+      m = { t: "PbShot", by: r.u32(), shot: r.u16(), x: r.u16(), y: r.u16(), aim: r.u16(), kind: r.u8() };
+      break;
+    case 48:
+      m = { t: "PbEvent", kind: r.u8(), a: r.u32(), b: r.u32(), x: r.u16(), y: r.u16(), n: r.u16() };
       break;
     default:
       throw new Error(`protocol: unknown ServerMsg tag ${tag}`);

@@ -1837,6 +1837,27 @@ Checked:
 
 Next: step 3, fossils.
 
+## Merge: mancro5/commons "Map update + Quality of life + Spawn + Paintball" (2026-10-25)
+
+- **Paintball:** the fork's Splat Yard goes on the **Cinema block** (east
+  of the Market). The Casino keeps its block, where the fork had put the
+  Splat Yard. The cinema placeholder and its outdoor big screen are gone.
+- **Vehicles:** our faster speeds stay (2.2× to 3.5× walking). The
+  skateboard now uses the fork's push-and-glide pace (`SKATE_SPEED_X10`,
+  82).
+- **Protocol v27:** ours first (`Boat`, `BoatState` at 45), then the fork's
+  paintball messages (client 46–52, server 46–48).
+- **Combined from both sides:**
+  - The fork's rounded block corners and the Market signpost, alongside
+    our forage spots and metro entrances.
+  - Their `FLAT_OBJECTS`, plus the concert stage.
+  - Their minimap and paintball camera, plus our hidden-until-arrived
+    world.
+  - Francy, and the croupier.
+- Maps and `protocol.gen.ts` regenerated. All tests, clippy and the client
+  (94) pass. In the browser: into the Splat Yard and the Casino, with no
+  errors.
+
 ## Next: M5 · Crowds
 
 Instancing, orchestrator routing by population, crowd LOD, slow mode,

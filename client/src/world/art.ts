@@ -3,6 +3,7 @@
 // textures; replaced by real atlases from assets/ when they exist.
 
 import { FACADES, POSTBOX } from "./goods";
+import { BUILDINGS, drawFacade, lanternSpots } from "./facade";
 import { Texture } from "pixi.js";
 import type { MapObject } from "./map";
 import { disc, oval, polygon } from "./pixeldraw";
@@ -16,6 +17,7 @@ import { metroObject } from "./metroart";
 import { casinoObject } from "./casinoart";
 import { boatObject } from "./boatart";
 import { museumObject } from "./museumart";
+import { paintballObject, splat as paintSplat } from "./paintballart";
 
 export const TILE = 32;
 
@@ -23,9 +25,9 @@ export const TILE = 32;
 export const SCREEN_FACE_TOP = 52;
 
 export const PALETTE = {
-  grass: "#86b86b",
-  grassDark: "#76a85d",
-  grassSpeck: "#9fcb7f",
+  grass: "#8eb17b",
+  grassDark: "#7ea16c",
+  grassSpeck: "#a6c48f",
   path: "#dcc69b",
   pathEdge: "#c8ae80",
   plaza: "#d3c6b4",
@@ -597,12 +599,43 @@ export function decorTexture(kind: string, variant: number): Texture | null {
       break;
     }
     case "bush": {
+      // A clump of leafy lumps: shaded underneath, lit on top, speckled with
+      // leaves; one kind in berries, one in blossom.
       [c, ctx] = makeCanvas(32, 26);
-      px(ctx, "rgba(0,0,0,0.15)", 5, 22, 22, 3);
-      circle(ctx, P.outline, 16, 14, 11);
-      circle(ctx, ["#6fae55", "#5f9e4b", "#7cb860"][v], 16, 14, 10);
-      circle(ctx, P.leafLight, 12, 10, 4);
-      if (v === 1) [8, 20, 15].forEach((x, i) => px(ctx, "#e86f6f", x, 12 + i * 3, 2, 2));
+      oval(ctx, "rgba(0,0,0,0.18)", 16, 23, 12, 2);
+      const lumps: [number, number, number][] = [
+        [10, 16, 7],
+        [22, 16, 7],
+        [16, 11, 8],
+      ];
+      const mid = ["#6fae55", "#5f9e4b", "#7cb860"][v];
+      for (const [x, y, r] of lumps) circle(ctx, P.outline, x, y, r + 1);
+      for (const [x, y, r] of lumps) circle(ctx, "#4f8a3c", x, y, r);
+      for (const [x, y, r] of lumps) circle(ctx, mid, x, y - 1, r - 1);
+      circle(ctx, "#8cc46a", 13, 7, 3);
+      circle(ctx, "#8cc46a", 7, 13, 2);
+      circle(ctx, "#8cc46a", 19, 13, 2);
+      px(ctx, "#a8d68a", 12, 6, 2, 1);
+      const inBush = (x: number, y: number) => lumps.some(([lx, ly, r]) => (x - lx) ** 2 + (y - ly) ** 2 < (r - 1) ** 2);
+      for (let i = 0; i < 26; i++) {
+        const hh = hash(i, v, 77);
+        const x = 4 + (hh % 24);
+        const y = 4 + ((hh >>> 8) % 18);
+        if (!inBush(x, y)) continue;
+        px(ctx, y > 14 ? "#4f8a3c" : i % 3 ? "#5a9547" : "#8cc46a", x, y, 2, 1);
+      }
+      if (v === 1)
+        [[8, 14], [14, 9], [20, 12], [24, 17], [12, 18], [18, 17]].forEach(([x, y]) => {
+          px(ctx, "#d8343f", x, y, 2, 2);
+          px(ctx, "#ff9aa0", x, y, 1, 1);
+        });
+      if (v === 2)
+        [[9, 12], [16, 7], [22, 13], [13, 16], [20, 18]].forEach(([x, y], i) => {
+          const petal = i % 2 ? "#ffffff" : "#f8c6dc";
+          px(ctx, petal, x - 1, y, 3, 1);
+          px(ctx, petal, x, y - 1, 1, 3);
+          px(ctx, "#f6c343", x, y, 1, 1);
+        });
       break;
     }
     // A bench, or one end/the middle of a longer bench joined across tiles.
@@ -820,6 +853,73 @@ export function decorTexture(kind: string, variant: number): Texture | null {
       px(ctx, P.outline, 2, 0, 12, 3);
       break;
     }
+    case "daisies": {
+      // A few daisies: white petals round a yellow eye, on thin stems.
+      [c, ctx] = makeCanvas(32, 16);
+      for (let i = 0; i < 4; i++) {
+        const fx = 4 + ((i * 7 + v * 5) % 22);
+        const fy = 3 + ((i * 4 + v * 3) % 7);
+        px(ctx, "#5f9a48", fx + 1, fy + 3, 1, 5);
+        px(ctx, "#4f8a3c", fx + 2, fy + 5, 2, 1);
+        px(ctx, "#ffffff", fx, fy, 3, 3);
+        px(ctx, "#ffffff", fx + 1, fy - 1, 1, 5);
+        px(ctx, "#ffffff", fx - 1, fy + 1, 5, 1);
+        px(ctx, "#f6c343", fx + 1, fy + 1, 1, 1);
+        px(ctx, "#d9d4c8", fx + 2, fy + 2, 1, 1);
+      }
+      break;
+    }
+    case "clover": {
+      // A patch of clover: three-leaved sprigs, and the odd white flower.
+      [c, ctx] = makeCanvas(32, 14);
+      for (let i = 0; i < 7; i++) {
+        const fx = 2 + ((i * 9 + v * 7) % 27);
+        const fy = 4 + ((i * 5 + v * 3) % 7);
+        const g = i % 2 ? "#6fae55" : "#5f9e4b";
+        px(ctx, g, fx, fy, 2, 2);
+        px(ctx, g, fx + 2, fy, 2, 2);
+        px(ctx, g, fx + 1, fy + 2, 2, 2);
+        px(ctx, "#8cc46a", fx, fy, 1, 1);
+        px(ctx, "#4f8a3c", fx + 2, fy + 4, 1, 2);
+      }
+      if (v % 3 === 0) {
+        px(ctx, "#ffffff", 14, 2, 3, 3);
+        px(ctx, "#f4c7d8", 15, 3, 1, 1);
+      }
+      break;
+    }
+    case "pebbles": {
+      // A scatter of smooth pebbles in greys and browns.
+      [c, ctx] = makeCanvas(32, 12);
+      const tones = ["#a9a29a", "#8f887c", "#b8a88e", "#9aa0a0"];
+      for (let i = 0; i < 5; i++) {
+        const fx = 3 + ((i * 7 + v * 5) % 24);
+        const fy = 3 + ((i * 3 + v * 2) % 6);
+        const w2 = 2 + ((i + v) % 3);
+        px(ctx, "rgba(0,0,0,0.18)", fx + 1, fy + 2, w2 + 1, 2);
+        px(ctx, tones[(i + v) % tones.length], fx, fy, w2 + 1, 2);
+        px(ctx, "#d6d0c6", fx, fy, 1, 1);
+      }
+      break;
+    }
+    case "fern": {
+      // A fern: arching fronds with little leaflets, fanning from the root.
+      [c, ctx] = makeCanvas(32, 22);
+      const fronds: [number, number][] = [[-1, -0.55], [-0.6, -1], [0, -1.15], [0.6, -1], [1, -0.55]];
+      for (const [dx, dy] of fronds) {
+        for (let t = 1; t < 10; t++) {
+          const x = 16 + dx * t * 1.25;
+          const y = 21 + dy * t * 1.6 + (t * t) / 14;
+          px(ctx, t % 2 ? "#4f8a3c" : "#5f9a48", x, y, 1, 1);
+          if (t > 2 && t < 9) {
+            px(ctx, "#6fae55", x - 1, y + (t % 2), 1, 1);
+            px(ctx, "#6fae55", x + 1, y + ((t + 1) % 2), 1, 1);
+          }
+        }
+      }
+      px(ctx, "#3f6a30", 15, 20, 3, 2);
+      break;
+    }
     case "wildflowers": {
       [c, ctx] = makeCanvas(32, 16);
       const colors = ["#f4a7b9", "#ffe08a", "#ffffff", "#c9a7f4", "#f28c6b"];
@@ -894,6 +994,23 @@ export function newTagTexture(): Texture {
  * An object's art: drawn from `overhang` px above its footprint, and from
  * `left` px left of it when it's wider than the footprint.
  */
+/** The building facades' overhang above their footprint (as objectTexture draws them). */
+const FACADE_TOP: Record<string, number> = { building: 32, apartments: 32, mall_entrance: 32, post_office: 32, town_hall: 56, arcade_hall: 64, bowling_alley: 40, paintball_hall: 44 };
+
+/**
+ * Where a building's door lanterns are, in world pixels (for the night's
+ * lights); none for anything that isn't one of the facade buildings.
+ */
+export function buildingLanterns(o: MapObject): { x: number; y: number }[] {
+  const top = FACADE_TOP[o.kind];
+  if (top === undefined) return [];
+  const name = o.kind === "arcade_hall" ? "Arcade" : o.kind === "bowling_alley" ? "Bowling" : o.kind === "paintball_hall" ? "Splat Yard" : o.kind === "town_hall" ? "Town Hall" : o.label ?? "";
+  const f = BUILDINGS[name] ?? { wall: "brick", wallColor: "#a8553f", trim: "#efe3c8", roof: "tiles", roofColor: "#7a4a3a" };
+  const w = o.w * TILE;
+  const H = o.h * TILE + top;
+  return lanternSpots(w, H, f).map((p) => ({ x: o.x * TILE + p.x, y: o.y * TILE - top + p.y }));
+}
+
 export function objectTexture(o: MapObject): { texture: Texture; overhang: number; left: number } {
   const P = PALETTE;
   const w = o.w * TILE;
@@ -904,18 +1021,112 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
   let ctx: CanvasRenderingContext2D;
   switch (o.kind) {
     case "fountain": {
-      [c, ctx] = makeCanvas(w, h + 24);
-      overhang = 24;
+      // An old stone fountain, drawn pixel by pixel: an oval basin with a
+      // bricked front wall and a rim of worn blocks gone mossy in places,
+      // deep water with ripples, lily pads and wishing coins, and a
+      // two-tier pedestal spilling water into it.
+      const top = 40;
+      [c, ctx] = makeCanvas(w, h + top);
+      overhang = top;
       const cx = w / 2;
-      const cy = 24 + h / 2;
-      circle(ctx, P.outline, cx, cy, w / 2 - 1);
-      circle(ctx, P.stone, cx, cy, w / 2 - 3);
-      circle(ctx, P.water, cx, cy, w / 2 - 10);
-      circle(ctx, P.foam, cx - 8, cy - 6, 3);
-      px(ctx, P.stoneDark, cx - 5, cy - 30, 10, 30);
-      circle(ctx, P.stone, cx, cy - 30, 9);
-      circle(ctx, P.foam, cx, cy - 34, 5);
-      for (let i = -2; i <= 2; i++) px(ctx, "rgba(191,227,238,0.8)", cx + i * 6, cy - 26 + Math.abs(i) * 5, 2, 10);
+      const cy = top + h / 2 - 4;
+      const rx = w / 2 - 4;
+      const ry = Math.round(rx * 0.72);
+      // A filled oval in whole pixels (no soft edges).
+      const oval = (color: string, x0: number, y0: number, ax: number, ay: number) => {
+        for (let dy = -ay; dy <= ay; dy++) {
+          const half = Math.round(ax * Math.sqrt(Math.max(0, 1 - (dy / ay) ** 2)));
+          px(ctx, color, x0 - half, y0 + dy, half * 2, 1);
+        }
+      };
+      const wall = 9;
+      // Its shadow on the grass.
+      oval("rgba(0,0,0,0.18)", cx + 2, cy + wall + 3, rx + 2, ry + 2);
+      // The front wall: outline, stone, and courses of bricks.
+      oval(P.outline, cx, cy + wall, rx + 1, ry + 1);
+      oval("#8a8273", cx, cy + wall, rx, ry);
+      for (let x = cx - rx; x < cx + rx; x++) {
+        const dx = x - cx;
+        const rimBottom = cy + Math.round(ry * Math.sqrt(Math.max(0, 1 - (dx / rx) ** 2)));
+        if (rimBottom <= cy) continue;
+        // A mortar line halfway down, and joints staggered course by course.
+        px(ctx, "#6f685c", x, rimBottom + 5, 1, 1);
+        const course = Math.floor((x - cx + rx) / 9);
+        if ((x - cx + rx) % 9 === 0) px(ctx, "#6f685c", x, rimBottom + 1 + (course % 2 ? 0 : 5), 1, 4);
+      }
+      // The rim: worn blocks, lit along the top.
+      oval(P.outline, cx, cy, rx + 1, ry + 1);
+      oval("#b8b0a0", cx, cy, rx, ry);
+      oval("#cfc8b8", cx, cy - 1, rx - 2, ry - 2);
+      oval("#b8b0a0", cx, cy + 1, rx - 3, ry - 3);
+      // The basin inside: its shaded inner wall, then the water.
+      const ix = rx - 9;
+      const iy = ry - 7;
+      oval(P.outline, cx, cy + 1, ix + 1, iy + 1);
+      oval("#6f685c", cx, cy + 1, ix, iy);
+      oval("#2f6f9a", cx, cy + 3, ix - 1, iy - 3);
+      oval("#3f86b5", cx, cy + 4, ix - 4, iy - 6);
+      oval("#4f9acb", cx, cy + 5, ix - 10, iy - 11);
+      // Joints between the rim's blocks, all the way round.
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        for (let t = 1; t < 8; t++) {
+          const r = 1 - t / rx;
+          px(ctx, "#8f8778", Math.round(cx + Math.cos(a) * rx * r), Math.round(cy + Math.sin(a) * ry * r), 1, 1);
+        }
+      }
+      // Moss on the old stone.
+      for (const [mx, my, n] of [
+        [cx - rx + 6, cy - 6, 9],
+        [cx + rx - 14, cy + 10, 7],
+        [cx - 18, cy + ry - 4, 8],
+        [cx + 20, cy - ry + 2, 6],
+      ] as [number, number, number][]) {
+        for (let i = 0; i < n; i++) px(ctx, i % 3 ? "#6e9a46" : "#8fbb5c", mx + ((i * 5) % 9) - 2, my + ((i * 3) % 4), 2, 1);
+      }
+      // Lily pads (one with a flower) and wishing coins. (The ripples, the
+      // falling water and the jet are animated: world/fountainfx.ts.)
+      for (const [lx, ly, flower] of [
+        [cx - ix + 12, cy + 8, true],
+        [cx + ix - 16, cy - 2, false],
+      ] as [number, number, boolean][]) {
+        oval("#3f7a35", lx, ly, 6, 3);
+        oval("#5f9e4a", lx, ly - 1, 5, 2);
+        px(ctx, "#2f6f9a", lx + 1, ly - 2, 4, 1);
+        if (flower) {
+          px(ctx, "#f4a7c8", lx - 2, ly - 3, 3, 2);
+          px(ctx, "#ffe08a", lx - 1, ly - 3, 1, 1);
+        }
+      }
+      for (const [gx, gy] of [[cx + 14, cy + 12], [cx - 22, cy + 3], [cx + 26, cy + 9], [cx - 6, cy + 15]]) {
+        px(ctx, "#c99a2a", gx, gy, 2, 1);
+        px(ctx, "#f6c343", gx, gy - 1, 2, 1);
+      }
+      // The pedestal: a stone column with a wide bowl, a narrow one above
+      // and a knob on top.
+      const colTop = cy - 46;
+      px(ctx, P.outline, cx - 7, colTop, 14, 48);
+      px(ctx, "#9a9284", cx - 6, colTop, 12, 47);
+      px(ctx, "#b8b0a0", cx - 6, colTop, 4, 47);
+      px(ctx, "#7e7768", cx + 3, colTop, 3, 47);
+      const bowl = (y0: number, ax: number, ay: number) => {
+        oval(P.outline, cx, y0 + 2, ax + 1, ay + 2);
+        oval("#9a9284", cx, y0 + 2, ax, ay + 1);
+        oval(P.outline, cx, y0, ax + 1, ay + 1);
+        oval("#c4bcac", cx, y0, ax, ay);
+        oval("#3f86b5", cx, y0, ax - 3, ay - 2);
+        oval("#7fc0e3", cx - 2, y0 - 1, ax - 8, Math.max(1, ay - 4));
+      };
+      const low = cy - 22;
+      bowl(low, 22, 7);
+      const high = cy - 44;
+      px(ctx, P.outline, cx - 4, high, 8, 22);
+      px(ctx, "#a59d8e", cx - 3, high, 6, 22);
+      bowl(high, 11, 4);
+      // The knob on top.
+      oval(P.outline, cx, high - 7, 4, 4);
+      oval("#c4bcac", cx, high - 7, 3, 3);
+      px(ctx, "#ffffff", cx - 1, high - 9, 1, 1);
       break;
     }
     case "big_screen": {
@@ -937,35 +1148,43 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       break;
     }
     case "town_hall": {
-      [c, ctx] = makeCanvas(w, h + 56);
-      overhang = 56;
+      // The Town Hall: stone and red tiles, with a clock tower rising over
+      // the middle of its roof.
       const top = 56;
-      px(ctx, "rgba(0,0,0,0.15)", 6, h + top - 8, w - 12, 8);
-      px(ctx, P.outline, 8, top - 4, w - 16, h - 4);
-      px(ctx, "#efe3cf", 10, top - 2, w - 20, h - 8);
-      polygon(ctx, "#b5544a", [
-        [0, top + 4],
-        [w / 2, 0],
-        [w, top + 4],
-      ]);
-      ctx.fillStyle = "#99443b";
-      ctx.fillRect(0, top, w, 8);
-      circle(ctx, "#efe3cf", w / 2, 30, 12);
-      circle(ctx, P.outline, w / 2, 30, 9);
-      circle(ctx, "#fff9ec", w / 2, 30, 8);
-      px(ctx, P.outline, w / 2, 24, 1, 6);
-      px(ctx, P.outline, w / 2, 30, 5, 1);
-      for (let i = 0; i < 4; i++) {
-        const x = 30 + i * ((w - 60) / 3) - 12;
-        if (Math.abs(x + 12 - w / 2) < 40) continue;
-        px(ctx, P.outline, x, top + 40, 24, 36);
-        px(ctx, "#9fc9dc", x + 2, top + 42, 20, 32);
+      [c, ctx] = makeCanvas(w, h + top);
+      overhang = top;
+      const H = h + top;
+      const f = BUILDINGS["Town Hall"];
+      drawFacade(ctx, w, H, { ...f, clock: false }, o.label ?? "Town Hall", (t, cx, y, col, size) => label(ctx, t, cx, y, col, size), { roofTop: 34 });
+      // The tower: stone, a clock face, a little pointed roof with a vane.
+      const tw = 44;
+      const tx = Math.round(w / 2 - tw / 2);
+      const tb = Math.round(H * 0.52) - 4;
+      px(ctx, "#2b2219", tx - 1, 20, tw + 2, tb - 20);
+      px(ctx, "#e4d8bf", tx, 21, tw, tb - 22);
+      for (let y = 24; y < tb; y += 9) px(ctx, "#c9bda4", tx, y, tw, 1);
+      px(ctx, "#f6efe1", tx, 21, 3, tb - 22);
+      // Clock.
+      const ccx = w / 2;
+      const ccy = 40;
+      for (let dy = -11; dy <= 11; dy++) {
+        const half = Math.round(Math.sqrt(Math.max(0, 121 - dy * dy)));
+        px(ctx, "#2b2219", ccx - half, ccy + dy, half * 2, 1);
       }
-      px(ctx, P.outline, w / 2 - 22, top + h - 74, 44, 66);
-      px(ctx, P.woodDark, w / 2 - 20, top + h - 72, 40, 64);
-      px(ctx, P.outline, w / 2 - 70, top + 14, 140, 22);
-      px(ctx, "#f6efe1", w / 2 - 68, top + 16, 136, 18);
-      label(ctx, o.label ?? "Town Hall", w / 2, top + 25, "#5a3b2b", 14);
+      for (let dy = -9; dy <= 9; dy++) {
+        const half = Math.round(Math.sqrt(Math.max(0, 81 - dy * dy)));
+        px(ctx, "#fff9ec", ccx - half, ccy + dy, half * 2, 1);
+      }
+      px(ctx, "#2b2219", ccx - 1, ccy - 7, 2, 8);
+      px(ctx, "#2b2219", ccx, ccy - 1, 6, 2);
+      // Pointed roof.
+      for (let k = 0; k < 20; k++) {
+        const half = Math.round((tw / 2 + 4) * (k / 19));
+        px(ctx, "#2b2219", w / 2 - half - 1, 2 + k, half * 2 + 2, 1);
+        if (k > 0) px(ctx, k % 3 ? "#a8443b" : "#8a3530", w / 2 - half, 2 + k, half * 2, 1);
+      }
+      px(ctx, "#2b2219", w / 2 - 1, 0, 2, 4);
+      px(ctx, "#f6c343", w / 2 - 3, 0, 6, 1);
       break;
     }
     case "shopfront": {
@@ -1143,49 +1362,13 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
     case "apartments":
     case "post_office":
     case "building": {
-      // A landmark (a placeholder until its block is built), seen from above
-      // at an angle: a big roof over a front wall with windows, the door and
-      // a name board. Colours vary per building.
-      const look = hash(o.x, o.y, 71);
-      const walls = ["#efe3cf", "#e7d2c0", "#d9e2e6", "#e9dcb8", "#dcd3e8", "#e3ead6"][look % 6];
-      const roofs = ["#b5544a", "#4f6d8a", "#5d8a4e", "#8a5d8a", "#c27a3c", "#3f7a8a"][(look >>> 4) % 6];
-      const glass = o.label === "Greenhouse";
+      // The city's buildings, each in its own materials (world/facade.ts);
+      // anything without a look of its own gets a cosy brick one.
+      const name = o.label ?? "";
+      const f = BUILDINGS[name] ?? { wall: "brick", wallColor: "#a8553f", trim: "#efe3c8", roof: "tiles", roofColor: "#7a4a3a", windows: "square", flowers: true, chimneys: 1 };
       [c, ctx] = makeCanvas(w, h + 32);
       overhang = 32;
-      const H = h + 32;
-      const eave = Math.round(H * 0.58);
-      px(ctx, "rgba(0,0,0,0.15)", 6, H - 8, w - 12, 8);
-      // Front wall.
-      px(ctx, P.outline, 6, eave - 4, w - 12, H - eave);
-      px(ctx, glass ? "#d6efe9" : walls, 8, eave - 2, w - 16, H - eave - 4);
-      // Roof: slopes up to a ridge, shingle rows, a dark eave line.
-      px(ctx, P.outline, 2, 2, w - 4, eave);
-      px(ctx, glass ? "#b9e0da" : roofs, 4, 4, w - 8, eave - 4);
-      ctx.fillStyle = "rgba(255,255,255,0.12)";
-      ctx.fillRect(4, 4, w - 8, Math.round((eave - 4) * 0.45));
-      ctx.fillStyle = "rgba(0,0,0,0.10)";
-      for (let y = 12; y < eave - 6; y += 10) ctx.fillRect(4, y, w - 8, 2);
-      if (glass) for (let x = 16; x < w - 8; x += 20) px(ctx, "#eef8f6", x, 4, 2, eave - 4);
-      px(ctx, "rgba(0,0,0,0.25)", 4, Math.round((eave - 4) * 0.45) + 4, w - 8, 2);
-      px(ctx, "rgba(0,0,0,0.3)", 2, eave - 4, w - 4, 4);
-      // Windows along the wall, a gap in the middle for the door.
-      const wy = eave + 8;
-      const wh = Math.max(12, Math.min(22, H - eave - 30));
-      for (let x = 18; x + 14 < w - 14; x += 26) {
-        if (Math.abs(x + 7 - w / 2) < 26) continue;
-        px(ctx, P.outline, x, wy, 14, wh);
-        px(ctx, glass ? "#eef8f6" : "#9fc3d6", x + 1, wy + 1, 12, wh - 2);
-        px(ctx, "#d6ecf5", x + 2, wy + 2, 4, 5);
-      }
-      px(ctx, P.outline, w / 2 - 12, H - 40, 24, 38);
-      px(ctx, P.woodDark, w / 2 - 10, H - 38, 20, 36);
-      px(ctx, "#f6c343", w / 2 + 5, H - 20, 2, 2);
-      // Name board over the door, on the eave.
-      const name = o.label ?? "";
-      const bw = Math.min(w - 24, Math.max(64, name.length * 9 + 18));
-      px(ctx, P.outline, w / 2 - bw / 2, eave - 12, bw, 20);
-      px(ctx, P.wood, w / 2 - bw / 2 + 1, eave - 11, bw - 2, 18);
-      label(ctx, name, w / 2, eave - 2, "#fff9ec", 11);
+      drawFacade(ctx, w, h + 32, f, name, (t, cx, y, col, size) => label(ctx, t, cx, y, col, size), { roofTop: 16 });
       break;
     }
     case "house": {
@@ -1757,6 +1940,26 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       px(ctx, "#3d1656", bx0 + 1, top + h - 24, 22, 4);
       break;
     }
+    case "francy": {
+      // Fisherman Franci's things on the dock beside him: a little bucket with a fish
+      // tail poking out, a tackle box and a flask of tea.
+      [c, ctx] = makeCanvas(w + 16, h);
+      left = 0;
+      px(ctx, "rgba(0,0,0,0.2)", 20, 27, 14, 3);
+      px(ctx, P.outline, 21, 17, 10, 11);
+      px(ctx, "#6a8fa8", 22, 18, 8, 9);
+      px(ctx, "#8fb3c9", 22, 18, 8, 2);
+      px(ctx, "#f6a343", 25, 14, 3, 4);
+      px(ctx, "#e8566b", 24, 13, 2, 2);
+      px(ctx, P.outline, 22, 16, 8, 1);
+      px(ctx, P.outline, 33, 21, 11, 7);
+      px(ctx, "#b5443a", 34, 22, 9, 5);
+      px(ctx, "#e9d6a8", 37, 22, 3, 1);
+      px(ctx, P.outline, 41, 15, 5, 13);
+      px(ctx, "#5f8a6a", 42, 16, 3, 11);
+      px(ctx, "#d9b453", 42, 16, 3, 2);
+      break;
+    }
     case "fisherman": {
       // His things on the boards beside him: a bucket of fish and a tackle box.
       [c, ctx] = makeCanvas(w, h);
@@ -1810,52 +2013,17 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       break;
     }
     case "arcade_hall": {
-      // The arcade: a dark hall with a big neon ARCADE sign, a row of
-      // marquee bulbs, glowing glass doors and screens in the windows.
-      [c, ctx] = makeCanvas(w, h + 64);
-      overhang = 64;
+      // The arcade: dark purple brick and slate, a neon marquee with bulbs,
+      // a neon stripe under the eave and shop windows with neon awnings.
       const top = 64;
-      px(ctx, "rgba(0,0,0,0.25)", 6, top + h - 8, w - 12, 8);
-      px(ctx, "#0f0a1c", 6, top - 40, w - 12, h + 36);
-      px(ctx, "#241a3a", 8, top - 38, w - 16, h + 32);
-      // checkered base
-      for (let x = 8; x < w - 8; x += 8) px(ctx, (x / 8) % 2 ? "#ff4fa3" : "#1d1532", x, top + h - 14, 8, 6);
-      // the sign
-      px(ctx, "#0f0a1c", w / 2 - 92, top - 62, 184, 34);
-      px(ctx, "#1a1030", w / 2 - 90, top - 60, 180, 30);
-      px(ctx, "rgba(255,79,163,0.35)", w / 2 - 88, top - 58, 176, 26);
-      label(ctx, "ARCADE", w / 2, top - 45, "#ffd6ec", 22);
-      // marquee bulbs round the sign
-      for (let x = w / 2 - 88; x <= w / 2 + 86; x += 10) {
-        px(ctx, "#ffe14f", x, top - 62, 3, 3);
-        px(ctx, "#ffe14f", x, top - 31, 3, 3);
-      }
-      // neon stripe along the front
-      px(ctx, "#3fe0ff", 8, top - 22, w - 16, 2);
-      px(ctx, "rgba(63,224,255,0.3)", 8, top - 25, w - 16, 8);
-      // windows with cabinet screens glowing inside
-      for (const [wx, col] of [[24, "#3fe0ff"], [w - 24 - 56, "#ff4fa3"]] as [number, string][]) {
-        const wy = top + 4;
-        px(ctx, "#0f0a1c", wx, wy, 56, 44);
-        px(ctx, "#140e26", wx + 2, wy + 2, 52, 40);
-        for (const sx of [wx + 8, wx + 30]) {
-          px(ctx, "#2a2046", sx, wy + 10, 18, 30);
-          px(ctx, col, sx + 3, wy + 13, 12, 9);
-          px(ctx, "#ffffff", sx + 5, wy + 15, 3, 1);
-          px(ctx, "#ffe14f", sx + 6, wy + 26, 2, 2);
-        }
-        px(ctx, "rgba(255,255,255,0.12)", wx + 4, wy + 4, 8, 34);
-      }
-      // the doors
-      const dx = w / 2 - 22;
-      px(ctx, "#0f0a1c", dx, top + h - 70, 44, 58);
-      px(ctx, "rgba(63,224,255,0.55)", dx + 3, top + h - 67, 18, 54);
-      px(ctx, "rgba(63,224,255,0.55)", dx + 23, top + h - 67, 18, 54);
-      px(ctx, "#ffffff", dx + 5, top + h - 64, 2, 20);
-      px(ctx, "#ffe14f", dx + 19, top + h - 42, 2, 4);
-      px(ctx, "#ffe14f", dx + 23, top + h - 42, 2, 4);
-      // stars
-      for (const [x, y, col] of [[18, top - 30, "#ffe14f"], [w - 22, top - 34, "#3fe0ff"], [w - 40, top + 58, "#ff4fa3"]] as [number, number, string][]) {
+      [c, ctx] = makeCanvas(w, h + top);
+      overhang = top;
+      const H = h + top;
+      drawFacade(ctx, w, H, BUILDINGS.Arcade, "Arcade", (t, cx, y, col, size) => label(ctx, t, cx, y, col, size), { roofTop: 40 });
+      const eave = Math.round(H * 0.52);
+      px(ctx, "rgba(63,224,255,0.3)", 10, eave + 6, w - 20, 6);
+      px(ctx, "#3fe0ff", 10, eave + 8, w - 20, 2);
+      for (const [x, y, col] of [[22, eave + 22, "#ffe14f"], [w - 26, eave + 26, "#3fe0ff"], [w - 44, H - 40, "#ff4fa3"]] as [number, number, string][]) {
         px(ctx, col, x, y - 3, 2, 8);
         px(ctx, col, x - 3, y, 8, 2);
       }
@@ -2058,45 +2226,24 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       break;
     }
     case "bowling_alley": {
-      // Commons Lanes: a retro alley, teal and cream, a big red-necked pin
-      // standing on the roof beside its sign, glass doors and a window onto
-      // the lanes.
-      [c, ctx] = makeCanvas(w, h + 28);
-      overhang = 28;
-      const top = 28;
-      px(ctx, "rgba(0,0,0,0.25)", 4, top + h - 8, w - 8, 8);
-      // the building
-      px(ctx, P.outline, 4, top - 10, w - 8, h + 4);
-      px(ctx, "#2f8f8a", 6, top - 8, w - 12, h);
-      px(ctx, "#f4e9cf", 6, top + h - 30, w - 12, 24);
-      for (let x = 6; x < w - 6; x += 12) px(ctx, "#e8566b", x, top + h - 30, 6, 3);
-      // the sign
-      px(ctx, P.outline, 18, top - 22, w - 52, 22);
-      px(ctx, "#1a1030", 20, top - 20, w - 56, 18);
-      label(ctx, "BOWLING", 18 + (w - 52) / 2, top - 11, "#ffe14f", 12);
-      // the big pin on the roof
-      const pxr = w - 26;
-      px(ctx, P.outline, pxr - 7, top - 28, 14, 32);
-      px(ctx, "#f4f1e8", pxr - 5, top - 26, 10, 28);
-      px(ctx, P.outline, pxr - 7, top - 14, 2, 4);
-      px(ctx, P.outline, pxr + 5, top - 14, 2, 4);
-      px(ctx, "#f4f1e8", pxr - 3, top - 14, 6, 4);
-      px(ctx, "#e8566b", pxr - 5, top - 20, 10, 3);
-      px(ctx, "#ffffff", pxr - 3, top - 24, 2, 4);
-      // a window onto the lanes: boards running back, little pins at the end
-      px(ctx, P.outline, 12, top + 4, 54, 34);
-      px(ctx, "#cf9b58", 14, top + 6, 50, 30);
-      for (let x = 18; x < 64; x += 12) px(ctx, "#2a2046", x, top + 6, 2, 30);
-      for (let x = 20; x < 62; x += 6) px(ctx, "#ffffff", x, top + 8, 3, 4);
-      px(ctx, "rgba(255,255,255,0.18)", 16, top + 8, 6, 26);
-      // glass doors
-      const dx = w / 2 - 4;
-      px(ctx, P.outline, dx, top + h - 50, 40, 44);
-      px(ctx, "rgba(160,230,255,0.75)", dx + 3, top + h - 47, 16, 41);
-      px(ctx, "rgba(160,230,255,0.75)", dx + 21, top + h - 47, 16, 41);
-      px(ctx, "#ffffff", dx + 5, top + h - 44, 2, 16);
-      px(ctx, "#ffe14f", dx + 16, top + h - 26, 2, 4);
-      px(ctx, "#ffe14f", dx + 22, top + h - 26, 2, 4);
+      // Commons Lanes: teal boards and red tiles, a bulb-lit BOWLING
+      // marquee, striped awnings, and a big pin standing on the roof.
+      const top = 40;
+      [c, ctx] = makeCanvas(w, h + top);
+      overhang = top;
+      const H = h + top;
+      drawFacade(ctx, w, H, BUILDINGS.Bowling, "Bowling", (t, cx, y, col, size) => label(ctx, t, cx, y, col, size), { roofTop: 22 });
+      // The pin on the roof.
+      const pxr = w - 42;
+      const pt = 2;
+      px(ctx, P.outline, pxr - 8, pt, 16, 44);
+      px(ctx, "#f4f1e8", pxr - 6, pt + 2, 12, 40);
+      px(ctx, "#ffffff", pxr - 4, pt + 4, 3, 30);
+      px(ctx, P.outline, pxr - 8, pt + 14, 3, 6);
+      px(ctx, P.outline, pxr + 5, pt + 14, 3, 6);
+      px(ctx, "#e8566b", pxr - 6, pt + 10, 12, 3);
+      px(ctx, "#e8566b", pxr - 6, pt + 15, 12, 2);
+      px(ctx, "rgba(0,0,0,0.25)", pxr - 6, pt + 40, 14, 4);
       break;
     }
     case "bowling_lane": {
@@ -2171,6 +2318,29 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       px(ctx, "#e8566b", 20, top - 16, 8, 6);
       px(ctx, "#3f7ed0", 30, top - 16, 8, 6);
       px(ctx, "#f4f1e8", 20, top - 12, 18, 2);
+      break;
+    }
+    case "paintball_hall": {
+      // The Splat Yard: a red timber barn spattered all over with paint,
+      // a SPLAT YARD marquee, Blue and Red awnings, and a big target on the roof.
+      const top = 44;
+      [c, ctx] = makeCanvas(w, h + top);
+      overhang = top;
+      const H = h + top;
+      drawFacade(ctx, w, H, BUILDINGS["Splat Yard"], "Splat Yard", (t, cx, y, col, size) => label(ctx, t, cx, y, col, size), { roofTop: 24 });
+      // The target on the roof.
+      const tx = w - 46;
+      const ty = 20;
+      for (const [r, col] of [[15, P.outline], [14, "#ffffff"], [11, "#ff4f6a"], [8, "#ffffff"], [5, "#ff4f6a"], [2, "#ffd23f"]] as [number, string][]) circle(ctx, col, tx, ty, r);
+      px(ctx, P.outline, tx - 1, ty + 15, 2, 10);
+      // Paint all over it, from matches gone by.
+      let seed = 777;
+      const rnd = () => {
+        seed = (seed * 16807) % 2147483647;
+        return seed / 2147483647;
+      };
+      const paints = ["#3fa9ff", "#ff4f6a", "#ffd23f", "#7ee05a", "#c77dff", "#ff9a3f"];
+      for (let i = 0; i < 26; i++) paintSplat(ctx, paints[Math.floor(rnd() * paints.length)], 8 + rnd() * (w - 16), top + 4 + rnd() * (h - 14), 2 + rnd() * 4, rnd);
       break;
     }
     case "bowling_exit": {
@@ -2398,7 +2568,7 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
     }
     default: {
       const lib: { c: HTMLCanvasElement; overhang: number; left?: number } | null =
-        libraryObject(o) ?? clubObject(o) ?? concertObject(o) ?? metroObject(o) ?? casinoObject(o) ?? boatObject(o) ?? museumObject(o);
+        libraryObject(o) ?? clubObject(o) ?? concertObject(o) ?? metroObject(o) ?? casinoObject(o) ?? boatObject(o) ?? museumObject(o) ?? paintballObject(o);
       if (lib) {
         c = lib.c;
         overhang = lib.overhang;

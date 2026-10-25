@@ -13,7 +13,7 @@ pub mod wire;
 pub use wire::{DecodeError, Wire, push_framed, split_frame};
 
 /// Bumped on any incompatible message change.
-pub const PROTOCOL_VERSION: u16 = 26;
+pub const PROTOCOL_VERSION: u16 = 27;
 
 /// Spatial-hash cell size in tiles (spec §3).
 pub const CELL_TILES: u16 = 16;
@@ -30,6 +30,18 @@ records! {
     /// under way (`commons_sim::arena::act`) and since when, whether they're
     /// blocking, and until when they're staggered (zone times, ms).
     ArenaFighter { x: u16, facing: u8, hp: u8, stamina: u8, act: u8, act_at: u32, blocking: bool, flinch_until: u32 }
+
+    /// Someone on the paintball field (`commons_sim::paintball`): where
+    /// (field tiles ×100), aiming where (a fraction of a full turn), paint
+    /// left (`hp`) and balls in the hopper, `flags` (`paintball::flag`),
+    /// their power-up and how long it has left, how long till they're back
+    /// in (when out), till their roll is ready and their reload done (ms),
+    /// their outs, times out and streak, and `fix`: bumped when the server
+    /// puts them somewhere (the client then takes its word for where).
+    PbPlayer { id: u32, team: u8, x: u16, y: u16, aim: u16, hp: u8, ammo: u8, flags: u8, power: u8, power_ms: u16, respawn_ms: u16, dash_ms: u16, reload_ms: u16, kills: u8, deaths: u8, streak: u8, fix: u8 }
+
+    /// A paintball power-up waiting on its pad (field tiles ×100).
+    PbPickup { kind: u8, x: u16, y: u16 }
 
     /// Everything a client needs to render another avatar, including any
     /// walk in progress so it can be simulated locally, and what it signals
@@ -169,6 +181,21 @@ message_enum! {
         /// The Lake's rowboats (`boat::*` op): rent one at the boat hire, or
         /// get out (the captain takes everyone ashore; a passenger hops off).
         45 Boat { op: u8 }
+        /// Paintball: take a place on a team (0 Blue, 1 Red, 2 either). In a
+        /// match, you take a bot's place.
+        46 PbJoin { team: u8 }
+        /// Give up your place (a bot takes it mid-match).
+        47 PbLeave {}
+        /// Start the match (you have a place): `bots` fill the empty ones.
+        48 PbStart { bots: bool }
+        /// Where you are on the field (tiles ×100) and aim, a few times a second.
+        49 PbMove { x: u16, y: u16, aim: u16 }
+        /// You fired shot `shot` (your own count) from (x, y) toward `aim`.
+        50 PbFire { shot: u16, x: u16, y: u16, aim: u16 }
+        /// A dodge roll.
+        51 PbDash {}
+        /// Reload now.
+        52 PbReload {}
     }
 }
 
@@ -308,6 +335,15 @@ message_enum! {
         /// sits where (`seats`, front to back), and the instance time the
         /// hire runs out. `captain` 0: you're ashore again.
         45 BoatState { captain: u32, until: u32, seats: Vec<u32> }
+        /// The paintball match (`commons_sim::paintball` status): the time
+        /// left in this phase, the score, who has each place (Blue's three,
+        /// then Red's; 0 free), everyone on the field, the pads' power-ups,
+        /// and (when it's over) the winners (0 Blue, 1 Red, 2 a draw).
+        46 PbState { status: u8, now: u32, phase_ms: u32, blue: u8, red: u8, winner: u8, slots: Vec<u32>, players: Vec<PbPlayer>, pickups: Vec<PbPickup> }
+        /// A shot fired (a ball, or with bit 1 of `kind` a spread of three; bit 0: bouncing).
+        47 PbShot { by: u32, shot: u16, x: u16, y: u16, aim: u16, kind: u8 }
+        /// Something happened (`paintball::ev`): `a` and `b` as each says, at (x, y), `n` the ball or a count.
+        48 PbEvent { kind: u8, a: u32, b: u32, x: u16, y: u16, n: u16 }
     }
 }
 

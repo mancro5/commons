@@ -22,7 +22,7 @@ export const BOAT_SEATS = 3;
 export const BOAT_SPEED_X10 = 64;
 
 /** Riding speeds in tenths of a tile a second (`commons_sim::vehicles`). */
-const SPEED_X10: Record<number, number> = { 1: 88, 2: 108, 3: 128, 4: 140, 5: 96 };
+const SPEED_X10: Record<number, number> = { 1: 88, 2: 108, 3: 128, 4: 140, 5: 82 };
 
 /** How many times walking speed vehicle `code` goes, for the shop ("3.2×"). */
 export function rideTimes(code: number): number {

@@ -12,9 +12,11 @@ const CHUNK = 16;
 const WALL_ABOVE = 1.5;
 const HUD_PX = 72;
 /** Decor drawn flat on the ground. */
-const FLAT = new Set(["blanket", "lilypad", "mushrooms"]);
+/** Objects that lie flat (people stand on them): the dance floor, the paintball field's markings, pads and bases. */
+const FLAT_OBJECTS = new Set(["dance_floor", "concert_stage", "pb_field", "pb_pad", "pb_spawn"]);
+const FLAT = new Set(["blanket", "lilypad", "mushrooms", "wildflowers", "daisies", "clover", "pebbles"]);
 /** Decor that sways in the wind. */
-const SWAY = new Set(["tree", "pine", "apple_tree", "bush", "tallgrass", "reeds", "willow", "willow_curtain", "pine_secret"]);
+const SWAY = new Set(["tree", "pine", "apple_tree", "bush", "tallgrass", "reeds", "willow", "willow_curtain", "pine_secret", "fern"]);
 
 /** Side-by-side bench tiles draw as one long bench (one seat per tile). */
 function benchPiece(map: ZoneMap, x: number, y: number): string {
@@ -26,7 +28,11 @@ function benchPiece(map: ZoneMap, x: number, y: number): string {
 
 /** How far the wheel zooms, in steps either side of the default. */
 const ZOOM_IN = 3;
-const ZOOM_OUT = 2;
+/**
+ * Below one device pixel per art pixel, the steps further out: ¾ and ½ (a
+ * wide view of the city; past 1 the art can't stay pixel-perfect).
+ */
+const FINE_OUT = [0.75, 0.5];
 const ZOOM_KEY = "commons.zoom";
 
 function loadZoom(): number {
@@ -167,7 +173,7 @@ export class Scene {
     const s = new Sprite(texture);
     s.position.set(p.o.x * TILE - left, p.o.y * TILE - overhang);
     // The dance floor lies flat: people stand on it, not behind it.
-    s.zIndex = p.o.kind === "dance_floor" || p.o.kind === "concert_stage" ? p.o.y * TILE + 1 : (p.o.y + p.o.h) * TILE - 1;
+    s.zIndex = FLAT_OBJECTS.has(p.o.kind) ? p.o.y * TILE + 1 : (p.o.y + p.o.h) * TILE - 1;
     this.sorted.addChild(s);
     p.sprite = s;
     if (p.o.item) {
@@ -267,8 +273,8 @@ export class Scene {
    */
   resize() {
     const res = this.app.renderer.resolution;
-    const base = this.baseStep();
-    const step = Math.min(base + ZOOM_IN, Math.max(Math.max(1, base - ZOOM_OUT), base + this.zoom));
+    const [lo, hi] = this.zoomRange();
+    const step = this.stepAt(Math.max(lo, Math.min(hi, this.zoom)));
     // Settled on a whole step, the art is pixel-perfect; between steps (gliding, pinching) it's smooth.
     this.scale = step / res;
     this.world.scale.set(this.scale);
@@ -283,10 +289,23 @@ export class Scene {
     return Math.max(1, Math.round(want * res));
   }
 
-  /** How far the zoom may go, in steps from the default. */
+  /** How far the zoom may go, in steps from the default (down to the finest step out). */
   private zoomRange(): [number, number] {
-    const base = this.baseStep();
-    return [Math.max(1, base - ZOOM_OUT) - base, ZOOM_IN];
+    return [1 - this.baseStep() - FINE_OUT.length, ZOOM_IN];
+  }
+
+  /**
+   * Device pixels per art pixel at zoom `z` (steps from the default): whole
+   * steps down to 1, then the fine steps below it (in between, smoothly).
+   */
+  private stepAt(z: number): number {
+    const s = this.baseStep() + z;
+    if (s >= 1) return s;
+    const f = 1 - s; // 0 at 1, 1 at the first fine step…
+    const i = Math.min(FINE_OUT.length - 1, Math.floor(f));
+    const from = i === 0 ? 1 : FINE_OUT[i - 1];
+    const to = FINE_OUT[Math.min(i, FINE_OUT.length - 1)];
+    return from + (to - from) * Math.min(1, f - i);
   }
 
   /** Glides a step in (+1) or out (−1). Returns whether it will change. */
@@ -332,7 +351,7 @@ export class Scene {
    */
   viewTiles(): { w: number; h: number } {
     const { width, height } = this.app.screen;
-    const widest = Math.max(1, this.baseStep() - ZOOM_OUT) / this.app.renderer.resolution;
+    const widest = FINE_OUT[FINE_OUT.length - 1] / this.app.renderer.resolution;
     return { w: Math.ceil(width / (TILE * widest)) + 1, h: Math.ceil(height / (TILE * widest)) + 1 };
   }
 

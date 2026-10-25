@@ -30,6 +30,31 @@ export interface HudHandlers {
   onPhone(): void;
   /** Your clubs. */
   onClubs(): void;
+  /** Indoors: walk to the way out and leave. */
+  onLeave(): void;
+}
+
+/** A little wooden door, drawn in pixels, for the leave button. */
+function doorIcon(): string {
+  const c = document.createElement("canvas");
+  c.width = 14;
+  c.height = 18;
+  const x = c.getContext("2d")!;
+  const p = (col: string, px: number, py: number, w = 1, h = 1) => {
+    x.fillStyle = col;
+    x.fillRect(px, py, w, h);
+  };
+  p("#2b2219", 1, 2, 12, 16);
+  p("#2b2219", 2, 1, 10, 1);
+  p("#2b2219", 3, 0, 8, 1);
+  p("#7a4e32", 2, 2, 10, 15);
+  p("#7a4e32", 3, 1, 8, 1);
+  p("#94603e", 2, 2, 1, 15);
+  p("#5c3a24", 4, 4, 6, 5);
+  p("#5c3a24", 4, 10, 6, 5);
+  p("#f6c343", 9, 9, 2, 2);
+  p("#b8b0a0", 0, 17, 14, 1);
+  return c.toDataURL();
 }
 
 export class Hud {
@@ -52,6 +77,7 @@ export class Hud {
   private booksBtn!: HTMLButtonElement;
   private phoneBtn!: HTMLButtonElement;
   private clubsBtn!: HTMLButtonElement;
+  private exitBtn: HTMLButtonElement;
 
   constructor(root: HTMLElement, h: HudHandlers) {
     root.innerHTML = `
@@ -117,7 +143,7 @@ export class Hud {
       if (e.key === "k" || e.key === "K") h.onClubs();
       if (e.key === "n" || e.key === "N") h.onNotifications();
       if (e.key === "m" || e.key === "M") sound();
-      if ((e.key === "r" || e.key === "R") && !this.rideBtn.hidden) h.onRide();
+      if ((e.key === "r" || e.key === "R") && !e.repeat && !this.rideBtn.hidden) h.onRide();
     });
 
     const form = root.querySelector<HTMLFormElement>(".chat")!;
@@ -162,6 +188,20 @@ export class Hud {
     this.toysEl.onclick = () => h.onToys();
     bar.appendChild(this.toysEl);
     this.setSitting(false);
+    // The way out, in the corner, when you're inside somewhere.
+    this.exitBtn = document.createElement("button");
+    this.exitBtn.type = "button";
+    this.exitBtn.className = "exit-btn";
+    this.exitBtn.hidden = true;
+    const door = document.createElement("img");
+    door.className = "px-icon";
+    door.alt = "";
+    door.src = doorIcon();
+    door.width = 28;
+    door.height = 36;
+    this.exitBtn.append(door, document.createElement("span"));
+    this.exitBtn.onclick = () => h.onLeave();
+    root.appendChild(this.exitBtn);
     for (const [id, e] of Object.entries(EMOTES).filter(([id]) => Number(id) <= FREE_EMOTES)) {
       const b = document.createElement("button");
       b.type = "button";
@@ -171,6 +211,15 @@ export class Hud {
       b.onclick = () => h.onEmote(Number(id));
       bar.appendChild(b);
     }
+  }
+
+  /** The leave button: where it takes you (`label`), or null to hide it (outdoors). */
+  setExit(label: string | null) {
+    this.exitBtn.hidden = label === null;
+    if (label === null) return;
+    this.exitBtn.querySelector("span")!.textContent = label;
+    this.exitBtn.title = `${label}: walks you to the door and out`;
+    this.exitBtn.setAttribute("aria-label", this.exitBtn.title);
   }
 
   /** The toys button (your toys, to play with): its icon, or null to hide it. */

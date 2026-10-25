@@ -44,6 +44,7 @@ describe("city geometry (mirrors sim::city)", () => {
     expect(cityFile.blocks[3][3]).toBe("market");
     expect(cityFile.blocks[2][3]).toBe("park");
     expect(cityFile.blocks[4][3]).toBe("pond");
+    expect(cityFile.blocks[3][4]).toBe("paintball");
     expect(cityFile.blocks[3][5]).toBe("casino");
   });
 });

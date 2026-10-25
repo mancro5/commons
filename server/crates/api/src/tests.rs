@@ -2434,6 +2434,10 @@ mod mall_shop {
         );
         let (_, r) = call(&app, &svc, "GET", &format!("/internal/look/{p}"), json!({})).await;
         assert_eq!(r["vehicle"].as_u64(), Some(code | 0x80));
+        // The skateboard is everyone's: no need to buy it.
+        let board = s.catalog.by_key("skateboard").unwrap().id;
+        let (st, r) = call(&app, &auth, "POST", "/api/me/ride", ride(board, false)).await;
+        assert_eq!((st, r["ride"].as_u64()), (StatusCode::OK, Some(5)));
         // Something that isn't for riding.
         let seed = s
             .catalog

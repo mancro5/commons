@@ -85,7 +85,6 @@
       "catalog": [
         {"item": "roller_skates", "price": 150, "always": true},
         {"item": "kick_scooter", "price": 220, "always": true},
-        {"item": "skateboard", "price": 180, "always": true},
         {"item": "city_bike", "price": 320, "always": true},
         {"item": "vintage_bike", "price": 400, "limited": 3}
       ]
