@@ -13,7 +13,7 @@ const WALL_ABOVE = 1.5;
 const HUD_PX = 72;
 /** Decor drawn flat on the ground. */
 /** Objects that lie flat (people stand on them): the dance floor, the paintball field's markings, pads and bases. */
-const FLAT_OBJECTS = new Set(["dance_floor", "concert_stage", "pb_field", "pb_pad", "pb_spawn", "arena_spikes", "arena_carpet"]);
+const FLAT_OBJECTS = new Set(["dance_floor", "concert_stage", "pb_field", "pb_pad", "pb_spawn", "arena_spikes", "arena_carpet", "arena_bowl"]);
 const FLAT = new Set(["blanket", "lilypad", "mushrooms", "wildflowers", "daisies", "clover", "pebbles", "bones"]);
 /** Decor that sways in the wind. */
 const SWAY = new Set(["tree", "pine", "apple_tree", "bush", "tallgrass", "reeds", "willow", "willow_curtain", "pine_secret", "fern", "palm", "dry_shrub"]);
@@ -316,6 +316,21 @@ export class Scene {
     this.zoomTo = next;
     this.saveZoom();
     return true;
+  }
+
+  /** A fine step in (+1) or out (−1): a quarter step, for a precise view (between the crisp ones). */
+  zoomFine(dir: number): boolean {
+    const [lo, hi] = this.zoomRange();
+    const next = Math.max(lo, Math.min(hi + 2, this.zoomTo + Math.sign(dir) * 0.25));
+    if (next === this.zoomTo) return false;
+    this.zoomTo = next;
+    return true;
+  }
+
+  /** Back on the nearest crisp step (after fine zooming). */
+  zoomSnap() {
+    const [lo, hi] = this.zoomRange();
+    this.zoomTo = Math.max(lo, Math.min(hi, Math.round(this.zoomTo)));
   }
 
   /** The zoom now (for a pinch to start from). */

@@ -220,6 +220,19 @@ export function atlasMap(map: ZoneMap, size: number): HTMLCanvasElement {
       ctx.stroke();
       continue;
     }
+    // The amphitheatre: its stands, an oval ring round the sand.
+    if (o.kind === "arena_bowl") {
+      ctx.strokeStyle = "rgba(50,35,20,0.35)";
+      ctx.lineWidth = Math.max(1.5, w * 0.12);
+      ctx.beginPath();
+      ctx.ellipse(x + w / 2 + 1, y + h / 2 + 1, w * 0.44, h * 0.42, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = "#c9a46a";
+      ctx.beginPath();
+      ctx.ellipse(x + w / 2, y + h / 2, w * 0.44, h * 0.42, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      continue;
+    }
     if (w < 1.2 || h < 1.2) continue;
     const house = o.kind === "house";
     const roof = house ? HOUSE_ROOFS[Math.floor(rnd(o.x, o.y, 13) * HOUSE_ROOFS.length)] : ROOFS[o.kind] ?? "#8a5a3a";

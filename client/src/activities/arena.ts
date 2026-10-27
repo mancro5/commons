@@ -30,6 +30,8 @@ import type { MapObject } from "../world/map";
 import { COURT_CAESAR, COURT_OVERHANG, GATE_FIRES, GATE_OVERHANG, PILLAR_FIRE_Y, PILLAR_OVERHANG } from "../world/arenaart";
 import { drawPixelText, pixelWidth } from "../world/pixelfont";
 import { levelLabel, levelPicker } from "./botlevel";
+import { BOWL_OVERHANG, bowlMasts, bowlSeats } from "../world/amphitheatre";
+import { spectatorTexture } from "../world/crowdart";
 import type { Scene } from "../world/scene";
 
 // ---- the rules (as commons_sim::arena) -------------------------------------------
@@ -42,6 +44,8 @@ const OVER = 4;
 const SLOTS = 4;
 export const BOT_BASE = 0xffffff20;
 const TO_WIN = 3;
+/** How square an amphitheatre's sand is (as `arena::ROUNDNESS`: a superellipse's power). */
+const ROUNDNESS = 3.3;
 /**
  * The champion's parade, the last of a match (the server's OVER_MS and
  * PARADE_*): out of the ring by the south gate and down the red carpet, the
@@ -93,6 +97,10 @@ const ACT = { NONE: 0, LIGHT1: 1, LIGHT2: 2, LIGHT3: 3, CHARGE: 4, HEAVY: 5, BLO
 const INPUT = { LIGHT: 1, HEAVY_START: 2, HEAVY_RELEASE: 3, BLOCK_ON: 4, BLOCK_OFF: 5, ROLL: 6, THROW: 7, SPECIAL: 8 };
 const GIFT = { HEALTH: 1, SPEAR: 2, BOMB: 3, FURY: 4 };
 const EV = { HIT: 1, PARRY: 2, GUARD_BREAK: 3, WALL_SLAM: 4, DOWN: 5, SWING: 6, ROLL: 7, GIFT_INCOMING: 8, PICKUP: 10, THROW: 11, BOOM: 12, SPIKED: 14, ROUND_START: 15, FIGHT: 16, ROUND_WON: 17, CHAMPION: 18, SPECIAL: 19, FIRE: 20, STUCK: 21, RAGE_FULL: 22 };
+/** How much each thing stirs the crowd (they cheer more, the more stirred, and it fades). */
+const HYPE: Record<number, number> = { 1: 0.12, 2: 0.3, 3: 0.3, 4: 0.35, 5: 0.65, 12: 0.3, 14: 0.3, 16: 0.5, 17: 1, 18: 1, 19: 0.4 };
+/** The pennants on the amphitheatre's masts. */
+const PENNANTS = [0xb8322c, 0xd9a83a, 0x6a2a8a, 0xf2ead8];
 const FLAG = { DOWN: 1, FURY: 2, KNOCKED: 4, IFRAMES: 8, QUEUED: 16, WINDED: 32 };
 const GIFTS: Record<number, { icon: string; name: string }> = {
   [GIFT.HEALTH]: { icon: "🍗", name: "ROAST LEG +35" },
@@ -137,10 +145,17 @@ class Ring {
     readonly h: number,
     readonly pillars: Rect[],
     readonly spikes: Rect[],
+    /** In an amphitheatre: the ellipse inside the rectangle. */
+    readonly oval = false,
   ) {}
 
   free(x: number, y: number, r: number): boolean {
     if (x < r || y < r || x > this.w - r || y > this.h - r) return false;
+    if (this.oval) {
+      const cx = this.w / 2;
+      const cy = this.h / 2;
+      if ((Math.abs(x - cx) / (cx - r)) ** ROUNDNESS + (Math.abs(y - cy) / (cy - r)) ** ROUNDNESS > 1) return false;
+    }
     return !this.pillars.some((p) => {
       const nx = Math.min(Math.max(x, p.x), p.x + p.w);
       const ny = Math.min(Math.max(y, p.y), p.y + p.h);
@@ -485,6 +500,24 @@ export class ArenaShow {
   private prompt = new Sprite(word("CLICK CAESAR TO FIGHT!", "#ffe14f"));
   private promptArrow = new Graphics();
   private nextHail = 0;
+  /** The amphitheatre's crowd (if the map has one): a spectator for each of their seats, and how stirred they are. */
+  private crowd: { x: number; y: number; ground: number; th: number; look: number; seed: number; face: 1 | -1; sprite: Sprite | null }[] = [];
+  /** The masts round the rim (world px, their feet), and their pennants, flying. */
+  private masts: [number, number][] = [];
+  private pennants = new Graphics();
+  private nextCrowd = 0;
+  private hype = 0;
+  /** The amphitheatre, and watching from its stands: the 🔭 button, and where the camera's gliding. */
+  private bowlObj: MapObject | undefined;
+  private watching = false;
+  private watchCam = { x: 0, y: 0 };
+  /** Whom we're watching: 0 the middle of the sand, else a fighter. */
+  private watchWho = 0;
+  private watchBar = el("div", "ar-watchbar");
+  private watchBtn!: HTMLButtonElement;
+  private watchPick = el("div", "ar-watchpick");
+  private watchName = el("span", "ar-watchname");
+  private watchKey = "";
   private flames: Flame[] = [];
   private flamesG = new Graphics();
   private floor = new Graphics();
@@ -528,7 +561,8 @@ export class ArenaShow {
 
   constructor(
     private scene: Scene,
-    map: { objects: MapObject[] },
+    /** The map: its objects (the ring, pillars, spikes, Caesar's dais), and its tiles (the stands' seats). */
+    map: { objects: MapObject[]; width?: number; decor?: number[]; decor_legend?: string[] },
     private labels: HTMLElement,
     private canvas: HTMLCanvasElement,
     private selfId: () => number,
@@ -538,6 +572,8 @@ export class ArenaShow {
     private send: (m: ArenaSend) => void,
     /** A warm light that shows after dark (the night's lights), at world (x, y). */
     nightGlow: (x: number, y: number) => Sprite | null = () => null,
+    /** Everyone about (the crowd makes room for whoever's sat in the stands). */
+    private people: () => Iterable<{ pos: { x: number; y: number }; state: number }> = () => [],
   ) {
     const a = map.objects.find((o) => o.kind === "arena")!;
     this.arenaObj = a;
@@ -549,6 +585,7 @@ export class ArenaShow {
       a.h - 2,
       map.objects.filter((o) => o.kind === "arena_pillar").map(rect),
       map.objects.filter((o) => o.kind === "arena_spikes").map(rect),
+      map.objects.some((o) => o.kind === "arena_bowl"),
     );
     // On the sand: the fire's glow and the spikes over the floor, under the fighters; effects over all.
     this.floor.zIndex = this.oy * TILE + 2;
@@ -582,6 +619,26 @@ export class ArenaShow {
         this.fires.push({ x, y, glow, night: nightGlow(x, y + 10), phase: Math.random() * 10 });
       }
       this.flamesG.zIndex = Math.max(this.flamesG.zIndex, (gateObj.y + gateObj.h) * TILE);
+    }
+    // The amphitheatre: its crowd, a spectator to each of the stands' seats
+    // as they're painted (bar the cushioned ones, for people), drawn as they
+    // come in; the pennants on its masts.
+    this.bowlObj = map.objects.find((q) => q.kind === "arena_bowl");
+    const bowl = this.bowlObj;
+    if (bowl) {
+      const bx = bowl.x * TILE;
+      const by = bowl.y * TILE;
+      const h = (n: number, k: number) => {
+        const v = Math.sin(n * 12.9898 + k * 78.233) * 43758.5453;
+        return v - Math.floor(v);
+      };
+      bowlSeats(bowl.w, bowl.h).forEach((s, i) => {
+        if (s.open) return;
+        this.crowd.push({ x: bx + s.x, y: by + s.y, ground: by + s.ground, th: s.th, look: Math.floor(h(i, 1) * 64), seed: h(i, 2), face: h(i, 3) < 0.5 ? 1 : -1, sprite: null });
+      });
+      this.masts = bowlMasts(bowl.w, bowl.h).map(([x, y]) => [bx + x, by - BOWL_OVERHANG + y]);
+      this.pennants.zIndex = by + 2;
+      this.scene.sorted.addChild(this.pennants);
     }
     // Caesar, on his dais: where his head is (for the prompt over him, and his words).
     const court = map.objects.find((q) => q.kind === "arena_court");
@@ -658,6 +715,13 @@ export class ArenaShow {
 
   /** Where the camera looks: a little toward the aim, shaking on big blows. */
   camera(pos: { x: number; y: number }): { x: number; y: number } {
+    // Watching from the stands: gliding over to the fight.
+    if (this.watching) {
+      const f = this.watchFocus();
+      this.watchCam.x += (f.x - this.watchCam.x) * 0.08;
+      this.watchCam.y += (f.y - this.watchCam.y) * 0.08;
+      return this.watchCam;
+    }
     if (!this.capturing) return pos;
     // In the parade: just ahead of us, the way we're walking.
     if (this.state?.status === OVER) return { x: pos.x, y: pos.y + 1 };
@@ -671,6 +735,15 @@ export class ArenaShow {
   private act(what: number, aim = this.me.aim) {
     this.send({ t: "ArenaAct", act: what, aim: toU16(aim) });
   }
+
+  private onWatchKey = (e: KeyboardEvent) => {
+    if (!this.watching || isTyping(e)) return;
+    const dir = e.code === "ArrowLeft" || e.code === "KeyA" ? -1 : e.code === "ArrowRight" || e.code === "KeyD" ? 1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    this.cycleWatch(dir);
+  };
 
   private onKey = (e: KeyboardEvent) => {
     if (!this.capturing || isTyping(e)) return;
@@ -1018,6 +1091,7 @@ export class ArenaShow {
     const y = e.y / 100;
     const nearMe = this.near(x, y);
     const now = performance.now();
+    this.hype = Math.min(1, this.hype + (HYPE[e.kind] ?? 0) * (e.kind === EV.HIT && (e.m & 2) !== 0 ? 2 : 1));
     switch (e.kind) {
       case EV.SWING:
         sfx.swordSwing(e.n === ACT.HEAVY ? 0 : 1, nearMe * (e.n === ACT.HEAVY ? 1 : 0.5));
@@ -1202,6 +1276,9 @@ export class ArenaShow {
     this.fx.clear();
     this.drawFires(wallNow, dt);
     this.drawCaesar(wallNow);
+    this.hype *= Math.exp(-dt * 0.6);
+    this.drawCrowd(wallNow);
+    this.updateWatch();
     const s = this.state;
     const live = !!s && s.status !== LOBBY;
     const me = this.selfId();
@@ -1606,12 +1683,12 @@ export class ArenaShow {
     const running = !!s && s.status !== LOBBY;
     // The gates shut while a match is on: portcullises at both.
     const a = this.arenaObj;
-    if (running) {
+    if (running || this.ring.oval) {
       const gx = (a.x + a.w / 2 - 1) * TILE;
       // The parade: the south gate winched up for the champion.
       const pt = this.parade && s?.status === OVER ? (serverNow - this.parade.start) / 1000 : -1;
       const up = pt < 0 ? 0 : Math.min(1, Math.max(0, (pt - (SALUTE - 0.9)) / 0.8));
-      for (const gy of [a.y * TILE, (a.y + a.h - 1) * TILE]) {
+      for (const gy of this.ring.oval ? [(a.y + a.h - 1) * TILE] : [a.y * TILE, (a.y + a.h - 1) * TILE]) {
         const south = gy !== a.y * TILE;
         const lift = south ? Math.round(up * (TILE + 4)) : 0;
         if (south && up >= 1) continue;
@@ -1631,18 +1708,26 @@ export class ArenaShow {
       const cy = this.ring.h / 2;
       for (let y = 0; y < this.ring.h; y += 0.25) {
         const dy = (y + 0.125 - cy) / cy;
-        const inside = fire * fire - dy * dy;
-        const half = inside > 0 ? Math.sqrt(inside) * cx : 0;
+        // (In an amphitheatre the ring's a rounded square, like its walls.)
+        const p = this.ring.oval ? ROUNDNESS : 2;
+        const inside = fire ** p - Math.abs(dy) ** p;
+        const half = inside > 0 ? inside ** (1 / p) * cx : 0;
         const x0 = cx - half;
         const x1 = cx + half;
-        if (x0 > 0) g.rect(this.wx(0), this.wy(y), x0 * TILE, TILE / 4).fill({ color: 0xff4f1a, alpha: 0.22 });
-        if (x1 < this.ring.w) g.rect(this.wx(x1), this.wy(y), (this.ring.w - x1) * TILE, TILE / 4).fill({ color: 0xff4f1a, alpha: 0.22 });
+        // (In an oval, the sand's own edge on this row.)
+        const edge = this.ring.oval ? Math.max(0, 1 - Math.abs(dy) ** ROUNDNESS) ** (1 / ROUNDNESS) * cx : cx;
+        const l = cx - edge;
+        const r = cx + edge;
+        if (x0 > l) g.rect(this.wx(l), this.wy(y), (x0 - l) * TILE, TILE / 4).fill({ color: 0xff4f1a, alpha: 0.22 });
+        if (x1 < r) g.rect(this.wx(x1), this.wy(y), (r - x1) * TILE, TILE / 4).fill({ color: 0xff4f1a, alpha: 0.22 });
       }
       // Flames along the edge.
       for (let i = 0; i < 90; i++) {
         const t = (i / 90) * Math.PI * 2;
-        const x = cx + Math.cos(t) * cx * fire;
-        const y = cy + Math.sin(t) * cy * fire;
+        // (Round a rounded square, in an amphitheatre.)
+        const e = this.ring.oval ? 2 / ROUNDNESS : 1;
+        const x = cx + Math.sign(Math.cos(t)) * Math.abs(Math.cos(t)) ** e * cx * fire;
+        const y = cy + Math.sign(Math.sin(t)) * Math.abs(Math.sin(t)) ** e * cy * fire;
         if (x < 0 || y < 0 || x > this.ring.w || y > this.ring.h) continue;
         const flick = Math.sin(wallNow / 70 + i * 1.7) * 0.5 + 0.5;
         const h = 6 + flick * 8;
@@ -1995,6 +2080,186 @@ export class ArenaShow {
     this.floaters.push({ sprite: s, x: c.x, y: c.y - 24, at: performance.now(), life });
   }
 
+  // ---- watching from the stands --------------------------------------------------
+
+  /** Whether we're sat in the amphitheatre's stands (not fighting): we can watch. */
+  private seated(): boolean {
+    const me = this.avatarOf(this.selfId());
+    const b = this.bowlObj;
+    return !!me && !!b && !this.capturing && me.state === 1 && me.pos.x >= b.x && me.pos.x < b.x + b.w && me.pos.y >= b.y && me.pos.y < b.y + b.h;
+  }
+
+  /** 🔭 on or off: the camera to the fight, or back to us. */
+  private toggleWatch() {
+    if (!this.seated()) return;
+    this.watching = !this.watching;
+    const me = this.avatarOf(this.selfId());
+    if (this.watching && me) this.watchCam = { x: me.pos.x, y: me.pos.y };
+    if (!this.watching) this.stopWatching();
+    sfx.tone(sfx.at(0), 0.08, 0.06, "triangle", this.watching ? 880 : 660);
+  }
+
+  /** Back to our seat: whom we watched forgotten, the zoom back on a crisp step. */
+  private stopWatching() {
+    this.watching = false;
+    this.watchWho = 0;
+    this.scene.zoomSnap();
+  }
+
+  /** Who can be watched, in turn: the middle of the sand, then each fighter (by place). */
+  private watchable(): number[] {
+    const s = this.state;
+    const ids = s && s.status !== LOBBY ? s.slots.filter((id) => id && s.fighters.some((f) => f.id === id)) : [];
+    return [0, ...ids];
+  }
+
+  /** The next (or the one before) to watch. */
+  private cycleWatch(dir: 1 | -1) {
+    if (!this.watching) return;
+    const list = this.watchable();
+    const i = Math.max(0, list.indexOf(this.watchWho));
+    this.watchWho = list[(i + dir + list.length) % list.length];
+    sfx.tone(sfx.at(0), 0.05, 0.05, "triangle", 990);
+  }
+
+  /** Watching: the wheel zooms finely (see game.ts). */
+  get watchingNow(): boolean {
+    return this.watching;
+  }
+
+  /**
+   * Where the watching camera looks: between the middle of the sand and
+   * the fighters still standing (so it follows the fight, and never
+   * strays off the sand); the middle when there's no fight.
+   */
+  private watchFocus(): { x: number; y: number } {
+    const a = this.arenaObj;
+    const mid = { x: a.x + a.w / 2 - 0.5, y: a.y + a.h / 2 - 0.5 };
+    const s = this.state;
+    if (!s || s.status === LOBBY) return mid;
+    // Watching one of them: right on them.
+    const who = this.watchWho ? s.fighters.find((f) => f.id === this.watchWho) : undefined;
+    if (who) {
+      const p = this.held.get(who.id) ?? { x: who.x / 100, y: who.y / 100 };
+      return this.toTile(p.x, p.y);
+    }
+    const up = s.fighters.filter((f) => !(f.flags & FLAG.DOWN));
+    if (!up.length) return mid;
+    let x = 0;
+    let y = 0;
+    for (const f of up) {
+      const p = this.held.get(f.id) ?? { x: f.x / 100, y: f.y / 100 };
+      const t = this.toTile(p.x, p.y);
+      x += t.x;
+      y += t.y;
+    }
+    return { x: mid.x * 0.35 + (x / up.length) * 0.65, y: mid.y * 0.35 + (y / up.length) * 0.65 };
+  }
+
+  /** The 🔭 button, shown while we're sat in the stands. */
+  private updateWatch() {
+    const seated = this.seated();
+    if (!seated && this.watching) this.stopWatching();
+    this.watchBar.hidden = !seated;
+    const label = this.watching ? "🔭 Back to my seat" : "🔭 Watch the fight";
+    if (this.watchBtn.textContent !== label) this.watchBtn.textContent = label;
+    this.watchBtn.classList.toggle("on", this.watching);
+    // Whom: ◀ the middle, or a fighter (in their colour) ▶.
+    this.watchPick.hidden = !this.watching;
+    if (!this.watchable().includes(this.watchWho)) this.watchWho = 0;
+    const who = this.watchWho;
+    const key = `${who}|${this.watching}`;
+    if (key !== this.watchKey) {
+      this.watchKey = key;
+      this.watchName.textContent = who ? this.who(who) : "The middle";
+      this.watchName.style.color = who ? CSS[this.slotOf(who)] : "";
+    }
+  }
+
+  // ---- the crowd ------------------------------------------------------------------
+
+  /**
+   * The amphitheatre's crowd, a few times a second: fuller when there's a
+   * fight; on their feet, arms up, when it's stirring (a big hit, someone
+   * down, a round won: it fades), a wave going round between rounds (and
+   * now and then when it's quiet), the odd one fidgeting; the pennants on
+   * the masts flying. Only drawn when you're near.
+   */
+  private drawCrowd(wallNow: number) {
+    if (!this.crowd.length) return;
+    const self = this.avatarOf(this.selfId());
+    const a = this.arenaObj;
+    const near = !!self && Math.hypot(self.pos.x - (a.x + a.w / 2), self.pos.y - (a.y + a.h / 2)) < 48;
+    this.pennants.visible = near;
+    if (!near) {
+      for (const p of this.crowd) if (p.sprite) p.sprite.visible = false;
+      return;
+    }
+    if (wallNow < this.nextCrowd) return;
+    this.nextCrowd = wallNow + 90;
+    const s = this.state;
+    const running = !!s && s.status !== LOBBY;
+    const signedUp = !!s && s.slots.some((id) => id !== 0);
+    const fill = running ? 0.92 : signedUp ? 0.6 : 0.38;
+    const t = wallNow / 1000;
+    const wave = (!!s && (s.status === COUNTDOWN || s.status === ROUND_END)) || (!running && t % 45 < 9);
+    const hype = s?.status === OVER ? 1 : this.hype;
+    // (Where someone has sat down in the stands, the crowd makes room; anyone
+    // just walking by goes in front of or behind them, as they pass.)
+    const near2: { x: number; y: number }[] = [];
+    const b = this.bowlObj;
+    for (const p of this.people()) {
+      if (p.state !== 1) continue;
+      if (b && p.pos.x >= b.x && p.pos.x < b.x + b.w && p.pos.y >= b.y && p.pos.y < b.y + b.h) near2.push({ x: p.pos.x * TILE + TILE / 2, y: p.pos.y * TILE + TILE - 6 });
+    }
+    const beatOf = (i: number, n: number) => {
+      const v = Math.sin(i * 91.17 + n * 13.73) * 43758.5453;
+      return v - Math.floor(v);
+    };
+    this.crowd.forEach((p, i) => {
+      const here = p.seed < fill && !near2.some((q) => Math.abs(q.x - p.x) < 22 && Math.abs(q.y - p.ground) < 26);
+      if (!here) {
+        if (p.sprite) p.sprite.visible = false;
+        return;
+      }
+      let frame: AvatarFrame = 2;
+      let lift = 0;
+      // The wave goes round the stands.
+      if (wave && Math.cos(p.th - t * 2.2) > 0.86) {
+        frame = SWORD_RAISE;
+        lift = 3;
+      }
+      const beat = Math.floor(t * 4 + p.seed * 7);
+      if (frame === 2 && beatOf(i, beat) < hype * 0.85) {
+        frame = SWORD_RAISE;
+        lift = beat % 2 ? 3 : 0;
+      }
+      if (frame === 2 && beatOf(i, Math.floor(t * 1.3)) < 0.03) lift = 1;
+      let sp = p.sprite;
+      if (!sp) {
+        sp = new Sprite();
+        sp.anchor.set(0.5, 1);
+        this.scene.sorted.addChild(sp);
+        p.sprite = sp;
+      }
+      sp.visible = true;
+      sp.texture = spectatorTexture(p.look, frame === 2 ? 0 : 1);
+      sp.scale.x = frame === 2 ? p.face : beat % 2 ? 1 : -1;
+      sp.position.set(p.x, p.y + 4 - lift);
+      sp.zIndex = p.ground + 4;
+    });
+    // The pennants on the masts.
+    const g = this.pennants.clear();
+    this.masts.forEach(([mx, my], i) => {
+      const w = Math.round(Math.sin(t * 5 + i * 1.7) * 1.5);
+      const top = my - 20;
+      const color = PENNANTS[i % PENNANTS.length];
+      g.rect(mx + 2, top, 8 + w, 2).fill({ color });
+      g.rect(mx + 2, top + 2, 6 + w, 2).fill({ color });
+      g.rect(mx + 2, top + 4, 3 + Math.max(0, w), 1).fill({ color });
+    });
+  }
+
   // ---- Caesar ---------------------------------------------------------------------
 
   /**
@@ -2197,6 +2462,16 @@ export class ArenaShow {
   private buildHud() {
     this.yieldBtn = confirmButton("ar-yield", "🏳 Leave", "Tap again to leave", () => this.send({ t: "ArenaLeave" }));
     this.yieldBtn.classList.add("ar-yield");
+    this.watchBtn = button("🔭 Watch the fight", () => this.toggleWatch(), "ar-watch");
+    const prev = button("◀", () => this.cycleWatch(-1), "ar-watch-step");
+    const next = button("▶", () => this.cycleWatch(1), "ar-watch-step");
+    prev.title = "Watch the one before (← or A)";
+    next.title = "Watch the next (→ or D)";
+    this.watchPick.append(prev, this.watchName, next, el("small", "ar-watch-hint", "scroll to zoom"));
+    this.watchBar.append(this.watchPick, this.watchBtn);
+    this.watchBar.hidden = true;
+    // ← → (or A D): whom we're watching.
+    window.addEventListener("keydown", this.onWatchKey, true);
     this.hud.append(this.crownsEl, this.center, this.feed, this.selfEl, this.hint, this.touchPad, this.stickEl, this.yieldBtn);
     this.stickEl.append(el("div", "pb-stick-knob"));
     this.stickEl.hidden = true;
@@ -2233,7 +2508,7 @@ export class ArenaShow {
     this.lobby.hidden = true;
     this.results.hidden = true;
     this.vignette.hidden = true;
-    document.body.append(this.vignette, this.hud, this.lobby, this.results);
+    document.body.append(this.vignette, this.hud, this.lobby, this.results, this.watchBar);
   }
 
   private announce(text: string, color: string, scale = 1, sub = "") {
@@ -2405,11 +2680,14 @@ export class ArenaShow {
     this.floor.destroy();
     this.spikesG.destroy();
     this.flamesG.destroy();
+    for (const p of this.crowd) p.sprite?.destroy();
+    this.pennants.destroy();
     this.petalsG.destroy();
     this.petalsOutG.destroy();
     for (const f of this.fires) f.night?.destroy();
     this.top.destroy({ children: true });
-    for (const e of [this.hud, this.lobby, this.results, this.vignette]) e.remove();
+    for (const e of [this.hud, this.lobby, this.results, this.vignette, this.watchBar]) e.remove();
+    window.removeEventListener("keydown", this.onWatchKey, true);
     document.body.classList.remove("pb-playing", "pb-touch-mode");
   }
 }

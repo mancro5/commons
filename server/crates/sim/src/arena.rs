@@ -101,7 +101,11 @@ pub const ROUND_END_MS: u32 = 3800;
 pub const OVER_MS: u32 = 15_000;
 /// Where the parade ends: this far below the sand's top edge (arena tiles),
 /// down the carpet; those who lost this far behind, one after another.
-pub const PARADE_END: f64 = 9.0;
+pub const PARADE_END: f64 = 11.0;
+/// How square an amphitheatre's sand (and stands) are: a superellipse's
+/// power (2 an ellipse; the higher, the squarer). Mirrored client side and
+/// in mapgen.
+pub const ROUNDNESS: f64 = 3.3;
 pub const PARADE_GAP: f64 = 1.6;
 pub const PARADE_FIRST_GAP: f64 = 2.2;
 /// The ring of fire starts closing this long into a round, and takes this long to close.
@@ -241,19 +245,22 @@ impl Rect {
     }
 }
 
-/// The sand: its size, its pillars and spike plates.
+/// The sand: its size, its pillars and spike plates; in an amphitheatre
+/// (`oval`), the rounded square (a superellipse) inside that rectangle.
 #[derive(Debug, Clone)]
 pub struct Ring {
     pub w: f64,
     pub h: f64,
     pub pillars: Vec<Rect>,
     pub spikes: Vec<Rect>,
+    pub oval: bool,
 }
 
 impl Ring {
     /// The ring laid out by a map's objects: the `arena` marker's inside
-    /// (its walls are its edge tiles), `arena_pillar`s and `arena_spikes`.
-    /// Returns it and where its corner is (map tiles).
+    /// (its walls are its edge tiles), `arena_pillar`s and `arena_spikes`;
+    /// oval when it stands in an amphitheatre (an `arena_bowl`). Returns it
+    /// and where its corner is (map tiles).
     pub fn from_map(objects: &[crate::map::MapObject]) -> Option<(Ring, (u16, u16))> {
         let a = objects.iter().find(|o| o.kind == "arena")?;
         let (ox, oy) = (a.x + 1, a.y + 1);
@@ -277,6 +284,7 @@ impl Ring {
                     .filter(|o| o.kind == "arena_spikes")
                     .map(rect)
                     .collect(),
+                oval: objects.iter().any(|o| o.kind == "arena_bowl"),
             },
             (ox, oy),
         ))
@@ -287,7 +295,15 @@ impl Ring {
             && y >= r
             && x <= self.w - r
             && y <= self.h - r
+            && (!self.oval || self.in_oval(x, y, r))
             && !self.pillars.iter().any(|p| p.hits(x, y, r))
+    }
+
+    /// Whether a body (radius `r`) at (x, y) is inside the rounded wall.
+    fn in_oval(&self, x: f64, y: f64, r: f64) -> bool {
+        let (cx, cy) = (self.w / 2.0, self.h / 2.0);
+        ((x - cx).abs() / (cx - r)).powf(ROUNDNESS) + ((y - cy).abs() / (cy - r)).powf(ROUNDNESS)
+            <= 1.0
     }
 
     /// Moving a body by (dx, dy), sliding along what it runs into; and whether it ran into anything.
@@ -321,16 +337,28 @@ impl Ring {
         })
     }
 
-    /// The corners the gladiators start from.
+    /// The corners the gladiators start from (in an oval, round it on the diagonals).
     pub fn gate(&self, k: usize) -> (f64, f64) {
-        let (l, r, t, b) = (2.0, self.w - 2.0, 2.0, self.h - 2.0);
+        let (l, r, t, b) = if self.oval {
+            let (cx, cy) = (self.w / 2.0, self.h / 2.0);
+            let (dx, dy) = ((cx - 2.0) * 0.68, (cy - 2.0) * 0.68);
+            (cx - dx, cx + dx, cy - dy, cy + dy)
+        } else {
+            (2.0, self.w - 2.0, 2.0, self.h - 2.0)
+        };
         [(l, t), (r, b), (r, t), (l, b)][k % 4]
     }
 
-    /// How far out (x, y) is, as a fraction of the ring (1 at its edge, middle to side).
+    /// How far out (x, y) is, as a fraction of the ring (1 at its edge, middle
+    /// to side; in an amphitheatre, rounded square like its wall).
     pub fn reach(&self, x: f64, y: f64) -> f64 {
         let (cx, cy) = (self.w / 2.0, self.h / 2.0);
-        (((x - cx) / cx).powi(2) + ((y - cy) / cy).powi(2)).sqrt()
+        let (u, v) = (((x - cx) / cx).abs(), ((y - cy) / cy).abs());
+        if self.oval {
+            (u.powf(ROUNDNESS) + v.powf(ROUNDNESS)).powf(1.0 / ROUNDNESS)
+        } else {
+            (u * u + v * v).sqrt()
+        }
     }
 }
 
@@ -2085,6 +2113,7 @@ mod tests {
                     h: 2.0,
                 },
             ],
+            oval: false,
         }
     }
 
@@ -2176,6 +2205,46 @@ mod tests {
             easy > medium && medium > hard,
             "easy {easy}, medium {medium}, hard {hard}"
         );
+    }
+
+    #[test]
+    fn in_an_amphitheatre_the_sand_is_oval() {
+        let mut r = ring();
+        r.oval = true;
+        // The middle and the starts are on the sand; the corners aren't.
+        assert!(r.free(r.w / 2.0, r.h / 2.0, BODY_R));
+        for k in 0..4 {
+            let (x, y) = r.gate(k);
+            assert!(r.free(x, y, BODY_R), "start {k} at ({x}, {y})");
+        }
+        assert!(!r.free(1.0, 1.0, BODY_R));
+        assert!(!r.free(r.w - 1.0, r.h - 1.0, BODY_R));
+        // Running at the curved wall: stopped at it, and told so (a wall slam can happen).
+        let (x, y, bumped) = r.slide(r.w / 2.0, r.h / 2.0, 30.0, 30.0, BODY_R);
+        assert!(bumped);
+        assert!(r.reach(x, y) <= 1.0, "still inside ({x}, {y})");
+        // Bots fight a whole match in it, nobody ever outside it.
+        let mut m = Match::new(r.clone());
+        m.join(1, 0);
+        assert!(m.start(1, false, 0));
+        let i = m.fighters.iter().position(|f| f.id == 1).unwrap();
+        m.fighters[i].bot = true;
+        let mut rr = rng(5);
+        let mut now = 0;
+        while m.status != OVER && now < 600_000 {
+            now += 100;
+            m.step(now, 100, &mut rr);
+            for f in &m.fighters {
+                assert!(
+                    r.reach(f.x, f.y) <= 1.0,
+                    "{} out at ({}, {})",
+                    f.id,
+                    f.x,
+                    f.y
+                );
+            }
+        }
+        assert_eq!(m.status, OVER, "a champion in the end");
     }
 
     #[test]

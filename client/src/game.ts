@@ -753,6 +753,7 @@ export class Game {
         () => this.socket?.clock.now() ?? 0,
         (m) => this.socket?.send(m),
         (x, y) => this.daynight.addGlow(x, y, 2.6, 2.2, 0xff7a3a, 0.7),
+        () => this.avatars.values(),
       );
     }
     if (map.objects.some((o) => o.kind === "pb_field")) {
@@ -2957,8 +2958,11 @@ export class Game {
     const zoom = (e: WheelEvent) => {
       e.preventDefault();
       wheel += e.deltaY;
-      if (Math.abs(wheel) < 60) return;
-      this.scene.zoomBy(wheel < 0 ? 1 : -1);
+      // Watching the arena from the stands, the zoom goes in fine steps.
+      const fine = !!this.arena?.watchingNow;
+      if (Math.abs(wheel) < (fine ? 30 : 60)) return;
+      if (fine) this.scene.zoomFine(wheel < 0 ? 1 : -1);
+      else this.scene.zoomBy(wheel < 0 ? 1 : -1);
       wheel = 0;
     };
     const canvas = this.app.canvas;

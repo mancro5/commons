@@ -1123,79 +1123,188 @@ fn fairground(k: &mut Blk) {
     k.scatter(37, 20, N - 3, N - 3, 6, &["tree", "bush"]);
 }
 
-/// The gladiator arena: a great walled ring you walk right into, out in the
-/// open so anyone passing sees the fight. Sandstone walls with a gate north
-/// and south; a paved band round the inside for the crowd to stand on;
-/// and the sand in the middle, where the fighters face off along the middle
-/// row. The sign by the north gate is where you step up to fight.
+/// The gladiator arena: an amphitheatre in the desert, a rounded square of
+/// stands round the sand, its grand arch facing south. Down from the
+/// arch the red carpet, and Caesar on his dais beside it: talk to him to
+/// fight. An oasis off to the south-west, cacti and palms about.
 fn arena(k: &mut Blk) {
-    // The whole block's desert: sand, a paved way to each gate.
+    // The whole block's desert: sand everywhere.
     for y in 2..N - 2 {
         for x in 2..N - 2 {
             k.ground(x, y, "sand");
         }
     }
-    let (ax, ay, aw, ah) = (11u16, 12u16, 26u16, 17u16);
-    k.rect(ax, ay, aw, ah, "plaza");
-    k.rect(ax + 2, ay + 2, aw - 4, ah - 4, "sand");
-    let gate = ax + aw / 2 - 1;
-    for x in ax..ax + aw {
-        if x != gate && x != gate + 1 {
-            k.decor(x, ay, "arena_wall");
-            k.decor(x, ay + ah - 1, "arena_wall");
+    // The amphitheatre, 38×28 tiles: an oval bowl (a little squared: a
+    // superellipse) of stands round the sand, painted client side
+    // (world/amphitheatre.ts); here, what each tile is, by its middle, as
+    // the art has it. Out from the sand, ring by ring: the podium wall; a
+    // row of seats (the emperor's box in it, north); a walkway all the way
+    // round; a second row of seats; the outer wall. The sand's closed to
+    // anyone not fighting. Into the stands: the grand arch in the middle of
+    // the south wall, and a little arch through each side. The south seats
+    // (red cushions) are for watching from; the rest are the crowd's.
+    let (fx, fy, fw, fh) = (5u16, 4u16, 38u16, 28u16);
+    const RIM: u16 = 5;
+    k.marker("arena_bowl", fx, fy, fw, fh, Some("The Arena"));
+    let gate = fx + fw / 2 - 1;
+    let (cx, cy) = (fw as f64 / 2.0, fh as f64 / 2.0);
+    let (a, b) = ((fw / 2 - RIM) as f64, (fh / 2 - RIM) as f64);
+    // How far out from the sand's edge a point is (tiles; below 0, on the sand).
+    let ring_u = |dx: f64, dy: f64| -> f64 {
+        let n = commons_sim::arena::ROUNDNESS;
+        let f = |u: f64| (dx.abs() / (a + u)).powf(n) + (dy.abs() / (b + u)).powf(n);
+        if f(0.0) <= 1.0 {
+            return -1.0;
+        }
+        let (mut lo, mut hi) = (0.0, 20.0);
+        for _ in 0..30 {
+            let mid = (lo + hi) / 2.0;
+            if f(mid) > 1.0 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    };
+    let solid = |k: &mut Blk, x: u16, y: u16| {
+        let i = k.b.i(k.ox + x, k.oy + y);
+        k.b.solid[i] = true;
+    };
+    // Each tile's ring, by its middle; then wherever the walkway only
+    // meets itself corner to corner (round the curves), the tile between
+    // that's nearest the walkway joins it, so it runs unbroken right round
+    // (nobody steps across corners).
+    let (w, h) = (fw as usize, fh as usize);
+    let mut ring = vec![0i32; w * h];
+    let mut out_u = vec![0f64; w * h];
+    for j in 0..h {
+        for i in 0..w {
+            let u = ring_u(i as f64 + 0.5 - cx, j as f64 + 0.5 - cy);
+            out_u[j * w + i] = u;
+            ring[j * w + i] = if u < 0.0 { -1 } else { u.floor() as i32 };
         }
     }
-    for y in ay..ay + ah {
-        k.decor(ax, y, "arena_wall");
-        k.decor(ax + aw - 1, y, "arena_wall");
+    for j in 0..h - 1 {
+        for i in 0..w {
+            for di in [-1i32, 1] {
+                let i2 = i as i32 + di;
+                if i2 < 0 || i2 >= w as i32 {
+                    continue;
+                }
+                let i2 = i2 as usize;
+                let (p, q) = (j * w + i, (j + 1) * w + i2);
+                let (side_a, side_b) = (j * w + i2, (j + 1) * w + i);
+                if ring[p] == 2 && ring[q] == 2 && ring[side_a] != 2 && ring[side_b] != 2 {
+                    let near = |k: usize| (out_u[k] - 2.5).abs();
+                    let pick = if near(side_a) <= near(side_b) {
+                        side_a
+                    } else {
+                        side_b
+                    };
+                    ring[pick] = 2;
+                }
+            }
+        }
     }
-    // The ring itself (invisible: it marks where the fight is).
+    for y in fy..fy + fh {
+        for x in fx..fx + fw {
+            let dx = (x - fx) as f64 + 0.5 - cx;
+            let dy = (y - fy) as f64 + 0.5 - cy;
+            let r = ring[(y - fy) as usize * w + (x - fx) as usize];
+            // The way in from the south (to the portcullis), the side arches (to the walkway).
+            let way = dy > 0.0 && dx.abs() < 1.0;
+            let side = dy.abs() < 1.0 && (3..=4).contains(&r);
+            let public = dy > b * 0.45;
+            match r {
+                -1 => {
+                    // The sand: only for those fighting.
+                    k.ground(x, y, "sand");
+                    solid(k, x, y);
+                }
+                0 if way => {
+                    // The gate onto the sand (its portcullis drawn live).
+                    k.ground(x, y, "plaza");
+                    solid(k, x, y);
+                }
+                1..=4 if way || side => k.ground(x, y, "plaza"),
+                // The podium wall, the emperor's box, the outer wall: solid.
+                0 | 4 => solid(k, x, y),
+                1 if dy < 0.0 && dx.abs() < 2.5 => solid(k, x, y),
+                1 => k.decor(x, y, if public { "amph_seat_pub" } else { "amph_seat" }),
+                3 => k.decor(
+                    x,
+                    y,
+                    if public {
+                        "amph_seat_pub_hi"
+                    } else {
+                        "amph_seat_hi"
+                    },
+                ),
+                2 => k.ground(x, y, "plaza"),
+                _ => {}
+            }
+        }
+    }
+    // The ring itself (invisible: it marks where the fight is), its podium
+    // wall round the sand's rectangle; the sand inside, 28×18, rounded.
+    let (ax, ay, aw, ah) = (
+        fx + RIM - 1,
+        fy + RIM - 1,
+        fw - 2 * (RIM - 1),
+        fh - 2 * (RIM - 1),
+    );
     k.marker("arena", ax, ay, aw, ah, Some("Arena"));
     // Two stone pillars on the sand, to dodge round (or be slammed into),
-    // and four spike plates that rise in turn (see commons_sim::arena). The
-    // sand inside is 24×15: all of it mirrored, side to side and top to bottom.
+    // and four spike plates that rise in turn (see commons_sim::arena): all
+    // mirrored, side to side and top to bottom.
     let (sx, sy) = (ax + 1, ay + 1);
-    for (px, py) in [(5u16, 7u16), (17, 7)] {
+    for (px, py) in [(7u16, 8u16), (19, 8)] {
         k.object("arena_pillar", sx + px, sy + py, 2, 2, "Pillar");
     }
-    for (px, py) in [(11u16, 1u16), (11, 12), (1, 6), (21, 6)] {
+    for (px, py) in [(13u16, 1u16), (13, 15), (2, 8), (24, 8)] {
         k.marker("arena_spikes", sx + px, sy + py, 2, 2, None);
     }
-    k.object("arena_sign", gate + 3, ay - 2, 2, 1, "Arena");
-    k.spot("arena", gate, ay - 1);
-    // Flagstone ways in at both gates.
-    k.rect(gate, 2, 2, ay - 2, "plaza");
-    k.rect(gate, ay + ah, 2, N - 2 - (ay + ah), "plaza");
-    // The grand south entrance: an archway over the way in (its two piers
-    // solid, the way under it open), a red carpet out from it, and on a dais
-    // beside the carpet Caesar with two legionaries: talk to Caesar to fight.
-    k.marker("arena_gate", gate - 3, ay + ah + 1, 8, 2, Some("The Arena"));
-    for (px, py) in [
-        (gate - 3, ay + ah + 1),
-        (gate - 2, ay + ah + 1),
-        (gate + 3, ay + ah + 1),
-        (gate + 4, ay + ah + 1),
-    ] {
-        for dy in 0..2 {
-            let i = k.b.i(k.ox + px, k.oy + py + dy);
-            k.b.solid[i] = true;
+    // The grand arch in the south wall (its piers solid, the way under it
+    // open); down from it the red carpet, and on a dais beside the carpet
+    // Caesar with two legionaries: talk to Caesar to fight. Bystanders are
+    // shown out to the carpet's side.
+    let wall_row = fy + fh - 1;
+    for x in gate - 3..=gate + 4 {
+        k.decor(x, wall_row, "none");
+    }
+    k.marker("arena_gate", gate - 3, wall_row, 8, 2, Some("The Arena"));
+    for px in [gate - 3, gate - 2, gate + 3, gate + 4] {
+        for py in [wall_row, wall_row + 1] {
+            solid(k, px, py);
         }
     }
-    k.marker("arena_carpet", gate - 1, ay + ah + 3, 4, 7, None);
-    k.object("arena_court", gate + 5, ay + ah + 3, 5, 2, "Caesar");
-    k.spot("caesar", gate + 7, ay + ah + 5);
+    let below = fy + fh;
+    k.rect(gate, below, 2, N - 2 - below, "plaza");
+    k.marker("arena_carpet", gate - 1, below + 1, 4, 7, None);
+    k.spot("arena", gate - 2, below + 2);
+    k.object("arena_court", gate + 5, below + 1, 5, 2, "Caesar");
+    k.spot("caesar", gate + 7, below + 3);
     k.object(
         "signpost",
         gate - 4,
-        ay + ah + 4,
+        below + 2,
         1,
         1,
-        "The Arena: talk to Caesar (on his dais by the red carpet) to join the games. Duel, three-way or a four-gladiator brawl; bots if you like",
+        "The Arena: talk to Caesar (on his dais by the red carpet) to fight: a duel, a three-way or a four-gladiator brawl, bots if you like. To watch, go in under the arches and sit on a red-cushioned seat",
     );
-    // An oasis in the north-west corner: a pool, palms round it, reeds.
-    for y in 3..9u16 {
-        for x in 3..10u16 {
-            let (dx, dy) = ((x as f32 - 6.0) / 3.2, (y as f32 - 5.8) / 2.6);
+    for (x, y) in [
+        (gate - 2, below + 4),
+        (gate + 3, below + 4),
+        (gate - 2, below + 7),
+        (gate + 3, below + 7),
+    ] {
+        k.decor(x, y, "lantern");
+    }
+    // An oasis in the south-west corner: a pool, palms round it, reeds.
+    for y in below + 2..N - 2 {
+        for x in 2..13u16 {
+            let (dx, dy) = ((x as f32 - 7.5) / 3.4, (y as f32 - 39.5) / 2.8);
             let d = dx * dx + dy * dy;
             if d < 1.0 {
                 k.ground(x, y, "water");
@@ -1204,64 +1313,49 @@ fn arena(k: &mut Blk) {
             }
         }
     }
-    for (x, y) in [(2u16, 4u16), (9, 3), (10, 7), (3, 9), (8, 9)] {
+    for (x, y) in [(3u16, 37u16), (11, 36), (12, 41), (4, 43), (10, 44)] {
         k.decor(x, y, "palm");
     }
-    for (x, y) in [(3u16, 7u16), (9, 5)] {
+    for (x, y) in [(4u16, 40u16), (11, 39)] {
         k.decor(x, y, "reeds");
     }
-    // The desert's bits and pieces, on open sand, clear of the ways through.
+    // The desert's bits and pieces, on open sand, clear of the ways through
+    // and the bowl.
     let open = |k: &Blk, x: u16, y: u16| -> bool {
         let i = k.b.i(k.ox + x, k.oy + y);
         k.b.decor[i] == 0 && !k.b.solid[i] && [g("sand"), g("soil")].contains(&k.b.ground[i])
     };
-    let clear_of_ways = |x: u16, y: u16| {
-        !(gate.saturating_sub(1)..=gate + 2).contains(&x)
-            && !(ax.saturating_sub(1)..=ax + aw).contains(&x)
-            || y < ay.saturating_sub(3)
-            || y > ay + ah + 1
-    };
     for y in 3..N - 3 {
         for x in 3..N - 3 {
-            if !open(k, x, y) || !clear_of_ways(x, y) {
+            if !open(k, x, y) {
                 continue;
             }
-            // Nothing right against the arena's walls.
-            if x + 1 >= ax && x <= ax + aw && y + 1 >= ay && y <= ay + ah {
+            // Nothing against the bowl, on the way in, by the side arches or by Caesar.
+            if x + 1 >= fx && x <= fx + fw && y + 1 >= fy && y <= fy + fh {
+                continue;
+            }
+            if (gate.saturating_sub(3)..=gate + 10).contains(&x) && y < below + 9 {
                 continue;
             }
             let h = k.hash(x, y, 41) % 1000;
             let kind = match h {
-                0..=18 => "cactus",
-                19..=42 => "cactus_small",
-                43..=80 => "dry_shrub",
-                81..=89 => "bones",
-                90..=99 => "rock",
-                100..=107 => "palm",
-                108..=112 => "amphora",
+                0..=22 => "cactus",
+                23..=50 => "cactus_small",
+                51..=95 => "dry_shrub",
+                96..=105 => "bones",
+                106..=116 => "rock",
+                117..=126 => "palm",
+                127..=133 => "amphora",
                 _ => continue,
             };
             k.decor(x, y, kind);
         }
     }
-    // Clay pots and torches by the north gate, either side.
-    for (x, y) in [(gate - 2, ay - 2), (gate + 3, ay - 3)] {
-        k.decor(x, y, "amphora");
-    }
+    // A palm or two along the way in, for shade.
     for (x, y) in [
-        (gate - 1, ay - 1),
-        (gate + 2, ay - 1),
-        (gate - 1, ay + ah),
-        (gate + 2, ay + ah),
-    ] {
-        k.decor(x, y, "lantern");
-    }
-    // A palm or two by each gate's way, for shade.
-    for (x, y) in [
-        (gate - 3, 4),
-        (gate + 4, 7),
-        (gate - 3, ay + ah + 3),
-        (gate + 4, ay + ah + 6),
+        (gate - 4, below + 6),
+        (gate + 5, below + 7),
+        (gate - 3, N - 4),
     ] {
         let i = k.b.i(k.ox + x, k.oy + y);
         if k.b.decor[i] == 0 && !k.b.solid[i] {

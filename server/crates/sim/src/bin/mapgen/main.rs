@@ -95,6 +95,15 @@ const DECOR: &[&str] = &[
     "chair_n",
     // The gladiator arena's sandstone walls.
     "arena_wall",
+    // The amphitheatre: its podium wall, seats (cushioned: anyone's to
+    // watch from), and outer walls (tall arches north, low south).
+    "amph_podium",
+    "amph_seat",
+    "amph_seat_hi",
+    "amph_seat_pub",
+    "amph_seat_pub_hi",
+    "amph_wall",
+    "amph_wall_s",
     // Small nature to walk through: flowers, daisies, clover, pebbles, ferns.
     "wildflowers",
     "daisies",

@@ -401,6 +401,10 @@ function soften(ctx: CanvasRenderingContext2D, kind: string, tx: number, ty: num
 const decorCache = new Map<string, Texture>();
 
 export function decorTexture(kind: string, variant: number): Texture | null {
+  // The amphitheatre's walls and seats: the painted bowl has them, cushions
+  // on the public ones and all (the tiles are only there to bump into and
+  // sit on).
+  if (kind.startsWith("amph_")) return null;
   const key = `${kind}:${variant % 3}`;
   const cached = decorCache.get(key);
   if (cached) return cached;

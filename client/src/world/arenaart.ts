@@ -5,6 +5,7 @@
 // (a riveted grate with its holes, a band of warning paint round it; the
 // spikes themselves come up out of it in the show, see activities/arena.ts).
 
+import { bowlArt } from "./amphitheatre";
 import { disc, oval } from "./pixeldraw";
 import { drawPixelText, pixelWidth } from "./pixelfont";
 
@@ -35,6 +36,7 @@ export function arenaObject(o: { kind: string; x: number; y: number; w: number; 
   if (o.kind === "arena_gate") return gate(w, h);
   if (o.kind === "arena_court") return court(w, h);
   if (o.kind === "arena_carpet") return carpet(w, h);
+  if (o.kind === "arena_bowl") return bowlArt(o.w, o.h);
   return null;
 }
 
