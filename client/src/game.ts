@@ -71,7 +71,7 @@ import { type ActionMenu, type BagPanel, FishermanPanel, LURE_ITEM, type MarketP
 import { Avatar, CAST_SWING_MS, PUMP_MS } from "./world/avatars";
 import { Furniture } from "./world/furniture";
 import { type MapObject, type ZoneMap, groundAt, nearestWalkable, spot, stepTarget, walkable } from "./world/map";
-import { SKATE_SPEED_X10, type TileXY, WALK_SPEED_X10, endT, glideTiles, headingAt, retimed, routeAhead, skateRampAt, speedAt, splice, sprintProfile, sprintingAt } from "./world/motion";
+import { SKATE_SPEED_X10, type TileXY, WALK_SPEED_X10, endT, glideTiles, headingAt, retimed, routeAhead, skateRampAt, speedAt, splice, sprintProfile, sprintingAt, TURN_EARLY } from "./world/motion";
 import { compress, route } from "./world/path";
 import { Props } from "./world/props";
 import { giftBoxTexture } from "./world/items";
@@ -2672,7 +2672,18 @@ export class Game {
     if (!walkingOn && performance.now() - this.sprintAt > SPRINT_ASK_MS) this.sprint = false;
     let start: TileXY;
     let t0 = now;
-    if (sp) {
+    // Barely into a step and turning off it: turn from the tile just left,
+    // now, rather than walking on into the next first (the server does the
+    // same; the half-step back blends away as we go).
+    let early = false;
+    if (sp && sp.into < TURN_EARLY) {
+      const back = route(this.scene.map, sp.prev, t);
+      early = !!back && back.length > 1 && (back[1].x !== sp.next.x || back[1].y !== sp.next.y);
+    }
+    const cont = sp && !early ? sp : null;
+    if (early) {
+      start = sp!.prev;
+    } else if (sp) {
       start = sp.next;
       t0 = sp.tPrev;
     } else {
@@ -2683,18 +2694,20 @@ export class Game {
       this.hud.toast("Can't get there from here.");
       return;
     }
-    if (sp) full.unshift(sp.prev);
+    if (cont) full.unshift(cont.prev);
+    // (Turning early keeps the pace we had, as joining the walk would.)
+    const going = cont || early;
     // On wheels where they apply; on foot (indoors too), a sprint if asked
     // for (the server works it out the same way).
     const ridden = this.predictSpeed(full);
     const pace =
       ridden === SKATE_SPEED_X10
         ? // A skate keeps the speed it has built up (as the server works it out).
-          { speedX10: ridden, sprintIn: sp ? skateRampAt(cur, t0) : 0 }
+          { speedX10: ridden, sprintIn: going ? skateRampAt(cur, t0) : 0 }
         : ridden !== WALK_SPEED_X10
           ? { speedX10: ridden, sprintIn: 0 }
           : this.sprint
-            ? sprintProfile(sp ? cur : null, t0, now)
+            ? sprintProfile(going ? cur : null, t0, now)
             : { speedX10: WALK_SPEED_X10, sprintIn: 0 };
     if (full.length >= 2) self.setMotion({ path: compress(full), t0, ...pace }, now);
     const wall = performance.now();
@@ -2953,16 +2966,16 @@ export class Game {
     };
     const blur = () => this.keys.clear();
     const resize = () => this.scene.resize();
-    // The mouse wheel zooms (a trackpad's many small scrolls add up to a step).
+    // The mouse wheel zooms, in fine (quarter) steps (a trackpad's many
+    // small scrolls add up to one). Watching the arena from the stands, it
+    // may go a little closer still.
     let wheel = 0;
     const zoom = (e: WheelEvent) => {
       e.preventDefault();
       wheel += e.deltaY;
-      // Watching the arena from the stands, the zoom goes in fine steps.
-      const fine = !!this.arena?.watchingNow;
-      if (Math.abs(wheel) < (fine ? 30 : 60)) return;
-      if (fine) this.scene.zoomFine(wheel < 0 ? 1 : -1);
-      else this.scene.zoomBy(wheel < 0 ? 1 : -1);
+      if (Math.abs(wheel) < 30) return;
+      const watching = !!this.arena?.watchingNow;
+      this.scene.zoomFine(wheel < 0 ? 1 : -1, watching, !watching);
       wheel = 0;
     };
     const canvas = this.app.canvas;
@@ -3865,7 +3878,8 @@ export class Game {
     const now = this.socket?.clock.now() ?? 0;
     const cur = self.currentMotion;
     const sp = cur ? splice(cur, now) : null;
-    const from = sp ? sp.next : cur && now <= cur.t0 ? cur.path[0] : self.destination;
+    // (Turning barely into a step, from the tile just left: moveTo turns there.)
+    const from = sp ? (turned && sp.into < TURN_EARLY ? sp.prev : sp.next) : cur && now <= cur.t0 ? cur.path[0] : self.destination;
     // Rowing, the keys steer over the water.
     const ground = this.boat?.captain === this.selfId && this.waterMap ? this.waterMap : this.scene.map;
     const target =

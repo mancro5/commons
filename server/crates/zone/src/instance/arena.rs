@@ -78,7 +78,7 @@ impl Arena {
                     x: x100(f.x),
                     y: x100(f.y),
                     aim: sim::aim_to_u16(f.aim),
-                    hp: f.hp.max(0.0).ceil().min(255.0) as u8,
+                    hp: f.hp.max(0.0).ceil().min(65_535.0) as u16,
                     stamina: f.stamina.round().clamp(0.0, 100.0) as u8,
                     rage: f.rage.floor().clamp(0.0, 100.0) as u8,
                     act: f.act,
@@ -87,6 +87,7 @@ impl Arena {
                     flags: f.flags(now),
                     holding: f.holding,
                     fix: f.fix,
+                    kit: (m.picks.get(f.slot).copied().unwrap_or(0) & sim::kit::PICKED) | f.kit,
                 })
                 .collect(),
             gifts: m
@@ -101,6 +102,14 @@ impl Arena {
                 .collect(),
             winner: m.winner,
             level: m.level,
+            mode: m.mode,
+            goliath: m.goliath as u8,
+            kits: m.kits,
+            choose_ms: if m.choosing(now) {
+                m.choose_end.saturating_sub(now).min(65_535) as u16
+            } else {
+                0
+            },
         }
     }
 }
@@ -331,6 +340,36 @@ impl Instance {
         }
     }
 
+    pub(super) fn arena_mode(&mut self, id: u32, mode: u8, goliath: u8, now: u32) {
+        let Some(ar) = self.arena.as_mut() else {
+            return;
+        };
+        if ar.m.set_mode(id, mode, goliath as usize) {
+            ar.dirty = true;
+            self.arena_send(now);
+        }
+    }
+
+    pub(super) fn arena_kits(&mut self, id: u32, on: bool, now: u32) {
+        let Some(ar) = self.arena.as_mut() else {
+            return;
+        };
+        if ar.m.set_kits(id, on) {
+            ar.dirty = true;
+            self.arena_send(now);
+        }
+    }
+
+    /// A class picked for the round (shown at once to all).
+    pub(super) fn arena_kit(&mut self, id: u32, kit: u8, now: u32) {
+        let Some(ar) = self.arena.as_mut() else {
+            return;
+        };
+        if ar.m.choose_kit(id, kit, now) {
+            self.arena_send(now);
+        }
+    }
+
     pub(super) fn arena_level(&mut self, id: u32, level: u8, now: u32) {
         let Some(ar) = self.arena.as_mut() else {
             return;
@@ -341,17 +380,26 @@ impl Instance {
         }
     }
 
-    pub(super) fn arena_move(&mut self, id: u32, x: u16, y: u16, aim: u16, now: u32) {
+    pub(super) fn arena_move(&mut self, id: u32, x: u16, y: u16, aim: u16, reach: u16, now: u32) {
         let Some(ar) = self.arena.as_mut() else {
             return;
         };
-        ar.m.claim_move(id, from100(x), from100(y), sim::aim_from_u16(aim), now);
+        // (How far off the mouse is, too: where the Goliath leaps, and hurls whoever it holds.)
+        ar.m.reach(id, reach as f64 / 100.0);
+        let evs =
+            ar.m.claim_move(id, from100(x), from100(y), sim::aim_from_u16(aim), now);
+        // (A heavy blow's lunge striking whoever it went through on the way.)
+        for e in &evs {
+            self.arena_broadcast(&event_msg(e));
+        }
     }
 
-    pub(super) fn arena_act(&mut self, id: u32, act: u8, aim: u16, now: u32) {
+    pub(super) fn arena_act(&mut self, id: u32, act: u8, aim: u16, reach: u16, now: u32) {
         let Some(ar) = self.arena.as_mut() else {
             return;
         };
+        // (How far off the mouse is, in hundredths of a tile: the Goliath leaps no further.)
+        ar.m.reach(id, reach as f64 / 100.0);
         let evs = ar.m.input(id, act, sim::aim_from_u16(aim), now);
         for e in &evs {
             self.arena_broadcast(&event_msg(e));
@@ -518,6 +566,7 @@ mod tests {
             ClientMsg::ArenaAct {
                 act: sim::input::LIGHT,
                 aim: 0,
+                reach: 0,
             },
         );
         inst.flush();

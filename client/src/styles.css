@@ -5848,6 +5848,20 @@ body.pb-playing canvas {
 .bot-level-btn.l2.on {
   background: #c8323f;
 }
+.bot-level-btn.l3.on {
+  background: #5b2a86;
+}
+/* Four of them (the arena's): two to a line under the title, so they fit. */
+.bot-level-row.four {
+  flex-wrap: wrap;
+}
+.bot-level-row.four .bot-level-title {
+  flex-basis: 100%;
+  text-align: center;
+}
+.bot-level-row.four .bot-level-btn {
+  flex: 1 1 40%;
+}
 .bot-level-btn:disabled {
   cursor: default;
 }
@@ -5962,6 +5976,20 @@ body.pb-playing canvas {
 }
 
 /* ---- Paintball by touch: twin sticks, big buttons, a clear screen ---------- */
+
+/* Fighting in the arena (any device): the town's bottom bar out of the way, the whole fight in view. */
+body.ar-playing .chat,
+body.ar-playing .emotes,
+body.ar-playing .bottom,
+body.ar-playing .sit,
+body.ar-playing .mood-btn,
+body.ar-playing .ride-btn,
+body.ar-playing .toys-btn,
+body.ar-playing .zoom-pad,
+body.ar-playing .minimap,
+body.ar-playing .tasks-chip {
+  display: none !important;
+}
 
 /* While you play by touch, the town's bars make way for your thumbs. */
 body.pb-playing.pb-touch-mode .chat,
@@ -6355,6 +6383,10 @@ body.pb-touch-mode .pb-feed {
   touch-action: none;
   user-select: none;
 }
+/* The Goliath's dash, short of the wind for it. */
+.ar-btn.off {
+  opacity: 0.4;
+}
 .ar-btn.attack {
   grid-area: attack;
   width: 92px;
@@ -6469,6 +6501,35 @@ body.pb-touch-mode .ar-yield {
   padding: 1px 6px;
   font-size: 11px;
 }
+/* The kind of match (free-for-all or Goliath), and the Goliath's place. */
+.ar-kinds {
+  display: flex;
+  gap: 6px;
+}
+.ar-kind {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 12px;
+  opacity: 0.65;
+}
+.ar-kind.on {
+  opacity: 1;
+  font-weight: bold;
+  color: #fff;
+  background: #8f2b26;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+}
+.ar-kind:disabled {
+  cursor: default;
+}
+.ar-goliath-tag {
+  flex: none;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: bold;
+  color: #fff;
+  background: #8f2b26;
+}
 .ar-mode {
   margin: 0;
   font-size: 12px;
@@ -6510,5 +6571,205 @@ body.pb-touch-mode .ar-yield {
     right: 50%;
     transform: translateX(50%);
     width: calc(100vw - 20px);
+  }
+}
+
+/* ---- the arena's classes: the picker at a round's start, the gallery, the lobby's switch ---- */
+.ar-kits-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.ar-kits-row .ar-kind {
+  flex: 1;
+}
+.ar-kits-row .ar-kind.on {
+  background: #5b2a86;
+}
+.ark-pick {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: rgba(20, 14, 30, 0.42);
+}
+.ark-pick[hidden] {
+  display: none;
+}
+.ark-pick-card {
+  width: min(980px, 100%);
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--frame), var(--drop);
+  animation: pb-pop-in 0.3s ease-out;
+}
+.ark-pick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ark-pick-head h2 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 1px;
+}
+.ark-timer {
+  position: relative;
+  height: 10px;
+  background: #3a3046;
+  box-shadow: 0 0 0 2px #1a1020;
+}
+.ark-timer i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #ff9a3f, #ffd23f);
+  transition: width 0.1s linear;
+}
+.ark-timer::after {
+  content: attr(data-s) "s";
+  position: absolute;
+  right: 4px;
+  top: -16px;
+  font-size: 12px;
+  font-weight: bold;
+}
+.ark-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+.ark-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: color-mix(in srgb, var(--t) 10%, var(--paper));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--t) 55%, transparent);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+button.ark-card {
+  cursor: pointer;
+}
+button.ark-card:hover {
+  transform: translateY(-3px);
+  box-shadow: inset 0 0 0 3px var(--t), 0 4px 0 rgba(20, 14, 30, 0.25);
+}
+.ark-card.on {
+  background: color-mix(in srgb, var(--t) 26%, var(--paper));
+  box-shadow: inset 0 0 0 3px var(--t), 0 0 0 2px #ffd23f;
+}
+.ark-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ark-badge {
+  image-rendering: pixelated;
+  flex: none;
+}
+.ark-name {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+.ark-name strong {
+  font-size: 16px;
+}
+.ark-role {
+  font-size: 11px;
+  color: var(--muted);
+}
+.ark-key {
+  margin-left: auto;
+  align-self: flex-start;
+  padding: 0 5px;
+  font-size: 11px;
+  background: #3a3046;
+  color: #fff6e0;
+}
+.ark-blurb {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.ark-stats {
+  display: grid;
+  gap: 2px;
+}
+.ark-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+.ark-pips {
+  display: flex;
+  gap: 2px;
+}
+.ark-pips i {
+  width: 10px;
+  height: 6px;
+  background: #d8cbb0;
+  box-shadow: 0 0 0 1px rgba(26, 16, 32, 0.4);
+}
+.ark-pips i.on {
+  background: var(--t);
+}
+.ark-moves {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+  font-size: 11px;
+}
+.ark-moves b {
+  font-weight: normal;
+}
+.ark-who {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ark-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  font-size: 12px;
+  background: color-mix(in srgb, var(--c) 16%, var(--paper));
+  box-shadow: inset 3px 0 0 var(--c);
+  opacity: 0.7;
+}
+.ark-chip.in {
+  opacity: 1;
+}
+.ark-chip em {
+  color: var(--muted);
+}
+.ark-wait,
+.ark-foot {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+@media (max-width: 760px) {
+  .ark-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ark-blurb {
+    display: none;
   }
 }

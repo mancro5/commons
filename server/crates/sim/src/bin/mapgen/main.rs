@@ -45,6 +45,10 @@ const GROUND: &[&str] = &[
     "parquet",
     "marble",
     "rug",
+    // The Ring Road's warm brick, round the town's heart.
+    "brick",
+    // The woods' floor: moss and fallen leaves.
+    "moss",
 ];
 const DECOR: &[&str] = &[
     "none",
@@ -118,6 +122,8 @@ const DECOR: &[&str] = &[
     "dry_shrub",
     "bones",
     "amphora",
+    // A bench stood north to south (seen side on), a seat on each tile.
+    "bench_v",
 ];
 
 fn g(name: &str) -> u8 {

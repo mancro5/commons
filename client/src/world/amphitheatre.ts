@@ -583,6 +583,8 @@ export function bowlSeats(wTiles: number, hTiles: number): Seat[] {
       for (let x = Q / 2; x < g.W; x += Q) {
         const s = surface(g, x - g.CX, gy - g.CY);
         if (s.m !== M.ROW || s.row !== row || s.u < r.u0 + 6 || s.u >= r.u1 - 6) continue;
+        // (Not by the gladiators' gates, either side halfway down.)
+        if (row === 0 && Math.abs(gy - g.CY) < 2 * T) continue;
         cands.push({ x, ground: gy, th: s.th });
       }
     }

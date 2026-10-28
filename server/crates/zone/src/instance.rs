@@ -40,8 +40,8 @@ use commons_protocol::{
     CELL_TILES, ClientMsg, EntityInfo, ServerMsg, Tile, emote, error_code, push_framed, state,
 };
 use commons_sim::{
-    Grid, Motion, SKATE_SPEED_X10, SPRINT_SPEED_X10, TilePos, WALK_SPEED_X10, compress, route,
-    vehicles,
+    Grid, Motion, SKATE_SPEED_X10, SPRINT_SPEED_X10, TURN_EARLY, TilePos, WALK_SPEED_X10, compress,
+    route, vehicles,
 };
 
 /// The zone where vehicles can be ridden (everywhere else is indoors: on
@@ -925,10 +925,13 @@ impl Instance {
             ClientMsg::ArenaStart { bots } => self.arena_start(id, bots, now),
             ClientMsg::ArenaBot { slot, on } => self.arena_bot(id, slot, on, now),
             ClientMsg::ArenaLevel { level } => self.arena_level(id, level, now),
+            ClientMsg::ArenaMode { mode, goliath } => self.arena_mode(id, mode, goliath, now),
+            ClientMsg::ArenaKits { on } => self.arena_kits(id, on, now),
+            ClientMsg::ArenaKit { kit } => self.arena_kit(id, kit, now),
             ClientMsg::PbBot { slot, on } => self.pb_bot(id, slot, on, now),
             ClientMsg::PbLevel { level } => self.pb_level(id, level, now),
-            ClientMsg::ArenaMove { x, y, aim } => self.arena_move(id, x, y, aim, now),
-            ClientMsg::ArenaAct { act, aim } => self.arena_act(id, act, aim, now),
+            ClientMsg::ArenaMove { x, y, aim, reach } => self.arena_move(id, x, y, aim, reach, now),
+            ClientMsg::ArenaAct { act, aim, reach } => self.arena_act(id, act, aim, reach, now),
             ClientMsg::PbJoin { team } => self.pb_join(id, team, now),
             ClientMsg::PbLeave {} => self.pb_leave(id),
             ClientMsg::PbStart { bots } => self.pb_start(id, bots, now),
@@ -1023,8 +1026,9 @@ impl Instance {
         // Mid-walk, continue through the tile being walked into so the new path
         // joins the old one without a seam. Otherwise start shortly in the future
         // so observers receive the MoveStart before the walk begins.
-        let (prefix, start, t0) = match a.motion.as_ref().and_then(|m| m.splice(now)) {
-            Some((prev, next, t_prev)) => (Some(prev), next, t_prev),
+        let (mut prefix, mut start, mut t0) = match a.motion.as_ref().and_then(|m| m.splice_at(now))
+        {
+            Some((prev, next, t_prev, _)) => (Some(prev), next, t_prev),
             None => {
                 let from = match &a.motion {
                     Some(m) if !m.is_done(now) => m.path[0],
@@ -1033,6 +1037,19 @@ impl Instance {
                 (None, from, now + MOVE_LEAD_MS)
             }
         };
+        // Barely into a step and turning off it: turn from the tile just
+        // left, now (the client does the same, blending the half-step).
+        let mut turned_early = false;
+        if let Some((prev, next, _, into)) = a.motion.as_ref().and_then(|m| m.splice_at(now))
+            && into < TURN_EARLY
+            && let Some(back) = route(grid, prev, target, MAX_PATH_EXPANSIONS)
+            && back.get(1) != Some(&next)
+        {
+            prefix = None;
+            start = prev;
+            t0 = now;
+            turned_early = true;
+        }
         let Some(mut full) = route(grid, start, target, MAX_PATH_EXPANSIONS) else {
             self.error(id, error_code::NO_PATH, "can't get there");
             return;
@@ -1055,12 +1072,19 @@ impl Instance {
             // A skate keeps the speed it had built up (joining a stretch in progress).
             Some(s) if s == SKATE_SPEED_X10 => (
                 s,
-                prefix
-                    .and(a.motion.as_ref())
+                (prefix.is_some() || turned_early)
+                    .then_some(a.motion.as_ref())
+                    .flatten()
                     .map_or(0, |m| m.skate_ramp_at(t0)),
             ),
             Some(s) => (s, 0),
-            None if sprint => sprint_profile(prefix.and(a.motion.as_ref()), t0, now),
+            None if sprint => sprint_profile(
+                (prefix.is_some() || turned_early)
+                    .then_some(a.motion.as_ref())
+                    .flatten(),
+                t0,
+                now,
+            ),
             None => (WALK_SPEED_X10, 0),
         };
         let motion = Motion {

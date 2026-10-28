@@ -254,7 +254,13 @@ export function headingAt(m: Motion, t: number): TileXY | null {
  * into, and when the avatar was at the former. A new path [prev, next, ...]
  * starting then continues the current walk without a seam.
  */
-export function splice(m: Motion, t: number): { prev: TileXY; next: TileXY; tPrev: number } | null {
+/**
+ * Mirror of sim::TURN_EARLY: turning less than this far into a step, a walk
+ * turns from the tile it's just left instead of walking on into the next.
+ */
+export const TURN_EARLY = 0.5;
+
+export function splice(m: Motion, t: number): { prev: TileXY; next: TileXY; tPrev: number; into: number } | null {
   if (t <= m.t0 || t >= endT(m)) return null;
   const travelled = distAt(m, t);
   let before = 0;
@@ -273,6 +279,7 @@ export function splice(m: Motion, t: number): { prev: TileXY; next: TileXY; tPre
         prev,
         next: { x: prev.x + dx, y: prev.y + dy },
         tPrev: m.t0 + Math.round(timeFor(m, before + k * stepLen)),
+        into: Math.min(1, Math.max(0, (travelled - before) / stepLen - k)),
       };
     }
     before += len;

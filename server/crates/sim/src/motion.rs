@@ -22,6 +22,11 @@ const SKATE_TOP: f64 = 3.0;
 /// Braking on a skateboard, in tiles per ms² (42 tiles/s²).
 const SKATE_BRAKE: f64 = 42e-6;
 
+/// Turning less than this far into a step, a walk turns from the tile it's
+/// just left (a step's worth back at most half a tile) instead of walking
+/// on into the next first: keys and taps answer at once.
+pub const TURN_EARLY: f64 = 0.5;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Motion {
     pub path: Vec<TilePos>,
@@ -253,6 +258,13 @@ impl Motion {
     /// time reproduces the current motion exactly up to `next`.
     /// `None` if the walk hasn't started yet or has finished.
     pub fn splice(&self, t: u32) -> Option<(TilePos, TilePos, u32)> {
+        self.splice_at(t)
+            .map(|(prev, next, t_prev, _)| (prev, next, t_prev))
+    }
+
+    /// [`Motion::splice`], and how far into the step from `prev` to `next`
+    /// the avatar is at `t` (0 just left `prev`, 1 at `next`).
+    pub fn splice_at(&self, t: u32) -> Option<(TilePos, TilePos, u32, f64)> {
         if t <= self.t0 || self.is_done(t) {
             return None;
         }
@@ -274,10 +286,12 @@ impl Motion {
                 let prev = (a.0 as i32 + dx * k, a.1 as i32 + dy * k);
                 let next = (prev.0 + dx, prev.1 + dy);
                 let t_prev = self.t0 + self.time_for(before + k as f64 * step_len).round() as u32;
+                let into = ((travelled - before) / step_len - k as f64).clamp(0.0, 1.0);
                 return Some((
                     (prev.0 as u16, prev.1 as u16),
                     (next.0 as u16, next.1 as u16),
                     t_prev,
+                    into,
                 ));
             }
             before += len;

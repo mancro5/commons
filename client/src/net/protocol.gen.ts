@@ -2,7 +2,7 @@
 // Do not edit by hand.
 /* eslint-disable */
 
-export const PROTOCOL_VERSION = 29;
+export const PROTOCOL_VERSION = 33;
 export const CELL_TILES = 16;
 
 export class Writer {
@@ -119,6 +119,7 @@ export interface ArenaFighter {
   flags: number;
   holding: number;
   fix: number;
+  kit: number;
 }
 
 export function encArenaFighter(w: Writer, v: ArenaFighter) {
@@ -126,7 +127,7 @@ export function encArenaFighter(w: Writer, v: ArenaFighter) {
   w.u16(v.x);
   w.u16(v.y);
   w.u16(v.aim);
-  w.u8(v.hp);
+  w.u16(v.hp);
   w.u8(v.stamina);
   w.u8(v.rage);
   w.u8(v.act);
@@ -135,6 +136,7 @@ export function encArenaFighter(w: Writer, v: ArenaFighter) {
   w.u8(v.flags);
   w.u8(v.holding);
   w.u8(v.fix);
+  w.u8(v.kit);
 }
 
 export function decArenaFighter(r: Reader): ArenaFighter {
@@ -143,7 +145,7 @@ export function decArenaFighter(r: Reader): ArenaFighter {
     x: r.u16(),
     y: r.u16(),
     aim: r.u16(),
-    hp: r.u8(),
+    hp: r.u16(),
     stamina: r.u8(),
     rage: r.u8(),
     act: r.u8(),
@@ -152,6 +154,7 @@ export function decArenaFighter(r: Reader): ArenaFighter {
     flags: r.u8(),
     holding: r.u8(),
     fix: r.u8(),
+    kit: r.u8(),
   };
 }
 
@@ -366,8 +369,8 @@ export type ClientMsg =
   | { t: "BowlRoll"; lane: number; aim: number; power: number }
   | { t: "ArenaJoin" }
   | { t: "ArenaLeave" }
-  | { t: "ArenaMove"; x: number; y: number; aim: number }
-  | { t: "ArenaAct"; act: number; aim: number }
+  | { t: "ArenaMove"; x: number; y: number; aim: number; reach: number }
+  | { t: "ArenaAct"; act: number; aim: number; reach: number }
   | { t: "OpenCrate" }
   | { t: "Boat"; op: number }
   | { t: "PbJoin"; team: number }
@@ -382,6 +385,9 @@ export type ClientMsg =
   | { t: "ArenaLevel"; level: number }
   | { t: "PbBot"; slot: number; on: boolean }
   | { t: "PbLevel"; level: number }
+  | { t: "ArenaMode"; mode: number; goliath: number }
+  | { t: "ArenaKits"; on: boolean }
+  | { t: "ArenaKit"; kit: number }
   ;
 
 export function encodeClientMsg(m: ClientMsg): Uint8Array {
@@ -576,11 +582,13 @@ export function encodeClientMsg(m: ClientMsg): Uint8Array {
       w.u16(m.x);
       w.u16(m.y);
       w.u16(m.aim);
+      w.u16(m.reach);
       break;
     case "ArenaAct":
       w.u8(43);
       w.u8(m.act);
       w.u16(m.aim);
+      w.u16(m.reach);
       break;
     case "OpenCrate":
       w.u8(44);
@@ -640,6 +648,19 @@ export function encodeClientMsg(m: ClientMsg): Uint8Array {
     case "PbLevel":
       w.u8(57);
       w.u8(m.level);
+      break;
+    case "ArenaMode":
+      w.u8(58);
+      w.u8(m.mode);
+      w.u8(m.goliath);
+      break;
+    case "ArenaKits":
+      w.u8(59);
+      w.bool(m.on);
+      break;
+    case "ArenaKit":
+      w.u8(60);
+      w.u8(m.kit);
       break;
   }
   return w.finish();
@@ -771,10 +792,10 @@ export function decodeClientMsg(b: Uint8Array): ClientMsg {
       m = { t: "ArenaLeave" };
       break;
     case 42:
-      m = { t: "ArenaMove", x: r.u16(), y: r.u16(), aim: r.u16() };
+      m = { t: "ArenaMove", x: r.u16(), y: r.u16(), aim: r.u16(), reach: r.u16() };
       break;
     case 43:
-      m = { t: "ArenaAct", act: r.u8(), aim: r.u16() };
+      m = { t: "ArenaAct", act: r.u8(), aim: r.u16(), reach: r.u16() };
       break;
     case 44:
       m = { t: "OpenCrate" };
@@ -817,6 +838,15 @@ export function decodeClientMsg(b: Uint8Array): ClientMsg {
       break;
     case 57:
       m = { t: "PbLevel", level: r.u8() };
+      break;
+    case 58:
+      m = { t: "ArenaMode", mode: r.u8(), goliath: r.u8() };
+      break;
+    case 59:
+      m = { t: "ArenaKits", on: r.bool() };
+      break;
+    case 60:
+      m = { t: "ArenaKit", kit: r.u8() };
       break;
     default:
       throw new Error(`protocol: unknown ClientMsg tag ${tag}`);
@@ -865,7 +895,7 @@ export type ServerMsg =
   | { t: "LureShown"; x: number; y: number; ends: number }
   | { t: "BowlState"; lane: number; a: number; b: number; status: number; turn: number; frame: number; ball: number; standing: number; shot: number; rollsA: number[]; rollsB: number[] }
   | { t: "BowlRolled"; lane: number; by: number; aim: number; power: number; knocked: number; shot: number }
-  | { t: "ArenaState"; status: number; now: number; phaseMs: number; round: number; fire: number; spikes: number[]; slots: number[]; crowns: number[]; fighters: ArenaFighter[]; gifts: ArenaGift[]; winner: number; level: number }
+  | { t: "ArenaState"; status: number; now: number; phaseMs: number; round: number; fire: number; spikes: number[]; slots: number[]; crowns: number[]; fighters: ArenaFighter[]; gifts: ArenaGift[]; winner: number; level: number; mode: number; goliath: number; kits: boolean; chooseMs: number }
   | { t: "ArenaEvent"; kind: number; a: number; b: number; x: number; y: number; n: number; m: number; vx: number; vy: number }
   | { t: "LuckyShown"; x: number; y: number; moves: number }
   | { t: "LuckyFound"; id: number; x: number; y: number }
@@ -1163,6 +1193,10 @@ export function encodeServerMsg(m: ServerMsg): Uint8Array {
       w.vec(m.gifts, (x) => encArenaGift(w, x));
       w.u32(m.winner);
       w.u8(m.level);
+      w.u8(m.mode);
+      w.u8(m.goliath);
+      w.bool(m.kits);
+      w.u16(m.chooseMs);
       break;
     case "ArenaEvent":
       w.u8(41);
@@ -1356,7 +1390,7 @@ export function decodeServerMsg(b: Uint8Array): ServerMsg {
       m = { t: "BowlRolled", lane: r.u8(), by: r.u32(), aim: r.u16(), power: r.u16(), knocked: r.u16(), shot: r.u32() };
       break;
     case 40:
-      m = { t: "ArenaState", status: r.u8(), now: r.u32(), phaseMs: r.u32(), round: r.u8(), fire: r.u16(), spikes: r.vec(() => r.u8()), slots: r.vec(() => r.u32()), crowns: r.vec(() => r.u8()), fighters: r.vec(() => decArenaFighter(r)), gifts: r.vec(() => decArenaGift(r)), winner: r.u32(), level: r.u8() };
+      m = { t: "ArenaState", status: r.u8(), now: r.u32(), phaseMs: r.u32(), round: r.u8(), fire: r.u16(), spikes: r.vec(() => r.u8()), slots: r.vec(() => r.u32()), crowns: r.vec(() => r.u8()), fighters: r.vec(() => decArenaFighter(r)), gifts: r.vec(() => decArenaGift(r)), winner: r.u32(), level: r.u8(), mode: r.u8(), goliath: r.u8(), kits: r.bool(), chooseMs: r.u16() };
       break;
     case 41:
       m = { t: "ArenaEvent", kind: r.u8(), a: r.u32(), b: r.u32(), x: r.u16(), y: r.u16(), n: r.u16(), m: r.u16(), vx: r.u16(), vy: r.u16() };
