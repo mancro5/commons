@@ -54,6 +54,7 @@ import { Concert } from "./concert";
 import { ConcertPanel } from "./ui/concert";
 import { MetroPanel, playRide, stationsOf } from "./ui/metro";
 import { BlackjackPanel, CagePanel, Casino, RoulettePanel, SlotsPanel, Tables } from "./ui/casino";
+import { MegaSlotsPanel, RacePanel } from "./ui/casinogames";
 import { MOODS, MoodPicker, OfferCard } from "./activities/together";
 import { GATHERINGS, Welcome, nextOccurrence } from "./welcome";
 import { Soundscape } from "./ambient/sound";
@@ -435,6 +436,8 @@ async function main() {
     yard: new YardPanel(rent, eco, rentHost),
     casino,
     slots: new SlotsPanel(casino),
+    mega: new MegaSlotsPanel(casino),
+    race: new RacePanel(casino),
     roulette: new RoulettePanel(casino, tables),
     blackjack: new BlackjackPanel(casino, tables),
     tables,

@@ -186,14 +186,14 @@ pub const SHOOT: (u32, u32) = (90, 260);
 /// The archer's quick shot: a light arrow at the aim, flying as far as a
 /// thrown spear; one every third of a second (the shot, then the rest of it).
 pub const ARROW_SPEED: f64 = 22.0;
-pub const QUICK_SHOT: (u32, u32) = (60, 273);
-pub const QUICK_ARROW_DMG: f64 = 5.0;
+pub const QUICK_SHOT: (u32, u32) = (60, 690);
+pub const QUICK_ARROW_DMG: f64 = 3.25;
 pub const QUICK_ARROW_COST: f64 = 9.0;
 /// The archer's charged shot: three arrows, one after another, flying on
 /// till they hit something, twice the quick one's damage, 1.7× as fast.
 pub const BURST_ARROWS: u8 = 3;
 pub const BURST_GAP_MS: u32 = 110;
-pub const BURST_DMG: f64 = 10.0;
+pub const BURST_DMG: f64 = 5.0;
 pub const BURST_SPEED: f64 = ARROW_SPEED * 1.7;
 pub const BURST_COST: f64 = 26.0;
 /// (As far as "till they hit something" goes.)
@@ -211,7 +211,9 @@ pub const QUICK_LOB_COST: f64 = 20.0;
 /// Its charged throw: a big bomb, the blast (and the damage, and what it
 /// costs) growing with the charge, from barely held to full.
 pub const BIG_BOMB_DMG: (f64, f64) = (22.0, 42.0);
-pub const BIG_BOMB_R: (f64, f64) = (1.9, 3.0);
+pub const BIG_BOMB_R: (f64, f64) = (1.7, 2.7);
+/// (It takes four times a heavy blow's charge to fill.)
+pub const BIG_BOMB_FULL_MS: u32 = HEAVY_MIN_MS + 4 * (HEAVY_FULL_MS - HEAVY_MIN_MS);
 pub const BIG_BOMB_COST: (f64, f64) = (28.0, 56.0);
 /// Picking up the crowd's bomb, the bomber throws three, fanned out.
 pub const BOMBER_GIFT_BOMBS: usize = 3;
@@ -238,9 +240,9 @@ pub const CAST: (u32, u32) = (320, 260);
 pub const VOLLEY_WAVES: u8 = 3;
 pub const VOLLEY_GAP_MS: u32 = 500;
 pub const VOLLEY_ARROWS: usize = 16;
-pub const VOLLEY_DMG: f64 = 9.0;
+pub const VOLLEY_DMG: f64 = 5.85;
 pub const VOLLEY_AIMED: usize = 3;
-pub const VOLLEY_AIMED_DMG: f64 = 13.0;
+pub const VOLLEY_AIMED_DMG: f64 = 8.45;
 pub const VOLLEY_SPREAD: f64 = 0.12;
 /// The bomber's: a great blast all round them (they're unharmed).
 pub const BLAST_R: f64 = 3.3;
@@ -1061,6 +1063,15 @@ impl Fighter {
             max_hp: HP,
             shots: 0,
             quick: false,
+        }
+    }
+
+    /// How long its charged attack takes to fill (the bomber's big bomb, longer).
+    pub fn full_ms(&self) -> u32 {
+        if self.kit == kit::BOMBER && !self.giant {
+            BIG_BOMB_FULL_MS
+        } else {
+            HEAVY_FULL_MS
         }
     }
 
@@ -2003,7 +2014,7 @@ impl Match {
                         }
                     } else if f.shoots() && !f.winded(now) && {
                         let c = ((held - HEAVY_MIN_MS) as f64
-                            / (HEAVY_FULL_MS - HEAVY_MIN_MS) as f64)
+                            / (f.full_ms() - HEAVY_MIN_MS) as f64)
                             .min(1.0);
                         let cost = if f.kit == kit::ARCHER {
                             BURST_COST
@@ -2014,7 +2025,7 @@ impl Match {
                     } {
                         // The bow's three arrows, or a big bomb lobbed.
                         f.charge = ((held - HEAVY_MIN_MS) as f64
-                            / (HEAVY_FULL_MS - HEAVY_MIN_MS) as f64)
+                            / (f.full_ms() - HEAVY_MIN_MS) as f64)
                             .min(1.0);
                         let more = if f.kit == kit::ARCHER {
                             BURST_GAP_MS * (BURST_ARROWS as u32 - 1)
@@ -3497,8 +3508,11 @@ impl Match {
         // blast breaks one off (its wind-up, its blow, its leap, its dash).
         let charging =
             v.giant && matches!(v.act, act::CHARGE | act::SMASH | act::STOMP | act::ROLL);
+        // (A bomb rocks the Goliath, breaks its attack off; but not the
+        // bomber's: it'd never get to finish one.)
+        let rocks = bits & 32 != 0 && self.fighters[i].kit != kit::BOMBER;
         let breaks = v.giant
-            && bits & 32 != 0
+            && rocks
             && !heavy
             && !thrown
             && !self.fighters[i].giant
@@ -3595,7 +3609,7 @@ impl Match {
         if v.giant {
             // Nothing a gladiator swings moves it or stops it: only a bomb's
             // blast (breaking an attack off, or rocking it a moment).
-            kb = if bits & 32 != 0 { kb * 0.2 } else { 0.0 };
+            kb = if rocks { kb * 0.2 } else { 0.0 };
             // (A slash hardly dents it.)
             if quick {
                 dmg *= LIGHT_VS_GIANT;
@@ -3608,7 +3622,7 @@ impl Match {
             } else if charging {
                 kb = 0.0;
                 0
-            } else if bits & 32 == 0 || now < v.poise_until {
+            } else if !rocks || now < v.poise_until {
                 // (Slashes don't stagger it; and once staggered, it's steady a
                 // while: it can't be held reeling by a crowd at it.)
                 0
@@ -4451,8 +4465,10 @@ impl Match {
                 };
                 if big && f.stamina > big_cost + 6.0 {
                     evs.extend(self.input(me.id, input::HEAVY_START, aim, now));
-                    self.fighters[i].ai.charge_for =
-                        HEAVY_MIN_MS + (150.0 + 400.0 * sk.cunning.min(1.0) + rng() * 150.0) as u32;
+                    let fill =
+                        (f.full_ms() - HEAVY_MIN_MS) as f64 / (HEAVY_FULL_MS - HEAVY_MIN_MS) as f64;
+                    self.fighters[i].ai.charge_for = HEAVY_MIN_MS
+                        + ((150.0 + 400.0 * sk.cunning.min(1.0) + rng() * 150.0) * fill) as u32;
                 } else if dist < quick_range && f.stamina > quick_cost + 6.0 {
                     // The quick shot, leading them.
                     let speed = if archer { ARROW_SPEED } else { BOMB_SPEED };
@@ -6076,7 +6092,6 @@ mod kit_tests {
             hits.iter().all(|&n| (n - BURST_DMG).abs() <= 1.0),
             "{hits:?}"
         );
-        assert!((BURST_DMG - QUICK_ARROW_DMG * 2.0).abs() < 1e-9);
         // Quick: an arrow at the mouse, three a second, as far as a spear flies.
         let (mut m, t) = duel(kit::ARCHER, kit::KNIGHT, 9.0);
         let mut shot = 0;
@@ -6090,8 +6105,8 @@ mod kit_tests {
                 hit += (e.kind == ev::HIT && e.a == 1 && e.b == 2) as usize;
             }
         }
-        assert_eq!(shot, 3, "a third of a second apart");
-        assert!(hit >= 2, "struck: {hit}");
+        assert_eq!(shot, 2, "no more than one every 0.75 s");
+        assert!(hit >= 1, "struck: {hit}");
         let (mut m, t) = duel(kit::ARCHER, kit::KNIGHT, 1.0);
         m.fighters[0].x = 1.5;
         m.fighters[1].x = 1.5 + SPEAR_RANGE + 3.0;
@@ -6271,7 +6286,7 @@ mod kit_tests {
             (n, m.fighters[1].max_hp - m.fighters[1].hp)
         };
         let (small, d0) = blast(HEAVY_MIN_MS + 10);
-        let (big, d1) = blast(HEAVY_FULL_MS + 100);
+        let (big, d1) = blast(BIG_BOMB_FULL_MS + 100);
         assert!(big > small && d1 > d0, "{small}/{d0} vs {big}/{d1}");
     }
 

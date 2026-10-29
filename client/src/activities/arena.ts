@@ -31,7 +31,7 @@ import { COURT_CAESAR, COURT_CANDLES, COURT_TORCH_DOWN, COURT_TORCH_OUT, COURT_O
 import { drawPixelText, pixelWidth } from "../world/pixelfont";
 import { levelLabel, levelPicker } from "./botlevel";
 import { drawArms } from "./arenagear";
-import { ACT, ARROW, ARROW_RANGE, ARROW_SPEED, BIG_BOMB, BIG_BOMB_R, BLAST_R, BODY_H, CAST, GIANT_H, KIT, KIT_HEAVY_REACH, KIT_HP, KIT_LIGHT_ARC, KIT_LIGHT_REACH, KIT_LIGHT_TIME, KIT_LUNGE, KIT_LUNGE_MAX, KIT_SPEED, KIT_SPIN_REACH, KITS, KitPicker, LOB_MIN, LOB_RANGE, QUAKE_R, SHOOT, TANK_LEAP, TANK_LEAP_MIN, TANK_STOMP_R, kitGallery, kitOf, picked, shoots } from "./arenakits";
+import { ACT, ARROW, ARROW_RANGE, ARROW_SPEED, BIG_BOMB, BIG_BOMB_FULL_MS, BIG_BOMB_R, BLAST_R, BODY_H, CAST, GIANT_H, KIT, KIT_HEAVY_REACH, KIT_HP, KIT_LIGHT_ARC, KIT_LIGHT_REACH, KIT_LIGHT_TIME, KIT_LUNGE, KIT_LUNGE_MAX, KIT_SPEED, KIT_SPIN_REACH, KITS, KitPicker, LOB_MIN, LOB_RANGE, QUAKE_R, SHOOT, TANK_LEAP, TANK_LEAP_MIN, TANK_STOMP_R, kitGallery, kitOf, picked, shoots } from "./arenakits";
 import { BOWL_OVERHANG, bowlMasts, bowlSeats } from "../world/amphitheatre";
 import { spectatorTexture } from "../world/crowdart";
 import { drawGoliath, GOLIATH_HEIGHT, type GoliathAct, type GoliathPose } from "../world/goliathart";
@@ -2200,7 +2200,7 @@ export class ArenaShow {
     const c = Math.max(0, Math.min(1, (held - HEAVY_MIN_MS) / (HEAVY_FULL_MS - HEAVY_MIN_MS)));
     const kit = this.myKit();
     if (kit === KIT.ARCHER) return this.bowMarker(c, now);
-    if (kit === KIT.BOMBER) return this.lobMarker(c, now);
+    if (kit === KIT.BOMBER) return this.lobMarker(Math.max(0, Math.min(1, (held - HEAVY_MIN_MS) / (BIG_BOMB_FULL_MS - HEAVY_MIN_MS))), now);
     if (kit === KIT.TANK) return this.stompMarker(now, { chargeMs: HEAVY_FULL_MS, min: TANK_LEAP_MIN, max: TANK_LEAP, r: TANK_STOMP_R });
     const lunge = KIT_LUNGE[kit] + (KIT_LUNGE_MAX[kit] - KIT_LUNGE[kit]) * c;
     const a = this.me.aim;

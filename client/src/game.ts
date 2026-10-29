@@ -90,6 +90,7 @@ import type { Concert } from "./concert";
 import type { YardPanel } from "./ui/homes";
 import type { MetroPanel } from "./ui/metro";
 import type { BlackjackPanel, Casino, CagePanel, RoulettePanel, SlotsPanel, Tables } from "./ui/casino";
+import type { MegaSlotsPanel, RacePanel } from "./ui/casinogames";
 import { RouletteFx } from "./world/roulettefx";
 import type { Museum } from "./museum";
 import type { ArtCard, ArtCataloguePanel, DeskPanel, NaturePanel, StudioPanel } from "./ui/museum";
@@ -183,6 +184,8 @@ export interface Ui {
   metro: MetroPanel;
   casino: Casino;
   slots: SlotsPanel;
+  mega: MegaSlotsPanel;
+  race: RacePanel;
   roulette: RoulettePanel;
   blackjack: BlackjackPanel;
   /** The casino's shared tables, live from the server. */
@@ -1201,6 +1204,14 @@ export class Game {
       case "slot_machine":
         walkUp();
         this.near(ui.slots, front, 4).show();
+        return true;
+      case "mega_slot":
+        walkUp();
+        this.near(ui.mega, front, 4).show();
+        return true;
+      case "horse_race":
+        walkUp();
+        this.near(ui.race, front, 5).show();
         return true;
       case "roulette_table":
         walkUp();

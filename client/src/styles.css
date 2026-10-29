@@ -4493,8 +4493,7 @@ body.woozy #stage canvas {
 .panel canvas.wheel {
   display: block;
   margin: 0 auto 8px;
-  width: 170px;
-  height: 170px;
+  max-width: 100%;
 }
 
 .panel button.small.red {
@@ -4649,6 +4648,8 @@ body.woozy #stage canvas {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
   margin-bottom: 6px;
 }
 
@@ -6771,5 +6772,75 @@ button.ark-card:hover {
   }
   .ark-blurb {
     display: none;
+  }
+}
+
+/* The Casino's big machine and the horse races. */
+.panel .mega-frame {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto 8px;
+  padding: 6px;
+  border-radius: 10px;
+  background: linear-gradient(#e0b54a, #8f6a1f);
+  box-shadow: 0 0 0 2px #3b3a2e, 0 0 14px rgba(255, 210, 63, 0.35);
+}
+
+.panel .mega-frame canvas {
+  display: block;
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.panel .casino-msg.win.big {
+  font-size: 1.25em;
+  animation: big-win 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes big-win {
+  to {
+    transform: scale(1.06);
+    color: #ffd23f;
+  }
+}
+
+.panel canvas.race-track {
+  display: block;
+  max-width: 100%;
+  margin: 0 auto 4px;
+  border-radius: 6px;
+  box-shadow: 0 0 0 2px #3b3a2e;
+}
+
+.panel .race-call {
+  text-align: center;
+  font-weight: bold;
+  min-height: 1.3em;
+  margin: 2px 0 6px;
+}
+
+.panel .race-horses {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.panel .race-horses button {
+  text-align: left;
+}
+
+.panel .race-horses .silk {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: middle;
+  box-shadow: 0 0 0 1px #3b3a2e;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel .casino-msg.win.big {
+    animation: none;
   }
 }

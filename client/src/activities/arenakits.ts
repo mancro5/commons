@@ -29,7 +29,7 @@ export const SHOOT: [number, number] = [90, 260];
 export const CAST: [number, number] = [320, 260];
 export const ARROW_SPEED = 22;
 export const ARROW_RANGE = 14;
-export const QUICK_SHOT: [number, number] = [60, 273];
+export const QUICK_SHOT: [number, number] = [60, 690];
 export const QUICK_ARROW_COST = 9;
 export const BURST_GAP_MS = 110;
 export const BURST_COST = 26;
@@ -38,7 +38,9 @@ export const LOB_RANGE = 7;
 export const QUICK_LOB: [number, number] = [120, 480];
 export const QUICK_LOB_R = 1.5;
 export const QUICK_LOB_COST = 20;
-export const BIG_BOMB_R: [number, number] = [1.9, 3];
+export const BIG_BOMB_R: [number, number] = [1.7, 2.7];
+/** The big bomb takes four times a heavy blow's charge to fill (as `arena::BIG_BOMB_FULL_MS`). */
+export const BIG_BOMB_FULL_MS = 220 + 4 * (1000 - 220);
 export const BIG_BOMB_COST: [number, number] = [28, 56];
 export const TANK_LEAP_MIN = 1;
 export const TANK_LEAP = 3.4;
@@ -90,8 +92,8 @@ export const KITS: KitInfo[] = [
     icon: "🏹",
     role: "Long range",
     blurb: "Light on their feet, deadly from afar. Keep your distance: up close, every arrow counts.",
-    quick: "Quick shot: an arrow at your aim, three a second, as far as a thrown spear",
-    charged: "Triple shot: three fast arrows in a row, double damage, flying till they hit something",
+    quick: "Quick shot: an arrow at your aim, one every 0.75 s, as far as a thrown spear",
+    charged: "Triple shot: three fast arrows in a row, flying till they hit something",
     ultimate: "Arrow storm: untouchable, three rings of arrows all round you, half a second apart",
     stats: [2, 4, 2, 5],
     tint: "#4f8a3c",
@@ -102,7 +104,7 @@ export const KITS: KitInfo[] = [
     role: "Area damage",
     blurb: "Bombs for everyone. Lob them where they'll stand, but mind your own blast.",
     quick: "Lob a bomb: it lands where you aim",
-    charged: "Big bomb: hold longer for a bigger blast and more damage (and more stamina)",
+    charged: "Big bomb: hold (up to ~3 s) for a bigger blast and more damage (and more stamina)",
     ultimate: "Big bang: a huge blast all round you (you're unharmed). Picked-up bombs: thrown three at a time",
     stats: [2, 3, 4, 4],
     tint: "#c8553d",

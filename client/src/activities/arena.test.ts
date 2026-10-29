@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import arenaRs from "../../../server/crates/sim/src/arena.rs?raw";
-import { ARROW, ARROW_RANGE, ARROW_SPEED, BIG_BOMB, BIG_BOMB_COST, BIG_BOMB_R, BLAST_R, BODY_H, BURST_COST, BURST_GAP_MS, CAST, CHOOSE_MS, GIANT_H, KIT_HEAVY_REACH, KIT_HP, KIT_LIGHT_ARC, KIT_LIGHT_REACH, KIT_LIGHT_TIME, KIT_LUNGE, KIT_LUNGE_MAX, KIT_SPEED, KIT_SPIN_REACH, LOB_MIN, LOB_RANGE, QUAKE_R, QUICK_ARROW_COST, QUICK_LOB, QUICK_LOB_COST, QUICK_LOB_R, QUICK_SHOT, SHOOT, TANK_LEAP, TANK_LEAP_MIN, TANK_STOMP_R } from "./arenakits";
+import { ARROW, ARROW_RANGE, ARROW_SPEED, BIG_BOMB, BIG_BOMB_COST, BIG_BOMB_FULL_MS, BIG_BOMB_R, BLAST_R, BODY_H, BURST_COST, BURST_GAP_MS, CAST, CHOOSE_MS, GIANT_H, KIT_HEAVY_REACH, KIT_HP, KIT_LIGHT_ARC, KIT_LIGHT_REACH, KIT_LIGHT_TIME, KIT_LUNGE, KIT_LUNGE_MAX, KIT_SPEED, KIT_SPIN_REACH, LOB_MIN, LOB_RANGE, QUAKE_R, QUICK_ARROW_COST, QUICK_LOB, QUICK_LOB_COST, QUICK_LOB_R, QUICK_SHOT, SHOOT, TANK_LEAP, TANK_LEAP_MIN, TANK_STOMP_R } from "./arenakits";
 import { GIANT_CHARGE_MS, HEAVY_LUNGE, HEAVY_LUNGE_MAX, HP, HURL_DIST, HURL_MIN, STOMP_LEAP, STOMP_LEAP_MIN, STOMP_R, GIANT_DASH_COST, GIANT_DASH_DIST, GIANT_DASH_MS, GIANT_HP, GIANT_R, GIANT_SPEED, GRAB_SPIN_MS, OVER_MS, PARADE_END, PARADE_FIRST_GAP, PARADE_GAP, LIGHT_COST, SMASH, SMASH_ARC, SMASH_COST, SMASH_REACH, STOMP } from "./arena";
 
 /** A constant's value in the server's arena sim (sim/src/arena.rs). */
@@ -101,6 +101,7 @@ describe("the arena's classes (mirror sim::arena::kit)", () => {
     expect(BIG_BOMB_R).toEqual(pair("BIG_BOMB_R", "f64"));
     expect(BIG_BOMB_COST).toEqual(pair("BIG_BOMB_COST", "f64"));
     expect(ARROW).toBe(Number(arenaRs.match(/pub const ARROW: u8 = (\d+);/)![1]));
+    expect(BIG_BOMB_FULL_MS).toBe(serverConst("HEAVY_MIN_MS") + 4 * (serverConst("HEAVY_FULL_MS") - serverConst("HEAVY_MIN_MS")));
     expect(BIG_BOMB).toBe(Number(arenaRs.match(/pub const BIG_BOMB: u8 = (\d+);/)![1]));
   });
 });
