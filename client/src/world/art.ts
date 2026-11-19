@@ -13,14 +13,17 @@ import { disc, outlineColor, oval, polygon } from "./pixeldraw";
 import { MUG_TOP, mugArt, mugLights } from "./mugart";
 import { drawSkateGround, drawSkateRoad, skateObject, type Relief } from "./skateart";
 import { SHOP_TOP, skateShopLights, skateShopObject } from "./skateshopart";
+import { poolRelief, poolTableCanvas } from "./poolart";
+import { yardDecor } from "./yardart";
 import { canPixel, drawPixelText, pixelWidth } from "./pixelfont";
 import { decodeLook, encodeLook } from "./look";
 import { LIBRARY_GROUND, drawLibraryGround, libraryDecor, libraryObject } from "./libraryart";
 import { clubObject } from "./clubart";
-import { concertObject } from "./concertart";
+import { civicObject } from "./civicart";
+import { concertObject, drawTheatreGround } from "./concertart";
 import { HOUSE_OVERHANG, drawHouse } from "./houseart";
 import { metroObject } from "./metroart";
-import { casinoObject } from "./casinoart";
+import { casinoObject, drawCasinoGround } from "./casinoart";
 import { boatObject } from "./boatart";
 import { museumObject } from "./museumart";
 import { paintballObject, splat as paintSplat } from "./paintballart";
@@ -148,6 +151,10 @@ export function drawGround(ctx: CanvasRenderingContext2D, kind: string, tx: numb
     track: "#c0674e",
     curb: "#cfc6b2",
     arcade_carpet: "#211c30",
+    casino_carpet: "#1d1428",
+    casino_marble: "#16151a",
+    theatre_carpet: "#4a1420",
+    theatre_aisle: "#5e0e1c",
     tavern_floor: "#3e2a1c",
     skate: "#b8b4ab",
     skate_road: "#a7a39a",
@@ -387,7 +394,7 @@ export function drawGround(ctx: CanvasRenderingContext2D, kind: string, tx: numb
       if (differs(1, 0)) px(ctx, P.chalk, ox + TILE - 4, oy, 2, TILE);
       break;
     default:
-      drawLibraryGround(ctx, kind, tx, ty, ox, oy, differs);
+      if (!drawCasinoGround(ctx, kind, tx, ty, ox, oy, differs) && !drawTheatreGround(ctx, kind, tx, ty, ox, oy, differs)) drawLibraryGround(ctx, kind, tx, ty, ox, oy, differs);
   }
 }
 
@@ -489,6 +496,9 @@ export function decorTexture(kind: string, variant: number): Texture | null {
   if (kind.startsWith("lab_")) return labDecor(kind, variant);
   // The café's armchairs (cafeart.ts).
   if (kind === "armchair") return cafeDecor(kind);
+  // The sports grounds' fences and bleachers (yardart.ts).
+  const yard = yardDecor(kind, variant);
+  if (yard) return yard;
   // The trees, richer and in six shapes each (treeart.ts).
   const treeKey = `${kind}:t${variant % 6}`;
   const tree = decorCache.get(treeKey) ?? treeCanvas(kind, variant);
@@ -1287,6 +1297,8 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
   if (shop) return shop;
   const skate = skateObject(o);
   if (skate) return skate;
+  // The pool table, built up in 3D (poolart.ts).
+  if (o.kind === "pool_table") return { texture: toTexture(poolTableCanvas(o.w, o.h)), overhang: 0, left: 0, relief: poolRelief(o.w, o.h, false) };
   const P = PALETTE;
   const w = o.w * TILE;
   const h = o.h * TILE;
@@ -2043,38 +2055,6 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       overhang = MUG_TOP;
       break;
     }
-    case "pool_table": {
-      // Green cloth in a wooden frame, six pockets, the rack and a cue.
-      [c, ctx] = makeCanvas(w, h + 12);
-      overhang = 12;
-      const top = 12;
-      px(ctx, "rgba(0,0,0,0.2)", 6, top + h - 6, w - 12, 6);
-      px(ctx, P.outline, 4, top - 10, w - 8, h + 4);
-      px(ctx, "#7d5232", 5, top - 9, w - 10, h + 2);
-      px(ctx, P.outline, 12, top - 2, w - 24, h - 12);
-      px(ctx, "#2f7a4f", 13, top - 1, w - 26, h - 14);
-      px(ctx, "#2a6d47", 13, top + h - 18, w - 26, 3);
-      for (const [x, y] of [[13, top - 1], [w / 2 - 2, top - 2], [w - 17, top - 1], [13, top + h - 19], [w / 2 - 2, top + h - 18], [w - 17, top + h - 19]] as [number, number][]) {
-        px(ctx, "#1d1d1d", x, y, 5, 5);
-      }
-      // legs
-      px(ctx, P.outline, 10, top + h - 6, 6, 6);
-      px(ctx, P.outline, w - 16, top + h - 6, 6, 6);
-      // the rack and the cue ball
-      const balls = ["#f6c343", "#3f6fa0", "#c8553d", "#1d1d1d", "#9b7fd4", "#e8823a"];
-      let k = 0;
-      for (let row = 0; row < 3; row++) {
-        for (let i = 0; i <= row; i++) {
-          const bx = Math.round(w * 0.656) + row * 4;
-          const by = top + 20 + i * 4 - row * 2;
-          px(ctx, balls[k++ % balls.length], bx, by, 3, 3);
-        }
-      }
-      px(ctx, "#fff8e3", Math.round(w * 0.28), top + 22, 3, 3);
-      // a cue lying across
-      for (let i = 0; i < 40; i++) px(ctx, i < 30 ? "#d2a06a" : "#4e3420", Math.round(w * 0.156) + i, top + 36 - Math.floor(i / 6), 2, 1);
-      break;
-    }
     case "pinball": {
       // A pinball machine on chrome legs, played from its left end: a
       // painted cabinet with neon trim, the playfield lit up under glass
@@ -2805,9 +2785,11 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       break;
     }
     default: {
-      const lib: { c: HTMLCanvasElement; overhang: number; left?: number } | null =
-        libraryObject(o) ?? clubObject(o) ?? concertObject(o) ?? metroObject(o) ?? casinoObject(o) ?? boatObject(o) ?? museumObject(o) ?? paintballObject(o) ?? arenaObject(o);
+      const lib: { c: HTMLCanvasElement; overhang: number; left?: number; relief?: Relief } | null =
+        civicObject(o) ?? libraryObject(o) ?? clubObject(o) ?? concertObject(o) ?? metroObject(o) ?? casinoObject(o) ?? boatObject(o) ?? museumObject(o) ?? paintballObject(o) ?? arenaObject(o);
       if (lib) {
+        // (Built up in the 3D view, if it says how.)
+        if (lib.relief) return { texture: toTexture(lib.c), overhang: lib.overhang, left: lib.left ?? 0, relief: lib.relief };
         c = lib.c;
         overhang = lib.overhang;
         left = lib.left ?? 0;
@@ -2913,11 +2895,11 @@ const canvasCache = new Map<string, HTMLCanvasElement>();
  * off, crouching 1–3 pixels (only the front leg; the back one is drawn with
  * the board).
  */
-export function avatarTexture(look: number, frame: AvatarFrame, style = 0): Texture {
-  const key = `${look}:${frame}:${style}`;
+export function avatarTexture(look: number, frame: AvatarFrame, style = 0, mask = false): Texture {
+  const key = `${look}:${frame}:${style}${mask ? ":m" : ""}`;
   const cached = avatarCache.get(key);
   if (cached) return cached;
-  const t = toTexture(avatarCanvas(look, frame, style));
+  const t = toTexture(avatarCanvas(look, frame, style, mask));
   avatarCache.set(key, t);
   return t;
 }
@@ -2934,12 +2916,43 @@ export function styleFor(slot: string, code: number): number {
 }
 
 /**
+ * A goalie's hockey mask over the face (the head's 12×11 at 6,4), pixel by
+ * pixel: bone white, shaded at its rim, a ridge over the brow; dark eye
+ * holes over the eyes, rows of breathing holes, red chevrons on the brow
+ * and down the cheeks, and its strap across the hair at the sides.
+ */
+function hockeyMask(ctx: CanvasRenderingContext2D) {
+  const rows = [
+    "..SWWWWWWS..",
+    ".SWWRWWRWWS.",
+    ".WWRWWWWRWW.",
+    ".SSSSSSSSSS.",
+    ".WDDWWWWDDW.",
+    ".WDDWWWWDDW.",
+    ".WWWWDDWWWW.",
+    ".RWWDWWDWWR.",
+    ".SRWWDDWWRS.",
+    "..SWDWWDWS..",
+    "...SSSSSS...",
+  ];
+  const col: Record<string, string> = { W: "#ece4d0", S: "#bdb39a", D: "#1c1820", R: "#c0202a" };
+  // The strap, over the hair at each side.
+  px(ctx, "#2a2630", 5, 9, 2, 1);
+  px(ctx, "#2a2630", 17, 9, 2, 1);
+  rows.forEach((row, y) => {
+    [...row].forEach((ch, x) => {
+      if (col[ch]) px(ctx, col[ch], 6 + x, 4 + y, 1, 1);
+    });
+  });
+}
+
+/**
  * The avatar drawn on a 24×34 canvas (also for previews in the changing
  * room). `style` adds what's worn from the mall: an outfit, hat or
  * accessory over the look, or a full-body skin instead of it.
  */
-export function avatarCanvas(look: number, frame: AvatarFrame, style = 0): HTMLCanvasElement {
-  const key = `${look}:${frame}:${style}`;
+export function avatarCanvas(look: number, frame: AvatarFrame, style = 0, mask = false): HTMLCanvasElement {
+  const key = `${look}:${frame}:${style}${mask ? ":m" : ""}`;
   const cached = canvasCache.get(key);
   if (cached) return cached;
   const caretaker = look === CARETAKER_LOOK;
@@ -3308,6 +3321,8 @@ export function avatarCanvas(look: number, frame: AvatarFrame, style = 0): HTMLC
     px(ctx, "#e89a8f", 8, 12, 2, 1);
     px(ctx, "#e89a8f", 15, 12, 2, 1);
   }
+  // Paintball's Goliath: a hockey mask over the face.
+  if (mask) hockeyMask(ctx);
 
   // ---- hat ----
   if (p.hat === 1) {

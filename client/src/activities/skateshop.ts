@@ -57,7 +57,7 @@ export class SkateShop {
       .forEach((truck, i) => {
         // In the hatch: the truck's middle, its front row (just behind the counter).
         const at = { x: truck.x + 3, y: truck.y };
-        const info: EntityInfo = { id: SELLER_BASE + i, name: SELLER.name, look: SELLER.look, x: at.x, y: at.y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, reading: 0, calling: false, style: 0, pet: 0, vehicle: 0, tool: 0 };
+        const info: EntityInfo = { id: SELLER_BASE + i, name: SELLER.name, look: SELLER.look, x: at.x, y: at.y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, reading: 0, calling: false, bot: false, style: 0, pet: 0, vehicle: 0, tool: 0 };
         const avatar = new Avatar(info, scene, labels, false, Date.now());
         avatar.markNpc();
         // (In 3D he stands where the van does, in its hatch, not a row behind it.)

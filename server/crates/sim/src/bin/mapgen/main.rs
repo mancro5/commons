@@ -54,6 +54,12 @@ const GROUND: &[&str] = &[
     // The skatepark's smooth concrete, and the inner ring road where it runs through it.
     "skate",
     "skate_road",
+    // The casino: a dark patterned carpet, and black marble aisles.
+    "casino_carpet",
+    "casino_marble",
+    // The concert hall: wine carpet, and the lit runner up the aisle.
+    "theatre_carpet",
+    "theatre_aisle",
 ];
 const DECOR: &[&str] = &[
     "none",
@@ -136,6 +142,18 @@ const DECOR: &[&str] = &[
     "home_window",
     "home_wall_cap",
     "home_wall_low",
+    // The outdoor paintball yard: tall netting on steel posts round the field,
+    // and tiered aluminium bleachers to watch from (seats; the back row higher).
+    "netfence",
+    "bleacher",
+    "bleacher_hi",
+    // The skatepark's tall galvanised steel fence (railings and mesh).
+    "skate_fence",
+    // The casino's walls: red velvet, gold trim, neon along the top.
+    "casino_wall",
+    // The concert hall: walnut walls with acoustic slats, red velvet theatre seats (facing the stage).
+    "theatre_wall",
+    "theatre_seat",
 ];
 
 fn g(name: &str) -> u8 {

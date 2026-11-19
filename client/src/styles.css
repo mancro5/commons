@@ -265,6 +265,23 @@ body {
   opacity: 0;
 }
 
+/* Playing: just the newest few lines up (each fading out a while after it came in). */
+.bottom:not(.chatting) .log .line:nth-last-child(n + 9) {
+  display: none;
+}
+
+/* Typing (as in Minecraft): the chat so far back up, faded lines too, the last
+   twenty or so, scrolled back through for more. */
+.bottom.chatting .log {
+  max-height: 42vh;
+  overflow-y: auto;
+  pointer-events: auto !important;
+  scrollbar-width: thin;
+}
+.bottom.chatting .log .line.old {
+  opacity: 0.85;
+}
+
 .chat input {
   width: 100%;
   font: inherit;
@@ -7869,14 +7886,15 @@ body.phone .ar-vote-name {
 
 /* In the park on foot: hop on. */
 .skate-enter {
+  /* Up in the corner the whole time you're in the park (on foot or riding),
+     with "Get off" under it: change mode or claim a mission's prize without
+     getting off. (Under the panels: the board by the gate, Dusty's window.) */
   position: fixed;
-  left: 50%;
-  bottom: 150px;
-  transform: translateX(-50%);
-  /* (Under the panels: the board by the gate, Dusty's window.) */
+  right: 12px;
+  top: 64px;
   z-index: 4;
-  padding: 12px 22px;
-  font: 800 18px var(--font);
+  padding: 8px 14px;
+  font: 800 16px var(--font);
   color: #fff;
   background: linear-gradient(#ff7a45, #e8502a);
   border: 3px solid #3b1f14;
@@ -7890,8 +7908,12 @@ body.phone .ar-vote-name {
 }
 @keyframes skate-bob {
   50% {
-    transform: translateX(-50%) translateY(-4px);
+    transform: translateY(-3px);
   }
+}
+/* Riding: it sits still (no bob to catch the eye mid-trick). */
+body.skate-playing .skate-enter {
+  animation: none;
 }
 
 /* On a board: the chat and the bottom bar stay (talk as you ride); the
@@ -8007,6 +8029,32 @@ body.skate-playing.skate-touch-mode .chat-log {
   border-radius: 8px;
   background: linear-gradient(90deg, #2a7fff, #3fd8e8, #f4f1e8) left / var(--fill, 0%) 100% no-repeat, rgba(31, 27, 46, 0.6);
   transition: background-size 0.12s linear;
+}
+/* Line mode: the time left to start the next trick. */
+.skate-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.skate-line[hidden] {
+  display: none;
+}
+.skate-line-bar {
+  width: 150px;
+  height: 8px;
+  border: 3px solid #1f1b2e;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #ff6a3d, #ffb23f, #ffe14f) left / var(--fill, 0%) 100% no-repeat, rgba(31, 27, 46, 0.6);
+}
+.skate-line.low .skate-line-bar {
+  animation: skate-line-hurry 0.25s ease-in-out infinite alternate;
+}
+@keyframes skate-line-hurry {
+  to {
+    box-shadow: 0 0 10px 3px rgba(255, 90, 60, 0.85);
+  }
 }
 .skate-flow.full .skate-flow-bar {
   animation: skate-flow-glow 0.4s ease-in-out infinite alternate;
@@ -8320,10 +8368,12 @@ body.skate-playing.skate-touch-mode .chat-log {
 
 /* (Over the panels, which open in the same corner: getting off always works.) */
 .skate-off {
+  /* Right under the "Skate!" button, and like it under the panels (the
+     board it opens is over the both of them till it's closed). */
   position: fixed;
   right: 12px;
-  top: 64px;
-  z-index: 60;
+  top: 122px;
+  z-index: 4;
   pointer-events: auto;
   padding: 8px 12px;
   font: 800 14px var(--font);
@@ -8745,20 +8795,47 @@ body.skate-touch-mode .skate-touch {
   font-style: italic;
   color: var(--muted);
 }
+/* A mission: its icon in a tile, what to do and how far, its reward. Ready to claim, it shines. */
 .skate-quest {
+  --tier: #6a9a4a;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   background: var(--paper-3);
+  border-radius: 12px;
+  box-shadow: var(--frame-thin);
+  border-left: 5px solid var(--tier);
+}
+.skate-quest.t1 {
+  --tier: #e0a030;
+}
+.skate-quest.t2 {
+  --tier: #d0543c;
+}
+.skate-quest-icon {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  background: var(--paper-2);
   border-radius: 10px;
   box-shadow: var(--frame-thin);
 }
 .skate-quest.done:not(.claimed) {
-  background: #fff3b8;
+  background: linear-gradient(90deg, #fff3b8, #ffe48a);
+  box-shadow: var(--frame-thin), 0 0 0 2px #f6c343;
+}
+.skate-quest.done:not(.claimed) .skate-quest-icon {
+  background: #ffd23f;
 }
 .skate-quest.claimed {
-  opacity: 0.6;
+  opacity: 0.55;
+}
+.skate-quest.claimed strong {
+  text-decoration: line-through;
 }
 .skate-quest-info {
   flex: 1;
@@ -8766,6 +8843,18 @@ body.skate-touch-mode .skate-touch {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+}
+.skate-quest-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+.skate-quest-tier {
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--tier);
 }
 .skate-quest-bar {
   height: 8px;
@@ -8777,18 +8866,154 @@ body.skate-touch-mode .skate-touch {
   display: block;
   height: 100%;
   background: linear-gradient(90deg, #6a9a4a, #8cbf63);
+  transition: width 0.4s ease;
 }
 .skate-quest.done .skate-quest-fill {
   background: linear-gradient(90deg, #f6c343, #ffd23f);
 }
 .skate-quest-prog {
-  font-size: 12px;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 .skate-quest-coins,
 .skate-quest-got {
   font-weight: 800;
   white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--paper-2);
+}
+.skate-quest-got {
+  color: #4a7a3a;
+}
+.skate-quest-claim {
+  animation: skate-bob 1.2s ease-in-out infinite;
+}
+
+/* The missions window: today at a glance up top. */
+.panel.skate-missions {
+  width: min(420px, calc(100vw - 24px));
+}
+.skate-missions-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px;
+  margin-bottom: 10px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #ff7a45, #e8502a);
+  color: #fff;
+  box-shadow: var(--frame-thin);
+  text-shadow: 0 2px 0 rgba(59, 31, 20, 0.5);
+}
+.skate-missions-count {
+  font: 800 30px var(--font);
+  line-height: 1;
+}
+.skate-missions-sub {
+  font-size: 13px;
+  font-weight: 700;
+}
+.skate-missions-pips {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0;
+}
+.skate-missions-pips i {
+  width: 34px;
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.3);
+}
+.skate-missions-pips i.done {
+  background: #ffe14d;
+}
+.skate-missions-pips i.paid {
+  background: #fff;
+}
+.skate-missions-meta {
+  font-size: 11px;
+  opacity: 0.9;
+}
+.skate-missions-all {
+  width: 100%;
+  margin-bottom: 10px;
+}
+.skate-missions-foot {
+  margin: 10px 0 0;
+  text-align: center;
+}
+
+/* The Missions button: by "Skate!" in the park, in the corner anywhere you ride; a badge when one is ready. */
+.skate-missions-btn {
+  position: fixed;
+  right: 12px;
+  top: 64px;
+  z-index: 4;
+  padding: 8px 12px;
+  font: 800 14px var(--font);
+  color: #3b1f14;
+  background: linear-gradient(#ffe48a, #f6c343);
+  border: 3px solid #3b1f14;
+  border-radius: 14px;
+  box-shadow: 0 4px 0 #3b1f14, 0 8px 20px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+.skate-missions-btn.beside {
+  right: 158px;
+}
+.skate-missions-btn[hidden] {
+  display: none;
+}
+.skate-missions-btn.ready {
+  animation: skate-bob 1.2s ease-in-out infinite;
+}
+.skate-missions-badge {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  font: 800 12px var(--font);
+  color: #fff;
+  background: #d0302c;
+  border: 2px solid #3b1f14;
+  border-radius: 999px;
+}
+.skate-missions-badge[hidden] {
+  display: none;
+}
+
+/* On the Skate! board: the missions, one line, opening their window. */
+.skate-board-missions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  margin: 8px 0;
+  font-size: 15px;
+  text-align: left;
+  border-radius: 12px;
+}
+.skate-board-missions strong {
+  flex: 1;
+}
+.skate-board-missions-n {
+  font-size: 12px;
+  color: var(--muted);
+}
+.skate-board-missions.ready {
+  background: linear-gradient(90deg, #fff3b8, #ffe48a);
+  box-shadow: var(--frame-thin), 0 0 0 2px #f6c343;
+}
+.skate-board-missions.ready .skate-board-missions-n {
+  color: #a0461e;
+  font-weight: 800;
 }
 .panel.skate-shop .tabs button.ready {
   animation: skate-bob 1.2s ease-in-out infinite;
@@ -9771,4 +9996,606 @@ body.skate-street .skate-duel {
   .crate-tier {
     font-size: 32px;
   }
+}
+
+/* Trading face to face (ui/trade.ts): your side and theirs, then your bag. */
+.panel.trade {
+  width: min(560px, calc(100vw - 24px));
+}
+
+.trade-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 480px) {
+  .trade-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+.trade-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--paper-2);
+  border: 2px solid transparent;
+  min-width: 0;
+}
+
+.trade-side.locked {
+  border-color: var(--leaf);
+}
+
+.trade-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.trade-lock {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--leaf);
+}
+
+.trade-coins {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.trade-coins input {
+  width: 90px;
+  font: inherit;
+  padding: 4px 6px;
+}
+
+.trade-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.trade-actions .hint {
+  flex: 1;
+  margin: 0;
+}
+
+.trade-bag {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+  gap: 4px;
+  margin-top: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.panel .trade-pick {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: 6px;
+  border: 0;
+  background: var(--paper-2);
+  cursor: pointer;
+}
+
+.trade-count {
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* The casino's jukebox: its song cards. */
+.panel.jukebox {
+  width: min(380px, calc(100vw - 24px));
+}
+
+.jukebox-songs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.panel button.jukebox-song {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  text-align: left;
+  padding: 8px 12px;
+  border: 2px solid #3a2a40;
+  background: #2a1c30;
+  color: #f4efe2;
+  cursor: pointer;
+}
+
+.panel button.jukebox-song.on {
+  border-color: #ff4fa3;
+  box-shadow: 0 0 8px rgba(255, 79, 163, 0.6);
+}
+
+.jukebox-title {
+  font-weight: 800;
+}
+
+.jukebox-artist {
+  grid-row: 2;
+  font-size: 12px;
+  color: #c9b8d8;
+}
+
+.jukebox-play {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  font-size: 16px;
+  color: #ffd84a;
+}
+
+/* Paintball classes: the lobby's cards, the splatted screen's chips, the HUD's badge. */
+.pb-slot-class {
+  flex: none;
+  font-size: 12px;
+}
+.pb-classes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pb-classes-head {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: var(--muted);
+}
+.pb-class-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.pb-class-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 6px;
+  text-align: left;
+  line-height: 1.2;
+}
+.pb-class-card b {
+  font-size: 12px;
+}
+.pb-class-card small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.pb-class-card kbd {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  font-size: 10px;
+  opacity: 0.55;
+}
+.pb-class-icon {
+  font-size: 16px;
+}
+.pb-class-card.on {
+  box-shadow: inset 0 0 0 2px #e0a030, var(--frame);
+  background: color-mix(in srgb, #e0a030 16%, var(--paper));
+}
+.pb-class-row {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  pointer-events: auto;
+}
+.pb-respawn .pb-class-row span {
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: #fff6e0;
+}
+.pb-class-chip {
+  font-size: 12px;
+  padding: 2px 7px;
+}
+.pb-class-chip.on {
+  box-shadow: inset 0 0 0 2px #e0a030, var(--frame);
+}
+.pb-class {
+  font-size: 11px;
+  letter-spacing: 1px;
+  opacity: 0.85;
+}
+
+/* Paintball modes: the lobby's picker, the mode under the clock. */
+.pb-clock small {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #f2e8d4;
+  opacity: 0.8;
+}
+.pb-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pb-mode-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+.pb-mode-btn {
+  font-size: 11px;
+  padding: 4px 3px;
+  line-height: 1.2;
+}
+.pb-mode-btn.on {
+  box-shadow: inset 0 0 0 2px #e0a030, var(--frame);
+  background: color-mix(in srgb, #e0a030 16%, var(--paper));
+}
+.pb-mode-btn:disabled:not(.on) {
+  opacity: 0.55;
+}
+.pb-mode-tip {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Control Point: who has which point, under the clock (the middle's bigger). */
+.pb-owners {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 2px;
+}
+.pb-owners i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: 0 0 0 1px rgba(20, 12, 28, 0.8);
+}
+.pb-owners i.mid {
+  width: 11px;
+  height: 11px;
+  margin-top: -1px;
+  box-shadow: 0 0 0 1px rgba(20, 12, 28, 0.8), 0 0 0 2px #ffd23f;
+}
+
+/* Paintball: spectating (by the field, or on a TV): the button, and whom we're following. */
+.pb-spec {
+  position: fixed;
+  left: 50%;
+  bottom: 118px;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--frame), var(--drop);
+}
+.pb-spec[hidden] {
+  display: none;
+}
+.pb-spec-btn.on {
+  box-shadow: inset 0 0 0 2px #e0a030, var(--frame);
+}
+.pb-spec-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pb-spec-pick b {
+  min-width: 120px;
+  text-align: center;
+}
+.pb-spec small {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* Paintball: Free-for-all's one column of places, each in its colour; the giant's hearts. */
+.pb-lobby-teams.one {
+  grid-template-columns: 1fr;
+}
+.pb-lobby-team.ffa {
+  --tc: #b8a070;
+}
+.pb-lobby-team.ffa .pb-slot {
+  box-shadow: inset 3px 0 0 var(--tc, transparent);
+}
+.pb-side[style*="--tc"] span {
+  color: var(--tc);
+}
+.pb-giant-hp {
+  display: inline-block;
+  min-width: 90px;
+  padding: 2px 6px;
+  font-size: 12px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--c) 70%, transparent) calc(var(--f) * 100%), rgba(20, 12, 28, 0.6) 0);
+}
+
+/* Paintball players' name tags: smaller, fainter (the game's bars and colours say who's who). */
+.label.tag-pb .name {
+  font-size: 10px;
+  line-height: 13px;
+  padding: 0 4px;
+  background: rgba(30, 26, 34, 0.32);
+  opacity: 0.72;
+}
+.label.tag-pb.self .name {
+  opacity: 0.85;
+}
+
+/* The Inferno deck's swatch at the skate shop: flickering like a flame. */
+.skate-swatch.fire {
+  background: linear-gradient(0deg, #ff3a1a, #ff8a1a 55%, #ffe14d) !important;
+  animation: skate-fire 0.35s steps(3) infinite alternate;
+}
+@keyframes skate-fire {
+  from {
+    box-shadow: 0 0 8px 2px #ff6a1a;
+  }
+  to {
+    box-shadow: 0 0 13px 3px #ffb03a;
+  }
+}
+
+/* A bot playing as a player: a seedling after its name (as a founder's leaf sits). */
+.label .name .bot-badge {
+  margin-left: 3px;
+  font-size: 11px;
+}
+
+/* ---- mini golf (activities/minigolf.ts) ------------------------------------ */
+
+/* On the course, not playing: the button to play, up in the corner, bobbing. */
+.golf-enter {
+  position: fixed;
+  right: 12px;
+  top: 64px;
+  z-index: 4;
+  padding: 8px 14px;
+  font: 800 16px var(--font);
+  color: #fff;
+  background: linear-gradient(#5fc36a, #3a9a4a);
+  border: 3px solid #1f3d24;
+  border-radius: 14px;
+  box-shadow: 0 4px 0 #1f3d24, 0 8px 20px rgba(0, 0, 0, 0.25);
+  animation: skate-bob 1.6s ease-in-out infinite;
+  cursor: pointer;
+}
+.golf-enter[hidden],
+.golf-card[hidden],
+.golf-results[hidden] {
+  display: none;
+}
+
+/* The scorecard: the hole you're on up top, all nine underneath. */
+.golf-card {
+  /* (Under the top bar: coins, the menu buttons.) */
+  position: fixed;
+  left: 50%;
+  top: 66px;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  background: rgba(36, 28, 18, 0.82);
+  border: 2px solid #1a130b;
+  border-radius: 12px;
+  color: #fff6d8;
+  font: 600 13px var(--font);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  pointer-events: auto;
+}
+.golf-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 128px;
+}
+.golf-card-head b {
+  font-size: 14px;
+  color: #ffe08a;
+}
+.golf-card-head .under {
+  color: #7be36a;
+  font-weight: 800;
+}
+.golf-card-head .over {
+  color: #ff9d8a;
+  font-weight: 800;
+}
+.golf-card-row {
+  display: flex;
+  gap: 3px;
+}
+.golf-cell {
+  width: 20px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 246, 216, 0.55);
+  font-weight: 800;
+  font-size: 12px;
+}
+.golf-cell.now {
+  background: #ffe08a;
+  color: #3a2412;
+  box-shadow: 0 0 0 2px #fff6d8;
+}
+.golf-cell.under {
+  background: #3f9a4a;
+  color: #fff;
+}
+.golf-cell.par {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+.golf-cell.over {
+  background: #b5503f;
+  color: #fff;
+}
+.golf-card button {
+  font-size: 12px;
+}
+
+/* "Birdie!", "Hole in one!": big in the middle a moment, then gone. */
+.golf-shout {
+  position: fixed;
+  left: 50%;
+  top: 30%;
+  transform: translate(-50%, -50%) scale(0.6);
+  z-index: 6;
+  opacity: 0;
+  pointer-events: none;
+  font: 900 34px var(--font);
+  color: #fff6d8;
+  -webkit-text-stroke: 2px #2a1c0f;
+  text-shadow: 0 4px 0 #2a1c0f, 0 10px 24px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+}
+.golf-shout.show {
+  animation: golf-shout 1.9s ease-out forwards;
+}
+.golf-shout.ace {
+  color: #ffd84a;
+  font-size: 44px;
+}
+.golf-shout.good {
+  color: #8ff07a;
+}
+.golf-shout.meh {
+  color: #ffc2a8;
+  font-size: 28px;
+}
+@keyframes golf-shout {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  12% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.12);
+  }
+  22% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  78% {
+    opacity: 1;
+    transform: translate(-50%, -60%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -75%) scale(0.95);
+  }
+}
+
+/* The round's end: the card, how it went, today's best. */
+.golf-results {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  width: min(480px, calc(100vw - 24px));
+  padding: 14px 16px;
+  background: var(--paper, #fff8e7);
+  border: 3px solid #2a1c0f;
+  border-radius: 16px;
+  box-shadow: 0 10px 0 #2a1c0f, 0 18px 40px rgba(0, 0, 0, 0.35);
+  color: var(--ink);
+  font-family: var(--font);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.golf-results h3 {
+  margin: 0;
+  font-size: 20px;
+}
+.golf-results h4 {
+  margin: 6px 0 2px;
+  font-size: 14px;
+}
+.golf-verdict {
+  margin: 0;
+  font-weight: 800;
+  font-size: 16px;
+  color: var(--leaf-dark);
+}
+.golf-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+.golf-table td {
+  text-align: center;
+  padding: 3px 2px;
+  border: 1px solid rgba(59, 58, 46, 0.18);
+}
+.golf-table tr.head td {
+  font-weight: 800;
+  background: rgba(74, 114, 64, 0.12);
+}
+.golf-table tr.you td {
+  font-weight: 800;
+}
+.golf-table td.under {
+  background: #cdeec5;
+  color: #22602b;
+}
+.golf-table td.over {
+  background: #f6d3c9;
+  color: #8a2f1f;
+}
+.golf-board ol {
+  margin: 0;
+  padding-left: 22px;
+  font-size: 13px;
+}
+.golf-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Mini golf's power meter: the pool table's own (the bar, its arrow), on a
+   little paper card of the panels' kind beside your ball, so the arrow shows
+   as it does by the table. */
+.golf-meter-box {
+  position: fixed;
+  z-index: 5;
+  display: flex;
+  height: 132px;
+  padding: 0 12px 0 6px;
+  background: var(--paper);
+  box-shadow: var(--frame), var(--drop);
+  pointer-events: none;
+}
+.golf-meter-box[hidden] {
+  display: none;
 }

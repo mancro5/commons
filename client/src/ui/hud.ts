@@ -6,8 +6,10 @@ import { onSettings, setSettings, settings } from "../settings";
 import { EMOTE_ICONS, iconUrl, pxIcon } from "./icons";
 import { isTyping } from "./panels";
 
-const LOG_LINES = 6;
-const LOG_MS = 12_000;
+/** Lines kept (scrolled back through while typing, as in Minecraft); shown at once otherwise: the newest few. */
+const LOG_LINES = 100;
+/** How long a line stays up after it comes in (ms). */
+const LOG_MS = 30_000;
 /** Where your last emote's kept (the emotes button does it again). */
 const LAST_EMOTE_KEY = "commons.emote.last";
 
@@ -230,7 +232,11 @@ export class Hud {
     };
     // On a phone the chat bar is folded into a button until it's wanted
     // (and folds away again once it's left).
-    this.input.addEventListener("focus", () => bottom.classList.add("chatting"));
+    this.input.addEventListener("focus", () => {
+      bottom.classList.add("chatting");
+      // Typing: the chat so far, back up (the latest at the bottom).
+      this.log.scrollTop = this.log.scrollHeight;
+    });
     this.input.addEventListener("blur", () => window.setTimeout(() => document.activeElement !== this.input && bottom.classList.remove("chatting"), 120));
     this.input.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape") this.input.blur();
@@ -608,6 +614,7 @@ export class Hud {
     line.append(who, " ", text);
     this.log.appendChild(line);
     while (this.log.childElementCount > LOG_LINES) this.log.firstElementChild!.remove();
+    this.log.scrollTop = this.log.scrollHeight;
     window.setTimeout(() => line.classList.add("old"), LOG_MS);
   }
 

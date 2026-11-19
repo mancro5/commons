@@ -236,6 +236,17 @@ impl Instance {
             .is_some_and(|lamp| m.decor.get(i) == Some(&(lamp as u8)))
     }
 
+    /// Whether `tile` is water (ridden into, a skater goes in: stepping off, they're put out
+    /// on the nearest bank).
+    fn water_tile(&self, tile: TilePos) -> bool {
+        let m = &self.zone.map;
+        let i = tile.1 as usize * m.width as usize + tile.0 as usize;
+        m.ground_legend
+            .iter()
+            .position(|g| g == "water")
+            .is_some_and(|w| m.ground.get(i) == Some(&(w as u8)))
+    }
+
     /// Whether `id` may skate out on the streets here: in the city, on their own skateboard.
     fn street_skater(&self, id: u32) -> bool {
         self.zone.id == "city"
@@ -669,7 +680,9 @@ impl Instance {
         if street
             && (tile.0 >= self.zone.map.width
                 || tile.1 >= self.zone.map.height
-                || !(self.grid.walkable(tile.0, tile.1) || self.street_lamp(tile)))
+                || !(self.grid.walkable(tile.0, tile.1)
+                    || self.street_lamp(tile)
+                    || self.water_tile(tile)))
         {
             return;
         }

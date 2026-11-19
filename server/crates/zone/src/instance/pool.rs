@@ -38,6 +38,8 @@ pub(super) struct Table {
     bot_plan: Option<BotPlan>,
     /// When an aim was last passed on.
     aim_at: u32,
+    /// A bot playing as a player at the table (botswarm's): its shots are played for it, as the bot's are (0: none).
+    pilot: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -62,6 +64,7 @@ impl Table {
             busy_until: 0,
             bot_plan: None,
             aim_at: 0,
+            pilot: 0,
         }
     }
 
@@ -123,7 +126,11 @@ impl Instance {
     }
 
     pub(super) fn pool_join(&mut self, id: u32, vs_bot: bool, now: u32) {
+        let piloted = self.avatars.get(&id).is_some_and(|a| a.bot);
         let Some(t) = self.pool.as_mut() else { return };
+        if piloted {
+            t.pilot = id;
+        }
         match t.status {
             pool::PLAYING => return, // a game's on; watch or wait
             pool::WAITING if t.a != id && !vs_bot => {
@@ -234,8 +241,10 @@ impl Instance {
     /// then plays it.
     pub(super) fn pool_tick(&mut self, now: u32) {
         let Some(t) = self.pool.as_mut() else { return };
+        // (The bot's turn, or a bot playing as a player's: the server plays it.)
+        let who = t.player(t.game.turn);
         if t.status != pool::PLAYING
-            || t.player(t.game.turn) != pool::BOT
+            || (who != pool::BOT && (t.pilot == 0 || who != t.pilot))
             || now < t.busy_until + BOT_THINK_MS
         {
             return;
@@ -244,7 +253,13 @@ impl Instance {
             Some(p) => p,
             None => {
                 let mut rng = rand::rng();
-                let wobble = rng.random_range(-BOT_WOBBLE..=BOT_WOBBLE);
+                // (A bot playing as a player: steadier, it's good at this.)
+                let w = if who == pool::BOT {
+                    BOT_WOBBLE
+                } else {
+                    BOT_WOBBLE * 0.5
+                };
+                let wobble = rng.random_range(-w..=w);
                 let (vx, vy) = t.game.ai_shot(wobble);
                 let to = (vy as f64).atan2(vx as f64);
                 let swing =
@@ -262,7 +277,7 @@ impl Instance {
         };
         let since = now - plan.start;
         if since >= BOT_AIM_MS + BOT_PULL_MS {
-            return self.pool_play(pool::BOT, plan.vx, plan.vy, now);
+            return self.pool_play(who, plan.vx, plan.vy, now);
         }
         // Swing in, easing onto the line; then draw back toward the shot's power.
         let swing = (since as f64 / BOT_AIM_MS as f64).min(1.0);
@@ -272,7 +287,7 @@ impl Instance {
         let pull = since.saturating_sub(BOT_AIM_MS) as f64 / BOT_PULL_MS as f64 * power;
         let turn = angle.rem_euclid(std::f64::consts::TAU) / std::f64::consts::TAU;
         let msg = ServerMsg::PoolAim {
-            by: pool::BOT,
+            by: who,
             angle: ((turn * 65_536.0) as u32 % 65_536) as u16,
             pull: (pull * 1000.0) as u16,
         };

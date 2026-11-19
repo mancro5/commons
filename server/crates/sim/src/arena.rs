@@ -1963,6 +1963,9 @@ fn turn(a: f64, b: f64) -> f64 {
 
 #[derive(Debug, Clone)]
 pub struct Match {
+    /// Bots playing as players (botswarm's): their seats are played by the
+    /// server's bots, at the sharpest.
+    pub pilots: Vec<u32>,
     pub ring: Ring,
     pub status: u8,
     pub phase_end: u32,
@@ -2023,6 +2026,7 @@ pub struct Match {
 impl Match {
     pub fn new(ring: Ring) -> Match {
         Match {
+            pilots: Vec::new(),
             ring,
             status: LOBBY,
             phase_end: 0,
@@ -2297,7 +2301,7 @@ impl Match {
                 // Into the bot's sandals: where it stood, as hurt as it was.
                 let b = &mut self.fighters[i];
                 b.id = id;
-                b.bot = false;
+                b.bot = self.pilots.contains(&id);
                 b.ai = Ai::default();
                 b.moved_at = now;
                 b.fix = b.fix.wrapping_add(1);
@@ -2307,6 +2311,7 @@ impl Match {
             } else {
                 // Arriving into an empty place mid-round: in from the next one.
                 let mut f = Fighter::new(id, s, self.ring.gate(s), self.ring.w);
+                f.bot |= self.pilots.contains(&id);
                 if self.status == FIGHTING {
                     f.down = true;
                     f.hp = 0.0;
@@ -2490,6 +2495,7 @@ impl Match {
     /// A fighter for place `slot`, at `at`: the Goliath, if it's theirs.
     fn make(&self, id: u32, slot: usize, at: (f64, f64)) -> Fighter {
         let mut f = Fighter::new(id, slot, at, self.ring.w);
+        f.bot |= self.pilots.contains(&id);
         f.team = self.side_of(slot);
         if self.mode == mode::GOLIATH && slot == self.goliath {
             f.giant = true;
@@ -5136,7 +5142,7 @@ impl Match {
     ) -> Vec<Event> {
         let mut evs = Vec::new();
         let me = self.fighters[i].clone();
-        let sk = skill(self.level);
+        let sk = skill(if is_bot(me.id) { self.level } else { crate::level::EXTREME });
         let foes: Vec<Fighter> = self
             .fighters
             .iter()
@@ -6751,7 +6757,8 @@ impl Match {
             return self.giant_bot(i, now, dt, rng);
         }
         let fire = self.safe_to(now);
-        let sk = skill(self.level);
+        // (A bot playing as a player: the server plays its seat, as sharp as bots come.)
+        let sk = skill(if is_bot(me.id) { self.level } else { crate::level::EXTREME });
         if self.bot_lion(i, &sk, now, dt, rng, fire, &mut evs) {
             return evs;
         }

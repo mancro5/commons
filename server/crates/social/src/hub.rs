@@ -95,6 +95,16 @@ impl Hub {
             .collect()
     }
 
+    /// Everyone the zones report in their own home right now.
+    pub fn at_home(&self) -> std::collections::HashSet<Uuid> {
+        let h = self.0.lock().unwrap();
+        h.locations
+            .iter()
+            .filter(|(p, l)| l.zone == "home" && l.owner.as_deref() == Some(p.to_string().as_str()))
+            .map(|(p, _)| *p)
+            .collect()
+    }
+
     pub fn location(&self, player: Uuid) -> Option<Location> {
         self.0.lock().unwrap().locations.get(&player).cloned()
     }

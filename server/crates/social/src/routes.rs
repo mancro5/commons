@@ -44,6 +44,13 @@ pub fn routes() -> Router<Arc<SocialState>> {
         .route("/gift", post(gift))
         .route("/gifts", get(gifts))
         .route("/gifts/{id}/open", post(open_gift))
+        .route("/trade", get(crate::trade::mine))
+        .route("/trade/ask", post(crate::trade::ask))
+        .route("/trade/answer", post(crate::trade::answer))
+        .route("/trade/offer", post(crate::trade::offer))
+        .route("/trade/lock", post(crate::trade::lock))
+        .route("/trade/confirm", post(crate::trade::confirm))
+        .route("/trade/cancel", post(crate::trade::cancel))
         .route("/invite", post(invite))
         .route("/drop_in", post(set_drop_in))
         .route("/notifications", get(notifications))
@@ -212,6 +219,8 @@ async fn session(socket: WebSocket, state: Arc<SocialState>, player: Uuid) {
     }
     if state.hub.disconnect(player, conn) {
         broadcast_presence(&state, player).await;
+        // Gone offline: any trade's off.
+        crate::trade::gone(&state, player);
         // Gone offline: off any call.
         if let Some(left) = state.calls.leave(player) {
             crate::calls::finish(&state, left, Some((player, None))).await;

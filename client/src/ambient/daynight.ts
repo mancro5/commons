@@ -4,9 +4,10 @@
 // light back in on top of it as it gets dark, and a colour grade keeps it all
 // rich (most of all at golden hour). `?hour=21.5` overrides the clock for testing.
 
-import { type Application, ColorMatrixFilter, Container, Graphics, Sprite, Texture } from "pixi.js";
+import { AlphaFilter, type Application, ColorMatrixFilter, Container, Graphics, Sprite, Texture, UPDATE_PRIORITY } from "pixi.js";
 import { settings } from "../settings";
 import { TILE, buildingLanterns } from "../world/art";
+import { civicLights } from "../world/civicart";
 import type { ZoneMap } from "../world/map";
 import type { Scene } from "../world/scene";
 import { lightHour } from "./sun";
@@ -176,6 +177,26 @@ const CABINET_NEON: Record<string, number> = {
 
 type LightKind = "fire" | "screen" | "neon" | "lamp";
 
+/**
+ * Lights that stand somewhere (a lamp's head, a lantern by a door, a
+ * skateboard's trail): where their foot is (world px down), so whatever
+ * stands in front of them (someone walking past, a tree) hides them, as it
+ * would anything else standing there. Lights without one lie on the ground
+ * and light whatever's on it.
+ */
+const lightFeet = new WeakMap<Container, number>();
+/** Lights stand in front of the cut-outs at these sort keys (and the ground's lights after them all). */
+const STANDING = -1e7;
+
+/** `c` (on the night's lights) stands at depth `foot`: anything standing in front of it hides it. */
+/** How much nearer than a light (world px) something must stand to cut it out. */
+const CUT_MARGIN = 4;
+
+export function standingLight(c: Container, foot: number) {
+  lightFeet.set(c, foot);
+  c.zIndex = STANDING + foot;
+}
+
 /** How a piece's light lives: a fire, a screen, neon, or a steady lamp. */
 function lightKind(key: string): LightKind {
   if (/fireplace|candle|pumpkin|founders_lantern|hearth/.test(key)) return "fire";
@@ -188,6 +209,13 @@ export class DayNight {
   private shade = new Graphics();
   /** Warm lights, over the night shade (so they stay yellow, not blued). */
   private lights = new Container();
+  /**
+   * What stands in front of the standing lights, cut out of them: the
+   * lights are drawn as one picture of their own (the filter), in order of
+   * depth, so each cut-out only takes away light from behind it.
+   */
+  private cutouts: Sprite[] = [];
+  private lightsPass = new AlphaFilter({ alpha: 1 });
 
   /** The night's lights (shown after dark, adding light): for things that glow, drawn in world coordinates. */
   get lightLayer(): Container {
@@ -197,6 +225,8 @@ export class DayNight {
   private flicker: { s: Sprite; base: number; phase: number }[] = [];
   private grade = new ColorMatrixFilter();
   private graded = { sat: -1, con: -1 };
+  /** How dim a neon-lit room is (the multiply over it): the arcade's violet, the casino's deeper. */
+  private neonShade = 0xa49cc4;
   /** The arcade: neon glows drawn over the dimmed room, pulsing gently. */
   private neon: Container | null = null;
   private override: number | null;
@@ -220,8 +250,14 @@ export class DayNight {
     this.shade.blendMode = "multiply";
     app.stage.addChild(this.shade);
     this.lights.blendMode = "add";
+    this.lights.sortableChildren = true;
+    // (Drawn as a picture of its own, so a cut-out erases only light, not the world under it.)
+    this.lightsPass.blendMode = "add";
+    this.lights.filters = [this.lightsPass];
     app.stage.addChild(this.lights);
     scene.layer3d(this.lights, false);
+    // Once the 3D view has put everything where it's seen, just before it's drawn.
+    app.ticker.add(this.cutOut, this, UPDATE_PRIORITY.LOW + 0.5);
     // The whole picture, richer and punchier (see `gradeAt`).
     app.stage.filters = [this.grade];
     app.stage.filterArea = app.screen;
@@ -240,8 +276,11 @@ export class DayNight {
       s.position.set(x, y);
       s.alpha = alpha;
       this.lights.addChild(s);
-      // (Up on a lamp or a wall, it stands there in 3D; what's lit on the ground lies on it.)
-      if (foot !== undefined) scene.standOn(s, foot);
+      // (Up on a lamp or a wall, it stands there in 3D, and hides behind what's in front of it; what's lit on the ground lies on it.)
+      if (foot !== undefined) {
+        scene.standOn(s, foot);
+        standingLight(s, foot);
+      }
       this.flicker.push({ s, base: alpha, phase: (x * 0.37 + y * 0.11) % 6.28 });
     };
     map.decor.forEach((d, i) => {
@@ -262,6 +301,44 @@ export class DayNight {
       }
     });
     for (const o of map.objects) {
+      // The paintball yard's floodlights: a bank of lamps up top, and the field lit wide below.
+      if (o.kind === "pb_floodlight") {
+        const x = o.x * TILE + TILE / 2;
+        const foot = o.y * TILE + TILE - 2;
+        add(tex, x, foot - 128, 1.6, 1.2, 0.55, foot);
+        add(bulb, x, foot - 128, 0.9, 0.5, 0.95, foot);
+        add(pool, x, foot - 4, 7, 4.5, 0.42);
+        continue;
+      }
+      // The casino's neon after dark: the blade sign, its name in lights, the marquee.
+      if (o.kind === "casino") {
+        // (Just in front of its front, so its own picture doesn't hide them.)
+        const foot = (o.y + o.h) * TILE + 1;
+        const top = o.y * TILE - 96;
+        const glow = (x: number, y: number, tint: number, sx: number, sy: number, alpha: number) => {
+          const g = new Sprite(whiteGlow());
+          g.anchor.set(0.5);
+          g.tint = tint;
+          g.scale.set(sx, sy);
+          g.alpha = alpha;
+          g.position.set(x, y);
+          this.lights.addChild(g);
+          scene.standOn(g, foot);
+          standingLight(g, foot);
+        };
+        // The blade sign, the starburst on the roof, the crown's lights, the lit windows, the canopy.
+        const bx = o.x * TILE + 42;
+        glow(bx, top + 80, 0xff4fa3, 1.2, 2.6, 0.55);
+        glow(bx, top + 220, 0x4ff0ff, 1.2, 2.6, 0.45);
+        const mx = (o.x + o.w / 2) * TILE;
+        glow(mx + 20, top + 86, 0xffc040, 4.2, 2.2, 0.6);
+        glow(mx, foot - 176, 0xfff0b0, 9, 0.6, 0.35);
+        glow(mx - 180, foot - 118, 0xffc878, 3.2, 1.6, 0.4);
+        glow(mx + 180, foot - 118, 0xffc878, 3.2, 1.6, 0.4);
+        glow(mx, foot - 112, 0xffd84a, 3.4, 0.9, 0.55);
+        add(pool, mx, foot + 8, 4.5, 1.6, 0.4);
+        continue;
+      }
       if (o.kind === "fountain") {
         // The fountain's water glows aqua in the dark.
         const f = new Sprite(whiteGlow());
@@ -279,6 +356,13 @@ export class DayNight {
         add(tex, p.x, p.y, 0.95, 0.95, 0.5, wall);
         add(bulb, p.x, p.y, 0.3, 0.3, 0.9, wall);
         add(pool, p.x, wall + 6, 1.6, 0.8, 0.35);
+      }
+      // The civic buildings' lamp posts and lit windows.
+      for (const p of civicLights(o)) {
+        const wall = (o.y + o.h) * TILE + 1;
+        add(tex, p.x, p.y, p.size, p.size * 0.8, 0.45, wall);
+        (this.lights.children[this.lights.children.length - 1] as Sprite).tint = p.color;
+        if (p.size <= 1.2) add(bulb, p.x, p.y, 0.3, 0.3, 0.9, wall);
       }
       // Things that are themselves alight: a campfire, the lantern stand. (Not
       // the middle of a building: a glow there sat on its wall like a lamp
@@ -314,6 +398,51 @@ export class DayNight {
       const cx = (o.x + o.w / 2) * TILE;
       if (o.kind === "arcade_cabinet") add(cx, o.y * TILE - 9, CABINET_NEON[o.label ?? ""] ?? 0x3fe0ff, 1.5);
       if (o.kind === "dance_machine") add(cx, o.y * TILE - 12, CABINET_NEON["Dance Off"], 2.2);
+      // The casino after dark, Vegas style: the machines' toppers and screens,
+      // the neon signs, the jukebox, warm pools over the tables and the cage.
+      const NEON: Record<string, number> = { pink: 0xff4fa3, cyan: 0x4ff0ff, gold: 0xffd84a, green: 0x7cf07a };
+      switch (o.kind) {
+        case "slot_machine":
+          add(cx, o.y * TILE - 36, 0xff5a5a, 1.3);
+          add(cx, o.y * TILE - 12, 0xffe0a0, 1.0);
+          this.neonShade = 0x988ab8;
+          break;
+        case "mega_slot":
+          add(cx, o.y * TILE - 50, 0xffc84a, 1.5);
+          add(cx, o.y * TILE - 20, 0x5aa0ff, 1.2);
+          break;
+        case "horse_race":
+          add(cx, o.y * TILE - 18, 0x7cf07a, 2.6);
+          break;
+        case "casino_neon":
+          add(cx, o.y * TILE - 11, NEON[(o.label ?? "").split("|")[1]] ?? NEON.pink, (o.w * TILE) / 48);
+          break;
+        case "casino_jukebox":
+          add(cx - 8, o.y * TILE - 30, 0xff4fa3, 1.4);
+          add(cx + 8, o.y * TILE - 30, 0x4ff0ff, 1.4);
+          break;
+        case "roulette_table":
+        case "blackjack_table":
+          add(cx, (o.y + o.h / 2) * TILE - 8, 0xffe0a0, (o.w * TILE) / 70);
+          break;
+        case "casino_cage":
+          add(cx, o.y * TILE - 14, 0xffd890, 2.0);
+          break;
+        // The concert hall: the rig's colours on the stage, the footlights, the sconces, the desk's meters.
+        case "concert_stage": {
+          this.neonShade = 0x9a8890;
+          const spots = [0xff4fa3, 0xffd84a, 0x4ff0ff, 0xff8a3f];
+          for (let k = 0; k < spots.length; k++) add(o.x * TILE + ((k + 0.5) / spots.length) * o.w * TILE, (o.y + o.h / 2) * TILE, spots[k], 2.4);
+          add(cx, (o.y + o.h) * TILE - 6, 0xffe9a8, (o.w * TILE) / 60);
+          break;
+        }
+        case "concert_sconce":
+          add(cx, o.y * TILE - 22, 0xffd890, 1.3);
+          break;
+        case "concert_desk":
+          add(cx, o.y * TILE - 6, 0x7af07a, 1.0);
+          break;
+      }
     }
   }
 
@@ -343,7 +472,64 @@ export class DayNight {
     this.lights.addChild(s);
   }
 
+  /**
+   * Cuts what stands in front of each standing light out of it: a
+   * silhouette (erasing) of everyone and everything standing nearer than
+   * the light, where it overlaps it.
+   */
+  private cutOut() {
+    let used = 0;
+    if (this.lights.visible && this.lights.alpha > 0) {
+      const lit: { x0: number; y0: number; x1: number; y1: number; z: number }[] = [];
+      for (const c of this.lights.children) {
+        const foot = lightFeet.get(c);
+        if (foot === undefined || !c.visible || !c.renderable) continue;
+        const b = c.getLocalBounds();
+        if (b.maxX <= b.minX) continue;
+        const sx = c.scale.x;
+        const sy = c.scale.y;
+        const xs = [c.x + b.minX * sx, c.x + b.maxX * sx];
+        const ys = [c.y + b.minY * sy, c.y + b.maxY * sy];
+        lit.push({ x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys), z: STANDING + foot });
+      }
+      if (lit.length) {
+        for (const o of this.scene.occluders()) {
+          const w = o.texture.width * o.scale.x;
+          const h = o.texture.height * o.scale.y;
+          const ox0 = Math.min(o.x - o.anchor.x * w, o.x + (1 - o.anchor.x) * w);
+          const ox1 = Math.max(o.x - o.anchor.x * w, o.x + (1 - o.anchor.x) * w);
+          const oy0 = Math.min(o.y - o.anchor.y * h, o.y + (1 - o.anchor.y) * h);
+          const oy1 = Math.max(o.y - o.anchor.y * h, o.y + (1 - o.anchor.y) * h);
+          // (Only clearly in front of a light, and over it: a lamp's own post, or a building's own
+          // front, stands at its light's depth or a pixel or two off it, and mustn't hide it. The
+          // silhouette goes in that much nearer, so it only takes light from what's behind.)
+          const z = STANDING + o.zIndex - CUT_MARGIN;
+          if (!lit.some((l) => l.z < z && l.x0 < ox1 && l.x1 > ox0 && l.y0 < oy1 && l.y1 > oy0)) continue;
+          let e = this.cutouts[used];
+          if (!e) {
+            e = new Sprite();
+            e.blendMode = "erase";
+            this.scene.drawnAsIs(e);
+            this.lights.addChild(e);
+            this.cutouts.push(e);
+          }
+          used++;
+          e.texture = o.texture;
+          e.anchor.copyFrom(o.anchor);
+          e.position.copyFrom(o.position);
+          e.scale.copyFrom(o.scale);
+          e.rotation = o.rotation;
+          e.skew.copyFrom(o.skew);
+          e.zIndex = z;
+          e.visible = true;
+        }
+      }
+    }
+    for (let i = used; i < this.cutouts.length; i++) this.cutouts[i].visible = false;
+  }
+
   destroy() {
+    this.app.ticker.remove(this.cutOut, this);
     this.app.stage.filters = [];
     this.app.stage.removeChild(this.lights);
     this.lights.destroy({ children: true });
@@ -484,7 +670,8 @@ export class DayNight {
     const x1 = v.x1 * TILE + m;
     const y1 = v.y1 * TILE + m;
     for (const c of this.lights.children) {
-      if (!(c instanceof Sprite)) continue;
+      // (The cut-outs are where they're seen, already: see `cutOut`.)
+      if (!(c instanceof Sprite) || c.blendMode === "erase") continue;
       const rx = (c.texture.width * Math.abs(c.scale.x)) / 2;
       const ry = (c.texture.height * Math.abs(c.scale.y)) / 2;
       const want = c.x + rx > x0 && c.x - rx < x1 && c.y + ry > y0 && c.y - ry < y1;
@@ -501,7 +688,7 @@ export class DayNight {
       this.setGrade(0.32, 0.1);
       // A dim violet room; the neon glows ride with the camera and breathe.
       const { width, height } = this.app.screen;
-      this.shade.clear().rect(0, 0, width, height).fill(0xa49cc4);
+      this.shade.clear().rect(0, 0, width, height).fill(this.neonShade);
       this.dark = 0;
       this.lights.visible = false;
       this.neon.position.copyFrom(this.scene.world.position);

@@ -1,4 +1,5 @@
 import { setBetting } from "./activities/arenabets";
+import { TradePanel } from "./ui/trade";
 import { HomeLife } from "./homelife";
 import { DronePanel, RoomPanel } from "./ui/homelife";
 import { netIdle } from "./ui/netsign";
@@ -40,7 +41,7 @@ import { DecoratePanel } from "./ui/exterior";
 import { Social } from "./social";
 import { Town } from "./town";
 import { Gov } from "./gov";
-import { CityMapPanel } from "./ui/citymap";
+import { CityMapPanel, type LitHome } from "./ui/citymap";
 import { ReportPanel, StoryPanel, TownHallPanel } from "./ui/gov";
 import { ApartmentsPanel, PostOfficePanel, StallPanel, YardPanel } from "./ui/homes";
 import { DirectoryPanel, ShopPanel } from "./ui/mall";
@@ -285,6 +286,22 @@ async function main() {
     },
   });
   const homes = new Homes(auth);
+  homes.keepFresh();
+  // Houses with their owner in, for the maps (a friend's marked): each house found once per map.
+  const houses = new WeakMap<ZoneMap, Map<string, { x: number; y: number; w: number; h: number }>>();
+  const litHomes = (map: ZoneMap): LitHome[] => {
+    let byLot = houses.get(map);
+    if (!byLot) {
+      byLot = new Map(map.objects.filter((o) => o.kind === "house" && o.label).map((o) => [o.label!, { x: o.x, y: o.y, w: o.w, h: o.h }]));
+      houses.set(map, byLot);
+    }
+    const out: LitHome[] = [];
+    for (const r of homes.occupied()) {
+      const h = r.lot === homes.mine ? null : byLot.get(r.lot);
+      if (h) out.push({ ...h, friend: social.friends.some((f) => f.id === r.owner) });
+    }
+    return out;
+  };
   const rent = new Rent(auth);
   rent.onChange(() => {
     homes.cottage = rent.tiers("home")[0] ?? null;
@@ -297,7 +314,7 @@ async function main() {
       const here = g?.position;
       if (!g?.scene.map.streets || !here) return null;
       const home = homes.mine ? spot(g.scene.map, `door:${homes.mine}`) : null;
-      return { map: g.scene.map, here, home, route: g.route, heading: g.heading, others: g.others };
+      return { map: g.scene.map, here, home, route: g.route, heading: g.heading, others: g.others, lit: litHomes(g.scene.map) };
     },
     walk: (t) => (game as Game | null)?.walkTo(t),
     toCity: () => void travel({ zone: "city" }),
@@ -333,6 +350,7 @@ async function main() {
   });
   const minimap = new Minimap(document.getElementById("hud")!, () => cityMap.toggle());
   homes.onChange(() => minimap.setHome(homes.mine));
+  minimap.setLit(litHomes);
   const rentHost = {
     walkToSpot: (s: string) => void (game as Game | null)?.walkToSpot(s),
     findHome: () => (game as Game | null)?.findHome() ?? false,
@@ -525,6 +543,7 @@ async function main() {
     place,
     menu: new ActionMenu(),
     social,
+    trade: new TradePanel(eco, social, (t, ms) => hud.toast(t, ms ?? 4000)),
     friends: new FriendsPanel(social, eco, friendActions),
     town,
     quarter: new QuarterPanel(town),
@@ -679,8 +698,8 @@ async function main() {
           o.color = c.color;
         }
       }
-      const placeInfo = { label: ticket.label, owner: ticket.owner, watch: dest.watch ? { back: watchBack } : undefined };
-      if (!game || game.zoneId !== ticket.zone_id || game.place.owner !== placeInfo.owner || !!game.place.watch !== !!placeInfo.watch) {
+      const placeInfo = { label: ticket.label, owner: ticket.owner, watch: dest.watch ? { back: watchBack, channel: dest.channel ?? 0 } : undefined };
+      if (!game || game.zoneId !== ticket.zone_id || game.place.owner !== placeInfo.owner || !!game.place.watch !== !!placeInfo.watch || game.place.watch?.channel !== placeInfo.watch?.channel) {
         game?.destroy();
         game = new Game(app, map, ticket.zone_id, placeInfo, ui, document.getElementById("labels")!, {
           onWelcome: () => (retry = 0),
@@ -718,17 +737,17 @@ async function main() {
           },
           onVisit: (owner) => void travel({ zone: "home", owner }),
           onNote: (kind, body) => note(kind, body),
-          // A home TV: watch the arena (unseen, in the middle of it); stop, and back to that home.
-          onWatch: (owner, stop) => {
+          // A home TV: watch the arena or the paintball (unseen, in the middle of it); stop, and back to that home.
+          onWatch: (owner, stop, channel) => {
             if (stop) return void travel({ zone: "home", owner: owner ?? undefined });
             watchBack = owner;
-            void travel({ zone: "city", watch: true });
+            void travel({ zone: "city", watch: true, channel: channel ?? 0 });
           },
         });
         if (import.meta.env.DEV) (window as unknown as { __commons: Game }).__commons = game;
       }
       // A friend's location becomes the place to reconnect to.
-      dest = { zone: ticket.zone_id, owner: ticket.owner ?? undefined, watch: dest.watch };
+      dest = { zone: ticket.zone_id, owner: ticket.owner ?? undefined, watch: dest.watch, channel: dest.channel };
       game.connect(ticket.server_url, ticket.join_token);
       hideOverlay();
     } catch (e) {

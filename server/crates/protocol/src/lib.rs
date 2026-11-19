@@ -13,7 +13,7 @@ pub mod wire;
 pub use wire::{DecodeError, Wire, push_framed, split_frame};
 
 /// Bumped on any incompatible message change.
-pub const PROTOCOL_VERSION: u16 = 57;
+pub const PROTOCOL_VERSION: u16 = 59;
 
 /// Spatial-hash cell size in tiles (spec §3).
 pub const CELL_TILES: u16 = 16;
@@ -53,13 +53,25 @@ records! {
     /// in (when out), till their roll is ready and their reload done (ms),
     /// their outs, times out and streak, and `fix`: bumped when the server
     /// puts them somewhere (the client then takes its word for where).
-    PbPlayer { id: u32, team: u8, x: u16, y: u16, aim: u16, hp: u8, ammo: u8, flags: u8, power: u8, power_ms: u16, respawn_ms: u16, dash_ms: u16, reload_ms: u16, kills: u8, deaths: u8, streak: u8, fix: u8 }
+    PbPlayer { id: u32, team: u8, x: u16, y: u16, aim: u16, hp: u8, ammo: u8, flags: u8, power: u8, power_ms: u16, respawn_ms: u16, dash_ms: u16, reload_ms: u16, kills: u8, deaths: u8, streak: u8, fix: u8, class: u8 }
+
+    /// A paintball team's flag (Capture the Flag; by team): where it is (field tiles ×100),
+    /// who has it (0: nobody), and whether it's on its stand.
+    PbFlag { x: u16, y: u16, carrier: u32, home: bool }
+
+    /// A paintball control point (Control Point): its middle (field tiles ×100), its ring
+    /// (tiles ×10), what it scores a second (×10), whose it is (2: nobody's) and how far
+    /// it's taken (0 all Blue's, 100 nobody's, 200 all Red's).
+    PbPoint { x: u16, y: u16, r: u8, value: u8, owner: u8, progress: u8 }
 
     /// A paintball power-up waiting on its pad (field tiles ×100).
     PbPickup { kind: u8, x: u16, y: u16 }
 
     /// A line on the skatepark's board (`SkateBoard`): who, and their score.
     SkateEntry { name: String, points: u32 }
+
+    /// Someone in the zone, for the map (`MapDots`): where they stand, their name, and whether a bot.
+    MapDot { id: u32, x: u16, y: u16, name: String, bot: bool }
 
     /// Everything a client needs to render another avatar, including any
     /// walk in progress so it can be simulated locally, and what it signals
@@ -92,6 +104,8 @@ records! {
         reading: u32,
         // calling: on a phone call, phone at their ear (v19).
         calling: bool,
+        // bot: a bot playing as a player (botswarm's, Davidd): shown with a badge.
+        bot: bool,
     }
 }
 
@@ -289,6 +303,22 @@ message_enum! {
         /// Your score in the 1v1 so far (passed on to whoever you're up
         /// against); `done`: your minute's up, that's your score.
         77 SkateDuelScore { points: u32, done: bool }
+        /// Watching the outdoor paintball's bot match: a bet on a team (0 Blue, 1 Red).
+        78 PbBet { pick: u8 }
+        /// Paintball: the class you play as (0 Assault, 1 Sniper, 2 Shotgun, 3 Machine Gun),
+        /// at once in the lobby, from your next life in a match.
+        79 PbClass { class: u8 }
+        /// Paintball, in the lobby: the mode (0 Team Splat, 1 Capture the Flag, 2 Control Point,
+        /// 3 Goliath, 4 Free-for-all).
+        80 PbMode { mode: u8 }
+        /// Mini golf (the Fairground's course; played client side): your ball's
+        /// where it is (world px), at which hole, how many strokes you're on,
+        /// and `golf::*` (at rest, rolling, holed; or none: stopped playing).
+        81 GolfBall { hole: u8, x: u16, y: u16, strokes: u8, state: u8 }
+        /// A round played out: your strokes at each of the nine holes.
+        82 GolfCard { strokes: Vec<u8> }
+        /// Today's best rounds, please (a `GolfBoard`).
+        83 GolfBoardAsk {}
     }
 }
 
@@ -436,9 +466,17 @@ message_enum! {
         /// The paintball match (`commons_sim::paintball` status): the time
         /// left in this phase, the score, who has each place (Blue's three,
         /// then Red's; 0 free), everyone on the field, the pads' power-ups,
-        /// and (when it's over) the winners (0 Blue, 1 Red, 2 a draw).
-        46 PbState { status: u8, now: u32, phase_ms: u32, blue: u8, red: u8, winner: u8, slots: Vec<u32>, players: Vec<PbPlayer>, pickups: Vec<PbPickup>, level: u8 }
-        /// A shot fired (a ball, or with bit 1 of `kind` a spread of three; bit 0: bouncing).
+        /// and (when it's over) the winners (0 Blue, 1 Red, 2 a draw). Out in
+        /// the city, when nobody's playing the bots put on a match of their
+        /// own (`exhibit`, its `round`): bets on a team are open `bet_ms` more
+        /// (stakes on each so far, `bets`; a winning one pays `bet_pay`).
+        /// `classes`: the class each place plays as (picked, or a bot's). `mode`
+        /// (`paintball::mode`) and the score that wins it; Capture the Flag's
+        /// flags; Control Point's points; Free-for-all's winner (0: none, or a
+        /// draw); Goliath's giant (0: none).
+        46 PbState { status: u8, now: u32, phase_ms: u32, blue: u8, red: u8, winner: u8, slots: Vec<u32>, players: Vec<PbPlayer>, pickups: Vec<PbPickup>, level: u8, round: u32, exhibit: bool, bet_ms: u16, bets: Vec<u16>, bet_pay: u16, classes: Vec<u8>, mode: u8, to_win: u8, flags: Vec<PbFlag>, points: Vec<PbPoint>, winner_id: u32, giant: u32 }
+        /// A shot fired: bit 0 of `kind` bouncing, bit 1 a Spread power-up's, bits 2–3 the
+        /// shooter's class (`paintball::pellets` says the balls).
         47 PbShot { by: u32, shot: u16, x: u16, y: u16, aim: u16, kind: u8 }
         /// Something happened (`paintball::ev`): `a` and `b` as each says, at (x, y), `n` the ball or a count.
         48 PbEvent { kind: u8, a: u32, b: u32, x: u16, y: u16, n: u16 }
@@ -488,6 +526,18 @@ message_enum! {
         66 SkateDuelScore { points: u32 }
         /// Your 1v1's over: both scores, and how it went (`skate::duel` results).
         67 SkateDuelEnd { mine: u32, theirs: u32, result: u8 }
+        /// Your bet on the outdoor paintball's bot match is taken (`pick`: the team), and what it pays.
+        68 PbBetPlaced { pick: u8, pays: u16 }
+        /// The bot match is decided: what your bet won (0: lost), or (`refund`) your stake back.
+        69 PbBetSettled { coins: u16, refund: bool }
+        /// Everyone in the zone, for the map (every couple of seconds; nearby
+        /// avatars still come as entities): so people out of view, across
+        /// town, stay on the map.
+        70 MapDots { dots: Vec<MapDot> }
+        /// Someone's mini golf ball (as `ClientMsg::GolfBall`).
+        71 GolfBall { id: u32, hole: u8, x: u16, y: u16, strokes: u8, state: u8 }
+        /// Today's best mini golf rounds (`points`: strokes for the nine, fewest first).
+        72 GolfBoard { rounds: Vec<SkateEntry> }
     }
 }
 
@@ -861,6 +911,17 @@ pub mod game_status {
 }
 
 /// Avatar states for `EntityInfo.state`.
+/// Mini golf: `GolfBall.state`.
+pub mod golf {
+    pub const NONE: u8 = 0;
+    pub const REST: u8 = 1;
+    pub const ROLLING: u8 = 2;
+    pub const HOLED: u8 = 3;
+    /// Holes on the course, and the most strokes a hole counts for.
+    pub const HOLES: usize = 9;
+    pub const MAX_STROKES: u8 = 7;
+}
+
 pub mod state {
     pub const IDLE: u8 = 0;
     pub const SITTING: u8 = 1;
@@ -892,6 +953,7 @@ mod tests {
             away: false,
             reading: 1342,
             calling: true,
+            bot: true,
         };
         let msgs = vec![
             ServerMsg::Welcome {

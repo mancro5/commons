@@ -39,9 +39,12 @@ struct JoinReq {
     /// owner, or `"home"` (your own), to come out of that door.
     #[serde(default)]
     arrive: Option<String>,
-    /// Watching the arena from a home TV (city only): unseen, in the arena.
+    /// Watching from a home TV (city only): unseen, in the middle of what's on.
     #[serde(default)]
     watch: bool,
+    /// Which channel: 0 the arena, 1 the paintball yard.
+    #[serde(default)]
+    channel: u8,
 }
 
 #[derive(Serialize)]
@@ -297,6 +300,8 @@ async fn join(
         muted_until: who.muted_until,
         arrive,
         watch: req.watch && zone == "city",
+        channel: req.channel.min(1),
+        bot: false,
     };
     Ok(Json(JoinResp {
         server_url: state.zone_server_url.clone(),

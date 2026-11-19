@@ -5,7 +5,7 @@
 import { blockOrigin, ownerAt } from "../world/city";
 import { type ZoneMap, spot } from "../world/map";
 import type { TileXY } from "../world/motion";
-import { type Other, drawArrow, drawHome, drawOthers, drawRoute, geometry, placeName } from "./citymap";
+import { type LitHome, type Other, drawArrow, drawHome, drawLitHomes, drawOthers, drawRoute, geometry, placeName } from "./citymap";
 import { atlasMap } from "./atlasmap";
 
 export class Minimap {
@@ -19,6 +19,8 @@ export class Minimap {
   /** When it was last drawn (it's redrawn about 20 times a second, not every frame), and its size on screen. */
   private drawnAt = -Infinity;
   private css = 0;
+  /** Houses with someone home (asked for as it's drawn). */
+  private lit: (map: ZoneMap) => LitHome[] = () => [];
 
   constructor(root: HTMLElement, onTap: () => void) {
     this.el.type = "button";
@@ -39,6 +41,11 @@ export class Minimap {
     this.el.hidden = !this.map;
     this.lastName = "";
     this.setHome(this.homeLot);
+  }
+
+  /** Where to get the houses with someone home from. */
+  setLit(get: (map: ZoneMap) => LitHome[]) {
+    this.lit = get;
   }
 
   /** Marks your home's door (null: no home). */
@@ -79,6 +86,8 @@ export class Minimap {
     ctx.strokeStyle = "#f6c343";
     ctx.lineWidth = 2 * dpr;
     ctx.strokeRect(o.x * k, o.y * k, geometry.blockTiles * k, geometry.blockTiles * k);
+    const lit = this.lit(map);
+    if (lit.length) drawLitHomes(ctx, lit, k, Math.max(1, dpr), now);
     if (this.home) drawHome(ctx, (this.home.x + 0.5) * k, (this.home.y + 0.5) * k, 4 * dpr);
     drawOthers(ctx, others, k, 1.5 * dpr, now);
     drawArrow(ctx, (pos.x + 0.5) * k, (pos.y + 0.5) * k, 4.6 * dpr, heading, now);

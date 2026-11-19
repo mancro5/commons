@@ -146,15 +146,23 @@ export class Park {
   readonly boxes: Box[] = [];
   readonly mounds: Mound[] = [];
   readonly lines: Line[] = [];
-  /** Concrete or not, by tile, over the bounds. */
+  /** Concrete or not, by tile, over the bounds (just the park's; the city asks `live`). */
   private mask: Uint8Array;
+  /**
+   * The whole city: asked tile by tile as you go, not drawn up once, so a
+   * pond dug in a front yard after you came out (water now, as it is for
+   * walking) isn't ridden over.
+   */
+  private live: ((tx: number, ty: number) => boolean) | null = null;
+  /** The city's water, by tile (out on the streets, ridden into: you're in it). */
+  wet: ((tx: number, ty: number) => boolean) | null = null;
   private tx0: number;
   private ty0: number;
   private tw: number;
   private th: number;
 
   /** `bounds`: the tiles it covers (the whole city, for skating its streets too); the park and its edge if not given. */
-  constructor(objects: MapObject[], concrete: (tx: number, ty: number) => boolean, bounds?: { x: number; y: number; w: number; h: number }) {
+  constructor(objects: MapObject[], concrete: (tx: number, ty: number) => boolean, bounds?: { x: number; y: number; w: number; h: number }, live = false) {
     const park = objects.find((o) => o.kind === "sk_park");
     if (!park) throw new Error("no skatepark here");
     const b = bounds ?? { x: park.x - 1, y: park.y - 1, w: park.w + 2, h: park.h + 2 };
@@ -166,8 +174,9 @@ export class Park {
     this.y0 = this.ty0 * TILE;
     this.x1 = (this.tx0 + this.tw) * TILE;
     this.y1 = (this.ty0 + this.th) * TILE;
-    this.mask = new Uint8Array(this.tw * this.th);
-    for (let y = 0; y < this.th; y++) for (let x = 0; x < this.tw; x++) this.mask[y * this.tw + x] = concrete(this.tx0 + x, this.ty0 + y) ? 1 : 0;
+    this.live = live ? concrete : null;
+    this.mask = new Uint8Array(live ? 0 : this.tw * this.th);
+    if (!live) for (let y = 0; y < this.th; y++) for (let x = 0; x < this.tw; x++) this.mask[y * this.tw + x] = concrete(this.tx0 + x, this.ty0 + y) ? 1 : 0;
     objects.forEach((o, id) => {
       const r = { x0: o.x * TILE, y0: o.y * TILE, x1: (o.x + o.w) * TILE, y1: (o.y + o.h) * TILE };
       const label = o.label ?? "";
@@ -246,7 +255,7 @@ export class Park {
     // (A street lamp's just a thin pole: ridden past, not a wall the size of its tile.)
     const lamp = map.decor_legend.indexOf("lamp");
     const inPark = (tx: number, ty: number) => tx >= park.x && tx < park.x + park.w && ty >= park.y && ty < park.y + park.h;
-    return new Park(
+    const city = new Park(
       map.objects,
       (tx, ty) => {
         if (tx < 0 || ty < 0 || tx >= map.width || ty >= map.height) return false;
@@ -258,14 +267,23 @@ export class Park {
         return map.collision[i] === 0 && g !== water;
       },
       { x: 0, y: 0, w: map.width, h: map.height },
+      true,
     );
+    city.wet = (tx, ty) => tx >= 0 && ty >= 0 && tx < map.width && ty < map.height && !inPark(tx, ty) && map.ground[ty * map.width + tx] === water;
+    return city;
+  }
+
+  /** Whether (x, y) is water (the city's lakes and ponds; never the park's). */
+  water(x: number, y: number): boolean {
+    return !!this.wet?.(Math.floor(x / TILE), Math.floor(y / TILE));
   }
 
   /** Whether (x, y) is on the concrete. */
   concrete(x: number, y: number): boolean {
     const tx = Math.floor(x / TILE) - this.tx0;
     const ty = Math.floor(y / TILE) - this.ty0;
-    return tx >= 0 && ty >= 0 && tx < this.tw && ty < this.th && this.mask[ty * this.tw + tx] === 1;
+    if (tx < 0 || ty < 0 || tx >= this.tw || ty >= this.th) return false;
+    return this.live ? this.live(tx + this.tx0, ty + this.ty0) : this.mask[ty * this.tw + tx] === 1;
   }
 
   /** Whether the tile (tx, ty) is on the concrete. */
@@ -494,6 +512,8 @@ export type SkateEvent =
   | { t: "bank"; pts: number; label: string; count: number }
   | { t: "special" }
   | { t: "sketchy" }
+  /** Ridden (or flown) into water, out on the streets: in you go, at (x, y). */
+  | { t: "water"; x: number; y: number }
   /** Rolled into the edge of the concrete itself (not a ramp or a box): at (x, y), just past it. */
   | { t: "edge"; x: number; y: number; dx: number; dy: number }
   /** A trick your trucks can't do (a hint, at most now and then). */
@@ -502,6 +522,9 @@ export type SkateEvent =
 /** One push off and the glide after it (s): the avatars' own stroke (520 ms) and glide (750). */
 export const PUSH_S = 1.27;
 const GRAVITY = 950;
+/** Riding at a rail on the ground: a hop over it this much higher than the bar (px); slower than this (px/s), it stops you instead. */
+const HOP_CLEAR = 6;
+const HOP_MIN = 60;
 /** A push's shove (px/s², while the foot's down: from `KICK_FROM` to `KICK_TO` s into the stroke, as the legs show it). */
 const KICK_ACC = 300;
 const KICK_FROM = 0.07;
@@ -519,7 +542,7 @@ const STREET_TOP = 1.45;
 const TOP_SPEED = 520;
 
 /** Everything unlocked, at stock speed (the rules on their own: the tests, and before the shop's been seen). */
-export const OPEN_RIDE: Ride = { accel: 1, top: 1, flips: new Set(["", "left", "right", "up", "down"]), doubles: true, grabs: true, grinds: true, body: true, wobble: 1, vert: 1, turn: 1, pump: 0 };
+export const OPEN_RIDE: Ride = { accel: 1, top: 1, flips: new Set(["", "left", "right", "up", "down"]), doubles: true, grabs: true, grinds: true, body: true, wobble: 1, vert: 1, turn: 1, pump: 0, cruise: 1 };
 /**
  * Pressing back the way you came: a powerslide, the board swung round hard
  * (`SLIDE_TURN` rad/s) scrubbing speed as it goes (`SLIDE_SCRUB` px/s²), to
@@ -558,9 +581,12 @@ const PUMP_QUICK = 0.2;
  * been held `LINE_HOLD` s); a press within `LINE_AHEAD` rad of it steers
  * as ever, and one within `LINE_BACK` of straight back stops you.
  */
-const CARVE_MAX = 0.8;
+const CARVE_MAX = 1.0;
 const LINE_RATE = 1.5;
 const LINE_HOLD = 0.15;
+/** A press to the side held longer than this (s) is a turn, not a pump: your line comes round `TURN_SNAP` times as quick. */
+const TURN_HELD = 0.25;
+const TURN_SNAP = 2.0;
 /** Rolling at least this fast (px/s), surf trucks carve off your line (slower, you just turn your way). */
 const SURF_FROM = 12;
 const LINE_AHEAD = 0.35;
@@ -570,6 +596,8 @@ const FRICTION = 16;
 const FRICTION_FAST = 5;
 /** Slower than this (px/s), pressing back the way you came turns you round on the spot (a kick turn), no powerslide. */
 const KICK_TURN = 70;
+/** Into water faster than this (px/s): you go in (slower, it's just the edge, stopped at). */
+const WATER_SPEED = 45;
 /** Into a wall head on, left slower than this (px/s): stopped against it, not bounced about. */
 const WALL_STOP = 60;
 /** How hard a slope pulls you along it (px/s² per unit of rise per px). */
@@ -655,7 +683,8 @@ export class Skater {
 
   // In the air.
   /** In the air: for how long (s), off a quarter pipe's lip (or not), the spin so far (rad), from where, what it's flown over, where its tricks start in the combo. */
-  air = { t: 0, vert: null as Ramp | null, spin: 0, from: { x: 0, y: 0, z: 0 }, over: new Set<number>(), first: 0, popped: false, launch: null as Ramp | null, ramp: false };
+  /** In the air: `hop`, just hopping a rail you rode at (no trick, and not onto it). */
+  air = { t: 0, vert: null as Ramp | null, spin: 0, from: { x: 0, y: 0, z: 0 }, over: new Set<number>(), first: 0, popped: false, launch: null as Ramp | null, ramp: false, hop: false };
   /** Head over heels (a Space trick off a ramp): how far round (s of `dur`), which way. */
   body: { name: string; pts: number; t: number; dur: number; dir: number } | null = null;
   flip: { kind: number; name: string; pts: number; t: number; dur: number; double: boolean } | null = null;
@@ -778,6 +807,9 @@ export class Skater {
   // ---- on the ground ----
 
   private ground(dt: number, inp: Input, ev: SkateEvent[]) {
+    // Pop not held (nor let go just now): no crouch. (One built up and let go of
+    // in a manual, a grind or the air would hang on, and you couldn't push off.)
+    if (!inp.pop && !this.popWas) this.crouch = 0;
     const mag = Math.min(1, Math.hypot(inp.x, inp.y));
     const was = this.heading;
     let sliding = false;
@@ -807,7 +839,9 @@ export class Skater {
           const pumping = this.pumpFlow > 0.3;
           const wait = pumping ? LINE_HOLD : LINE_HOLD * 0.4;
           const held = ahead ? 1 : Math.max(0, Math.min(1, (this.sideT - wait) / (pumping ? 0.3 : 0.12)));
-          this.line = wrap(this.line + clamp(rel, LINE_RATE * (pumping ? 1 : 1.8) * held * dt));
+          // (Held past a pump's length, it's a turn: your line whips round to it, quick and sharp.)
+          const turning = this.sideT > TURN_HELD ? TURN_SNAP : 1;
+          this.line = wrap(this.line + clamp(rel, LINE_RATE * (pumping ? 1 : 1.8) * turning * held * dt));
           if (!ahead) want = wrap(this.line + Math.sign(rel) * Math.min(Math.abs(rel), CARVE_MAX));
         }
       }
@@ -818,10 +852,11 @@ export class Skater {
       if (kickTurn && this.speed >= 25) this.speed *= 0.5;
       if ((Math.abs(diff) < 2.2 && !(this.slideDir && Math.abs(diff) > 1)) || kickTurn) {
         // Carve round toward where you're steering (quick slow, wide fast; tighter on surf trucks).
-        const rate = 8 * this.kit.turn - 3.4 * Math.min(1, this.speed / 320) * (this.kit.turn > 1 ? 0.65 : 1);
+        const rate = 8 * this.kit.turn - 3.4 * Math.min(1, this.speed / 320) * (this.kit.turn > 1 ? 0.45 : 1);
         this.heading = kickTurn ? want : wrap(this.heading + Math.max(-rate * dt, Math.min(rate * dt, diff)));
         // Pushing off, while you're going your way and not flat out (and not pumping: no need).
-        const max = PUSH_MAX * this.kit.top * (this.street ? STREET_TOP : 1);
+        const max = this.pushTop();
+        const cruising = PUSH_MAX * this.kit.top * (this.street ? STREET_TOP : 1);
         if (Math.abs(diff) < 1.2 && ahead && this.speed < max && this.crouch === 0 && (this.pumpFlow < 0.3 || this.side === 0)) {
           this.pushing = true;
           // (On the streets, off from a standstill straight to cruising speed.)
@@ -829,7 +864,9 @@ export class Skater {
           // The speed comes in kicks: while the back foot's on the ground, a
           // shove (less, the faster you're going already); between, a glide.
           if (this.push >= KICK_FROM && this.push < KICK_TO) {
-            this.speed = Math.min(max, this.speed + KICK_ACC * this.kit.accel * mag * (1 - 0.6 * (this.speed / max)) * dt);
+            // (Past cruising, on bearings that go further: it builds, slowly, push by push.)
+            const past = this.speed > cruising ? 0.3 : 1;
+            this.speed = Math.min(max, this.speed + KICK_ACC * this.kit.accel * mag * (1 - 0.6 * (this.speed / max)) * past * dt);
           }
         }
       } else {
@@ -842,7 +879,8 @@ export class Skater {
     }
     if (!sliding) this.slideDir = 0;
     // (A powerslide round is no carve: it pumps nothing.)
-    if (this.kit.pump) this.pump(dt, sliding ? 0 : wrap(this.heading - was), ev);
+    // (Nor is a turn held round: it pays only side to side.)
+    if (this.kit.pump) this.pump(dt, sliding || (this.side !== 0 && this.sideT > TURN_HELD) ? 0 : wrap(this.heading - was), ev);
     if (this.pushing) {
       const was = this.push;
       this.push = (this.push + dt) % PUSH_S;
@@ -879,10 +917,20 @@ export class Skater {
     this.roll(dt, ev);
   }
 
+  /** As fast as pushing gets you: in the park, as ever; out on the streets, as far as your bearings let you build up. */
+  private pushTop(): number {
+    return PUSH_MAX * this.kit.top * (this.street ? STREET_TOP * (this.kit.cruise ?? 1) : 1);
+  }
+
+  /** As fast as you can go at all (off a ramp, pumped): out on the streets, at least as fast as pushing gets you there. */
+  private topSpeed(): number {
+    return Math.max(TOP_SPEED * this.kit.top, this.street ? this.pushTop() * 1.05 : 0);
+  }
+
   /** Surf trucks: the carve this step (`turned` rad), pumped into speed (see `PUMP_KICK`). */
   private pump(dt: number, turned: number, ev: SkateEvent[]) {
     const rate = turned / dt;
-    const max = PUMP_MAX * this.kit.top;
+    const max = PUMP_MAX * this.kit.top * (this.street ? this.kit.cruise ?? 1 : 1);
     if (Math.abs(rate) > PUMP_TURNING && this.speed > 10) {
       const dir = Math.sign(rate);
       if (dir === this.pumpDir) this.pumpBack = 0;
@@ -924,7 +972,7 @@ export class Skater {
       this.heading = wrap(this.heading + Math.PI);
       this.fakie = !this.fakie;
     }
-    this.speed = Math.min(TOP_SPEED * this.kit.top, this.speed);
+    this.speed = Math.min(this.topSpeed(), this.speed);
   }
 
   /** Rolls along the ground: up ramps, out over their lips, off edges, into walls. */
@@ -942,6 +990,23 @@ export class Skater {
       if (up > 0.25 && upAlong(r, nx, ny) >= 0.985) {
         if (r.kind === "quarter") return this.vertAir(r, up, ev);
         return this.launch(r, up, ev);
+      }
+    }
+    // A rail across your way: a little hop over it (no trick), not straight
+    // through it as if it weren't there; too slow for that, it stops you.
+    const bar = this.railAhead(cx, cy);
+    if (bar) {
+      const vz = Math.sqrt(2 * GRAVITY * (bar.h + HOP_CLEAR));
+      // (Off in time to be at the top of the hop over the bar.)
+      if (this.speed >= HOP_MIN && bar.t <= Math.max(6, (this.speed * vz) / GRAVITY)) {
+        this.toAir(vz, null, false);
+        this.air.hop = true;
+        return;
+      }
+      if (this.speed < HOP_MIN && bar.t <= this.speed * dt + 3) {
+        ev.push({ t: "wall", speed: this.speed });
+        this.speed = 0;
+        return;
       }
     }
     const h = this.park.height(nx, ny);
@@ -992,7 +1057,27 @@ export class Skater {
     this.z = h;
   }
 
+  /** Where you go in: carried on out over the water a little way (a tile or so, at speed). */
+  private intoWater(nx: number, ny: number): { x: number; y: number } {
+    const cx = Math.cos(this.heading);
+    const cy = Math.sin(this.heading);
+    const reach = Math.min(TILE * 1.4, 10 + Math.hypot(this.speed, this.vx, this.vy) * 0.12);
+    let p = { x: nx, y: ny };
+    for (let d = 4; d <= reach; d += 4) {
+      const q = { x: nx + cx * d, y: ny + cy * d };
+      if (!this.park.water(q.x, q.y)) break;
+      p = q;
+    }
+    return p;
+  }
+
   private hitWall(nx: number, ny: number, ev: SkateEvent[]) {
+    // Into the water (not just nudged up against its edge): in you go, board and all.
+    if (this.speed > WATER_SPEED && this.park.water(nx, ny)) {
+      ev.push({ t: "water", ...this.intoWater(nx, ny) });
+      this.speed = 0;
+      return;
+    }
     // (Off the park's concrete: somewhere else, perhaps, to walk on to.)
     // (Which way you were going: the bounce below turns you round.)
     if (!this.park.concrete(nx, ny)) ev.push({ t: "edge", x: nx, y: ny, dx: Math.cos(this.heading), dy: Math.sin(this.heading) });
@@ -1067,7 +1152,7 @@ export class Skater {
       this.vy = Math.sin(this.heading) * this.speed;
     }
     // A trick from a grind or a manual carries on into the air: the combo goes on.
-    this.air = { t: 0, vert, spin: 0, from: { x: this.x, y: this.y, z: this.z }, over: new Set(), first: this.combo.count, popped, launch: null, ramp: !!vert };
+    this.air = { t: 0, vert, spin: 0, from: { x: this.x, y: this.y, z: this.z }, over: new Set(), first: this.combo.count, popped, launch: null, ramp: !!vert, hop: false };
     void was;
   }
 
@@ -1092,6 +1177,29 @@ export class Skater {
     this.air.from.z = this.z;
     void up;
     void ev;
+  }
+
+  /**
+   * The nearest rail your way (heading `cx`, `cy`), standing higher than a
+   * step above you: how far ahead you'd cross it (px), and how high it is
+   * there over you. (Riding along one, you never cross it.)
+   */
+  private railAhead(cx: number, cy: number): { t: number; h: number } | null {
+    let best: { t: number; h: number } | null = null;
+    for (const l of this.park.lines) {
+      if (l.kind !== "rail") continue;
+      const dx = l.bx - l.ax;
+      const dy = l.by - l.ay;
+      const den = cx * dy - cy * dx;
+      if (Math.abs(den) < 1e-6) continue;
+      const t = ((l.ax - this.x) * dy - (l.ay - this.y) * dx) / den;
+      const u = ((l.ax - this.x) * cy - (l.ay - this.y) * cx) / den;
+      if (t < 0 || u < -0.02 || u > 1.02) continue;
+      const h = l.za + (l.zb - l.za) * Math.min(1, Math.max(0, u)) - this.z;
+      if (h <= STEP) continue;
+      if (!best || t < best.t) best = { t, h };
+    }
+    return best;
   }
 
   /** Off the top of a kicker: out into the air, as fast as you came. */
@@ -1149,6 +1257,13 @@ export class Skater {
       this.x = nx;
       this.y = ny;
       this.land(this.park.height(nx, ny), ev);
+      return;
+    }
+    // Over the water: down into it.
+    if (this.park.water(nx, ny)) {
+      ev.push({ t: "water", ...this.intoWater(nx, ny) });
+      this.vx = 0;
+      this.vy = 0;
       return;
     }
     // Into a wall (or off the concrete): bounce back off it.
@@ -1301,7 +1416,8 @@ export class Skater {
 
   private tryGrind(inp: Input, ev: SkateEvent[]): boolean {
     const speed = Math.hypot(this.vx, this.vy);
-    if (speed < 50 || this.air.t < 0.08) return false;
+    // (Not just hopping a rail you rode at: that's over it, not onto it.)
+    if (speed < 50 || this.air.t < 0.08 || this.air.hop) return false;
     for (const l of this.park.lines) {
       const dx = l.bx - l.ax;
       const dy = l.by - l.ay;
@@ -1342,7 +1458,7 @@ export class Skater {
     g.t += dt;
     // Downhill (a handrail) it speeds you up; along the flat it slows you a little.
     const drop = ((l.zb - l.za) / len) * g.dir;
-    g.speed = Math.min(TOP_SPEED * this.kit.top, Math.max(80, g.speed - (30 + drop * 500) * dt));
+    g.speed = Math.min(this.topSpeed(), Math.max(80, g.speed - (30 + drop * 500) * dt));
     g.f += (g.dir * g.speed * dt) / len;
     this.balanceStep(dt, inp.x, g.t);
     this.combo.grow(dt * 90);

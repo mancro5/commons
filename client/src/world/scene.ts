@@ -11,6 +11,7 @@ import { type Application, Container, type Filter, Graphics, Matrix, MeshPlane, 
 import { onSettings } from "../settings";
 import { BOWL_BLOCK, bowlArt, bowlGeom, bowlWallBlock } from "./amphitheatre";
 import { TILE, bakeChunk, decorTexture, hash, newTagTexture, objectTexture } from "./art";
+import { RUNS } from "./yardart";
 import type { Relief } from "./skateart";
 import { itemTexture } from "./items";
 import { type MapObject, type ZoneMap, groundAt } from "./map";
@@ -36,7 +37,7 @@ const lying = new WeakSet<Container>();
  * (their edges run straight, not in steps). What each one's faces show.
  */
 const standingWalls = new WeakMap<Container, Texture>();
-const WALLS = new Set(["wall", "wood_wall", "neon_wall", "library_wall", "home_wall_cap"]);
+const WALLS = new Set(["wall", "wood_wall", "neon_wall", "library_wall", "home_wall_cap", "casino_wall", "theatre_wall"]);
 
 /** Whether the wall at (x, y) is part of a run going north to south (and not a corner of one going across). */
 function wallRun(map: ZoneMap, x: number, y: number): boolean {
@@ -89,8 +90,12 @@ const HUD_PX = 72;
 /** Decor drawn flat on the ground. */
 /** Objects that lie flat (people stand on them): the dance floor, the paintball field's markings, pads and bases. */
 const FLAT_OBJECTS = new Set(["dance_floor", "concert_stage", "pb_field", "pb_pad", "pb_spawn", "arena_spikes", "arena_carpet", "arena_bowl", "sk_quarter", "sk_kicker", "sk_box", "sk_stairs", "sk_rail", "sk_paint", "sk_volcano", "sk_pyramid"]);
+/** Skatepark pieces that rise up off the concrete (what stands beside them goes behind their raised sides). */
+/** Raised pieces that rise to a peak in their middle (sorted by it). */
+const MOUNDS = new Set(["sk_volcano", "sk_pyramid"]);
+const RAISED = new Set(["sk_quarter", "sk_kicker", "sk_box", "sk_stairs", "sk_volcano", "sk_pyramid"]);
 /** Drawn from above and laid on the ground in 3D, though they sort like things standing there. */
-const LAID_OBJECTS = new Set(["arena_gate_w", "arena_gate_e", "goal", "pb_x", "pb_snake", "pb_hedge", "bowling_lane", "pool_table", "roulette_table", "blackjack_table"]);
+const LAID_OBJECTS = new Set(["arena_gate_w", "arena_gate_e", "goal", "bowling_lane", "roulette_table", "blackjack_table"]);
 /** What's around a map smaller than the screen; indoors in 3D, the dark over the walls. */
 const HEDGE = "#6f8d62";
 const ROOF_DARK = "#17110c";
@@ -103,6 +108,12 @@ const SWAY = new Set(["tree", "pine", "apple_tree", "bush", "tallgrass", "reeds"
 /** Where a fountain's pedestal stands (world px down): the middle of its basin. */
 export function fountainFoot(o: MapObject): number {
   return o.y * TILE + (o.h * TILE) / 2 - 2;
+}
+
+/** A fence tile along a north–south run (its own kind above or below, none beside): seen end on. */
+function fencePiece(map: ZoneMap, x: number, y: number, kind: string): string {
+  const is = (xx: number, yy: number) => xx >= 0 && yy >= 0 && xx < map.width && yy < map.height && map.decor_legend[map.decor[yy * map.width + xx]] === kind;
+  return !is(x - 1, y) && !is(x + 1, y) && (is(x, y - 1) || is(x, y + 1)) ? `${kind}_v` : kind;
 }
 
 /** Side-by-side bench tiles draw as one long bench (one seat per tile). */
@@ -204,7 +215,7 @@ export class Scene {
    */
   private zoom = loadZoom();
   private zoomTo = this.zoom;
-  private locked: { w: number; h: number } | null = null;
+  private locked: { w: number; h: number; flat?: boolean } | null = null;
   private zoomAt = performance.now();
   private cam: TileXY = { x: 0, y: 0 };
   /**
@@ -213,6 +224,13 @@ export class Scene {
    */
   private chunks = new Map<number, Chunk>();
   private placed: Placed[];
+  /**
+   * Tiles right beside a raised skatepark piece, along its rows: the sort
+   * depth what stands there goes in at. (A piece sorts by its back row, so
+   * a skater on it is drawn over it; a fence post beside it would be too,
+   * over the ramp rising up next to it. It goes in behind the piece.)
+   */
+  private besideRaised = new Map<number, number>();
   private cols: number;
   private rows: number;
   private loaded: Range | null = null;
@@ -257,6 +275,16 @@ export class Scene {
     readonly map: ZoneMap,
   ) {
     this.sorted.sortableChildren = true;
+    for (const o of map.objects) {
+      if (!RAISED.has(o.kind)) continue;
+      for (let y = o.y; y < o.y + o.h; y++)
+        for (const x of [o.x - 1, o.x + o.w]) {
+          if (x < 0 || x >= map.width || y < 0 || y >= map.height) continue;
+          const at = y * map.width + x;
+          // (Its own sort depth less a little: drawn just before it.)
+          this.besideRaised.set(at, Math.min(this.besideRaised.get(at) ?? Infinity, o.y * TILE + 0.5));
+        }
+    }
     this.ground3d.visible = false;
     this.world.addChild(this.ground, this.ground3d, this.marker, this.sorted);
     this.flatLayers.add(this.marker);
@@ -269,7 +297,7 @@ export class Scene {
     this.rows = Math.ceil(map.height / CHUNK);
     this.placed = map.objects
       // Drawn elsewhere, or invisible.
-      .filter((o) => o.kind !== "grove_slot" && o.kind !== "nook" && o.kind !== "spot" && o.kind !== "sk_park" && o.kind !== "forage" && o.kind !== "arena" && o.kind !== "yard_stand" && o.kind !== "yard" && !(map.name === "Home" && o.kind === "arcade_cabinet") && o.kind !== "boat_lake" && (!o.kind.startsWith("lab_") || o.kind === "lab_exit" || o.kind === "lab_heart"))
+      .filter((o) => o.kind !== "grove_slot" && o.kind !== "nook" && o.kind !== "spot" && o.kind !== "sk_park" && o.kind !== "minigolf" && o.kind !== "forage" && o.kind !== "arena" && o.kind !== "yard_stand" && o.kind !== "yard" && o.kind !== "pb_grounds" && !(map.name === "Home" && o.kind === "arcade_cabinet") && o.kind !== "boat_lake" && (!o.kind.startsWith("lab_") || o.kind === "lab_exit" || o.kind === "lab_heart"))
       .map((o) => ({ o, x0: o.x - 1, y0: o.y - 4, x1: o.x + o.w, y1: o.y + o.h, sprite: null, art: null, hiddenAt: 0, parts: [], extras: [] }));
     this.resize();
   }
@@ -336,7 +364,8 @@ export class Scene {
       this.reliefTop.set(s, p.o.y * TILE);
     }
     // The dance floor lies flat: people stand on it, not behind it.
-    s.zIndex = FLAT_OBJECTS.has(p.o.kind) ? p.o.y * TILE + 1 : (p.o.y + p.o.h) * TILE - 1;
+    // (A mound, the volcano or the pyramid, sorts at its peak: whoever's behind it is hidden by it, whoever's in front isn't.)
+    s.zIndex = MOUNDS.has(p.o.kind) ? (p.o.y + p.o.h / 2) * TILE : FLAT_OBJECTS.has(p.o.kind) ? p.o.y * TILE + 1 : (p.o.y + p.o.h) * TILE - 1;
     if (FLAT_OBJECTS.has(p.o.kind) || LAID_OBJECTS.has(p.o.kind) || fountain) lying.add(s);
     this.sorted.addChild(s);
     p.sprite = s;
@@ -438,7 +467,7 @@ export class Scene {
       for (let x = x0; x < x0 + w; x++) {
         const kind = map.decor_legend[map.decor[y * map.width + x]];
         if (kind === "none") continue;
-        const tex = decorTexture(kind === "bench" ? benchPiece(map, x, y) : kind === "bench_v" ? benchVPiece(map, x, y) : kind, hash(x, y, 5));
+        const tex = decorTexture(kind === "bench" ? benchPiece(map, x, y) : kind === "bench_v" ? benchVPiece(map, x, y) : RUNS.has(kind) ? fencePiece(map, x, y, kind) : kind, hash(x, y, 5));
         if (!tex) continue;
         const s = new Sprite(tex);
         s.anchor.set(0.5, 1);
@@ -446,6 +475,12 @@ export class Scene {
         // Flat things lie under whoever stands on them.
         s.zIndex = FLAT.has(kind) ? y * TILE + 1 : y * TILE + TILE - 2;
         if (FLAT.has(kind)) lying.add(s);
+        // Beside a ramp or a box (a fence, a lamp): behind it, though it stands where it stands.
+        const behind = FLAT.has(kind) ? undefined : this.besideRaised.get(y * map.width + x);
+        if (behind !== undefined && behind < s.zIndex) {
+          this.feet.set(s, s.zIndex);
+          s.zIndex = behind;
+        }
         // (A home's side walls wear the same paper as its back wall.)
         if (WALLS.has(kind) && wallRun(map, x, y)) standingWalls.set(s, (kind === "home_wall_cap" ? decorTexture("home_wall", hash(x, y, 5)) : tex) ?? tex);
         this.sorted.addChild(s);
@@ -547,6 +582,18 @@ export class Scene {
       if (c.texture.height * Math.abs(c.scale.y) < 10) continue;
       out.push(c);
     }
+    return out;
+  }
+
+  /**
+   * What hides what's behind it (the night's standing lights): everything
+   * standing, and the skatepark's ramps and boxes, which rise up off the
+   * ground though they sort as it does. (In 3D, a ramp's built up as a mesh
+   * of its own, and its picture's put away: then it's not one of these.)
+   */
+  occluders(): Sprite[] {
+    const out = this.standing();
+    for (const p of this.placed) if (p.sprite && RAISED.has(p.o.kind) && p.sprite.visible && p.sprite.renderable) out.push(p.sprite);
     return out;
   }
 
@@ -672,10 +719,11 @@ export class Scene {
   /**
    * Fixes the view at `w` × `h` tiles, whatever the screen, as big as fits
    * (a quarter step at a time, no zooming till it's let go, and flat: the 3D
-   * view sees further): paintball, where seeing further is winning. Null lets it go.
+   * view sees further, unless `flat` is false: paintball, where it's the same
+   * box either way). Null lets it go.
    */
-  lockView(box: { w: number; h: number } | null) {
-    const same = box?.w === this.locked?.w && box?.h === this.locked?.h;
+  lockView(box: { w: number; h: number; flat?: boolean } | null) {
+    const same = box?.w === this.locked?.w && box?.h === this.locked?.h && box?.flat === this.locked?.flat;
     // (Asked every frame: the screen may have changed under it.)
     if (same && (!box || Math.abs(this.lockedStep(box) - this.scale * this.app.renderer.resolution) < 1e-3)) return;
     this.locked = box;
@@ -842,6 +890,11 @@ export class Scene {
     this.feet.set(c, foot);
   }
 
+  /** `c` stands at its own depth again (its sort depth), not where `standOn` put it. */
+  unstand(c: Container) {
+    this.feet.delete(c);
+  }
+
   /**
    * `c` (in `sorted`, drawn in world coordinates: the arena's burning sand,
    * petals on the ground) lies flat: in 3D it's drawn into a texture each
@@ -861,9 +914,9 @@ export class Scene {
     this.apply3d();
   }
 
-  /** The setting, unless the view's locked (it must be the same for everyone). */
+  /** The setting, unless the view's locked flat (it must be the same for everyone). */
   private apply3d() {
-    this.view3d = this.want3d && !this.locked;
+    this.view3d = this.want3d && !(this.locked && this.locked.flat !== false);
     this.app.renderer.background.color = (this.view3d && !this.map.streets) || this.map.name === "Home" ? ROOF_DARK : HEDGE;
     if (!this.view3d) {
       this.ground3d.visible = false;
@@ -1037,8 +1090,10 @@ export class Scene {
       if (r.side) {
         const sd = r.side;
         const at = (gy: number) => this.project(cx, gy, cam) ?? { ...this.projectMesh(cx, gy, cam), s: cam.z };
-        const f = at(ground0);
-        const b = at(ground0 - sd.d);
+        // (Its front is its bottom row's ground: its feet for furniture, further down for a map object.)
+        const front = ground0 + r.edgeGy![r.h];
+        const f = at(front);
+        const b = at(front - sd.d);
         const left = b.x < f.x;
         const ex = (left ? sd.x0 : sd.x1) - r.w / 2;
         const xf = f.x + ex * f.s;

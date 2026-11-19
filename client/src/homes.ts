@@ -9,6 +9,8 @@ export interface Resident {
   lot: string;
   owner: string;
   name: string;
+  /** They're in their home right now. */
+  home?: boolean;
 }
 
 export class Homes {
@@ -34,6 +36,18 @@ export class Homes {
     this.apartments = r.apartments;
     this.byLot = new Map(r.lots.map((l) => [l.lot, l]));
     for (const fn of this.listeners) fn();
+  }
+
+  /** Homes with their owner in right now. */
+  occupied(): Resident[] {
+    return [...this.byLot.values()].filter((r) => r.home);
+  }
+
+  /** Keeps who's home fresh (every 20 s, while the page is shown). */
+  keepFresh() {
+    window.setInterval(() => {
+      if (document.visibilityState === "visible") void this.load().catch(() => {});
+    }, 20_000);
   }
 
   /** Who lives on `lot` (null: it's free). */

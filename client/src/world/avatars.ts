@@ -94,6 +94,15 @@ const HUB: [number, number][] = [
  */
 /** What they're playing, for their pose: at a cabinet, the pool table, a bowling lane (waiting, or up with the ball). */
 export type PlayKind = "arcade" | "pool" | "bowl" | "bowl-up";
+/** Round the pool table: where (tiles, as an avatar's tile), facing, lean (radians), pose, and sort depth. */
+export interface PoolStance {
+  x: number;
+  y: number;
+  facing: 1 | -1;
+  lean: number;
+  frame: AvatarFrame;
+  z: number;
+}
 /** A bowling throw: each pose until this many ms in. The ball leaves the hand at `BOWL_RELEASE_MS`. */
 const BOWL_THROW: [number, AvatarFrame][] = [
   [300, BOWL_PICKUP],
@@ -177,12 +186,14 @@ export class Avatar {
   private away = false;
   private dozeAt = 0;
   private playing: { x: number; y: number; kind: PlayKind } | null = null;
+  /** At the pool table: where they stand round it (tiles), which way they face, how far they lean in, their pose, and their depth (see `setPoolStance`). */
+  private poolStance: PoolStance | null = null;
   /**
    * Fighting in the arena: where they stand (tiles; the fight moves them, not
    * walking), which way they face, their pose (null: standing or walking),
    * whether they're stepping, and whether they've just been hit (a red flash).
    */
-  private arena: { x: number; y: number; facing: 1 | -1; frame: AvatarFrame | null; walking: boolean; hurt: boolean; lean?: number; lift?: number; hide?: boolean; height?: number; tint?: number; noRide?: boolean } | null = null;
+  private arena: { x: number; y: number; facing: 1 | -1; frame: AvatarFrame | null; walking: boolean; hurt: boolean; lean?: number; lift?: number; hide?: boolean; height?: number; tint?: number; noRide?: boolean; look?: number; scale?: number; mask?: boolean } | null = null;
   /** Bowling: when they began to throw (pick up, swing back, let go), 0 if not. */
   private bowlAt = 0;
   private snore: HTMLDivElement | null = null;
@@ -276,6 +287,15 @@ export class Avatar {
     this.nameEl = document.createElement("span");
     this.nameEl.className = "name";
     this.nameEl.textContent = info.name;
+    // A bot playing as a player: a badge after its name.
+    if (info.bot) {
+      const badge = document.createElement("span");
+      badge.className = "bot-badge";
+      // (A placeholder: the tutorial will tie this seedling to bots.)
+      badge.textContent = "🌱";
+      badge.title = "A bot, playing along";
+      this.nameEl.appendChild(badge);
+    }
     this.stack.appendChild(this.nameEl);
     this.label.appendChild(this.stack);
     labels.appendChild(this.label);
@@ -319,6 +339,16 @@ export class Avatar {
    */
   setPlaying(at: { x: number; y: number; kind: PlayKind } | null) {
     this.playing = at;
+  }
+
+  /**
+   * At the pool table (poolview.ts): drawn where they stand round it, not on
+   * their tile, leaning in over the cue; `z` puts them over the table
+   * (leaning on it from the side) or behind it. Null: back on their tile.
+   */
+  setPoolStance(s: PoolStance | null) {
+    if (!s && this.poolStance) this.scene.unstand(this.sprite);
+    this.poolStance = s;
   }
 
   /** On a phone call (CallingShown): the phone at their ear, and 📞 by the name. */
@@ -377,13 +407,19 @@ export class Avatar {
   }
 
   /** Faded (hiding in a hedge, or out of a paintball match): the figure and its name. */
+  /** A style for the name tag (`label.<cls>`), or none. */
+  setTag(cls: string | null) {
+    for (const c of [...this.label.classList]) if (c.startsWith("tag-")) this.label.classList.remove(c);
+    if (cls) this.label.classList.add(`tag-${cls}`);
+  }
+
   setFade(alpha: number) {
     this.sprite.alpha = alpha;
     this.label.style.opacity = alpha < 1 ? String(Math.max(0, alpha)) : "";
   }
 
   /** In the arena's fight, or on a board at the skatepark (`noRide`: what you'd ride's not drawn), or out of it (null). */
-  setArena(a: { x: number; y: number; facing: 1 | -1; frame: AvatarFrame | null; walking: boolean; hurt: boolean; lean?: number; lift?: number; hide?: boolean; height?: number; tint?: number; noRide?: boolean } | null) {
+  setArena(a: { x: number; y: number; facing: 1 | -1; frame: AvatarFrame | null; walking: boolean; hurt: boolean; lean?: number; lift?: number; hide?: boolean; height?: number; tint?: number; noRide?: boolean; look?: number; scale?: number; mask?: boolean } | null) {
     if (!a && this.arena) this.lastArena = { x: this.arena.x, y: this.arena.y };
     this.arena = a;
     if (a) {
@@ -607,6 +643,12 @@ export class Avatar {
       this.facing = fighting.facing;
       this.sprite.tint = fighting.hurt ? 0xff8080 : (fighting.tint ?? 0xffffff);
     }
+    // At the pool table (not while walking up to it): round it, where the shot is.
+    const cue = this.poolStance && !heading && !fighting ? this.poolStance : null;
+    if (cue) {
+      x = cue.x;
+      y = cue.y;
+    }
     this.shown = { x, y };
 
     const walking = heading !== null || !!fighting?.walking;
@@ -664,6 +706,7 @@ export class Avatar {
     // In a game: facing the machine or table, hands busy.
     const playing = this.playing && !busy ? this.playing : null;
     if (playing && Math.abs(playing.x - x) > 0.3) this.facing = playing.x > x ? 1 : -1;
+    if (cue) this.facing = cue.facing;
     this.showSnore(dozing);
     // Bowling a ball: down for it, up with it, back, and away.
     const bt = this.bowlAt ? wallNow - this.bowlAt : -1;
@@ -697,12 +740,14 @@ export class Avatar {
                   : playing.kind === "bowl"
                     ? 0
                   : playing.kind === "pool"
-                  ? 8
+                  ? (cue?.frame ?? 8)
                   : Math.floor(wallNow / 140) % 3 === 0
                     ? 12
                     : 11
                 : 0;
-    this.sprite.texture = avatarTexture(this.info.look, frame, this.info.style);
+    // (In a game's own look, a team's kit: nothing from the mall drawn over it, or the mask.)
+    const kit = this.arena?.look !== undefined;
+    this.sprite.texture = avatarTexture(kit ? this.arena!.look! : this.info.look, frame, kit ? 0 : this.info.style, !!this.arena?.mask);
     const bob = skating
       ? -BOARD_RISE
       : ride
@@ -728,18 +773,23 @@ export class Avatar {
     const woozy = wallNow < this.woozyUntil && !sitting;
     const sway = woozy ? Math.sin(wallNow / 420) * 2.5 + (walking ? Math.sin(wallNow / 140) * 3 : 0) : 0;
     // In the arena a leap tips them (round their feet) and lifts them off the sand.
-    this.sprite.rotation = fighting?.lean ? fighting.lean : woozy ? Math.sin(wallNow / 560) * 0.1 : 0;
+    this.sprite.rotation = fighting?.lean ? fighting.lean : cue && playing ? cue.lean : woozy ? Math.sin(wallNow / 560) * 0.1 : 0;
     // Asleep on their feet, in whole pixels only (no tilting or stretching):
     // a slow breath sinks them a pixel and back; every few seconds they sag
     // a pixel lower still, then jerk awake a pixel up for a blink, and settle.
     this.sprite.position.set(Math.round(feetX + sway), Math.round(feetY + bob + wave - (fighting?.lift ?? 0)));
     // The robot turns on the beat: every four beats it faces the other way.
-    this.sprite.scale.x = robot && Math.floor(beat / 4) % 2 === 1 ? -this.facing : this.facing;
+    const big = this.arena?.scale ?? 1;
+    this.sprite.scale.x = (robot && Math.floor(beat / 4) % 2 === 1 ? -this.facing : this.facing) * big;
+    this.sprite.scale.y = big;
     // (In the arena, the Goliath's drawn by the arena, in its place; its name goes over its head.)
     this.sprite.visible = !fighting?.hide && !this.ghost;
     if (this.ghost) this.stack.hidden = true;
     const height = fighting?.height ?? 34;
-    this.sprite.zIndex = sitting ? y * TILE + TILE : feetY + 0.5;
+    this.sprite.zIndex = sitting ? y * TILE + TILE : cue ? cue.z : feetY + 0.5;
+    // (Drawn over the table or behind it, but standing where they stand.)
+    if (cue) this.scene.standOn(this.sprite, feetY + 0.5);
+    else if (this.poolStance) this.scene.unstand(this.sprite);
     this.drawBoard(skating, feetX, feetY, push);
     this.drawRod(feetX, feetY + bob, walking, wallNow);
     this.drawFist(feetX, Math.round(feetY + bob), wallNow);

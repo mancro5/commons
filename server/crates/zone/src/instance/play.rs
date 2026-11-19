@@ -31,8 +31,8 @@ const BOUNCE: f64 = 0.7;
 const GOAL_PAUSE_MS: u32 = 1500;
 const BALL_R: f64 = 0.25;
 
-/// The playing area, from the map: the bounding box of `pitch` ground, with
-/// goals (`goal` objects) at the left and right ends.
+/// The playing area, from the map: the `pitch` ground between its two goals
+/// (`goal` objects, at the left and right ends), its bounding box.
 #[derive(Debug, Clone)]
 pub(crate) struct Pitch {
     pub x0: f64,
@@ -47,22 +47,27 @@ pub(crate) struct Pitch {
 impl Pitch {
     pub fn from_map(map: &MapFile) -> Option<Pitch> {
         let pitch = map.ground_legend.iter().position(|g| g == "pitch")? as u8;
-        let (mut x0, mut y0, mut x1, mut y1) = (u16::MAX, u16::MAX, 0u16, 0u16);
-        for (i, &g) in map.ground.iter().enumerate() {
-            if g == pitch {
-                let (x, y) = (
-                    (i % map.width as usize) as u16,
-                    (i / map.width as usize) as u16,
-                );
-                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
-            }
-        }
         let mut goals: Vec<_> = map.objects.iter().filter(|o| o.kind == "goal").collect();
-        if goals.len() != 2 || x0 > x1 {
+        if goals.len() != 2 {
             return None;
         }
         goals.sort_by_key(|o| o.x);
         let (l, r) = (goals[0], goals[1]);
+        // Only the pitch ground between its goals (other turf elsewhere in the
+        // map, the paintball yard's, isn't part of it).
+        let (mut x0, mut y0, mut x1, mut y1) = (u16::MAX, u16::MAX, 0u16, 0u16);
+        for (i, &g) in map.ground.iter().enumerate() {
+            let (x, y) = (
+                (i % map.width as usize) as u16,
+                (i / map.width as usize) as u16,
+            );
+            if g == pitch && x >= l.x && x < r.x + r.w {
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            }
+        }
+        if x0 > x1 {
+            return None;
+        }
         let cells = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]
             .iter()
             .map(|&(x, y)| {
@@ -363,6 +368,23 @@ mod tests {
     use crate::instance::tests::*;
     use crate::instance::*;
     use commons_protocol::{ClientMsg, ServerMsg};
+
+    #[test]
+    fn the_city_ball_starts_on_its_own_pitch() {
+        // (The paintball yard's turf is pitch ground too: it isn't part of it.)
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../assets/maps/city.json"
+        ))
+        .unwrap();
+        let map = MapFile::from_json(&text).unwrap();
+        let p = Pitch::from_map(&map).unwrap();
+        let pitch = map.ground_legend.iter().position(|g| g == "pitch").unwrap() as u8;
+        let (cx, cy) = p.centre();
+        let at = cy as usize * map.width as usize + cx as usize;
+        assert_eq!(map.ground[at], pitch, "the centre spot is on the pitch");
+        assert!(p.y1 - p.y0 <= 16.0, "{p:?}");
+    }
 
     #[test]
     fn walking_into_the_ball_kicks_it_and_goals_count() {

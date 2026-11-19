@@ -83,7 +83,64 @@ export function drawArrow(ctx: CanvasRenderingContext2D, x: number, y: number, r
 }
 
 /** Someone else on a map (`friend`: one of yours). */
-export type Other = TileXY & { friend?: boolean; bot?: boolean };
+export type Other = TileXY & { friend?: boolean; bot?: boolean; name?: string };
+
+/** A house with someone home (`friend`: it's a friend's), for the maps. */
+export type LitHome = { x: number; y: number; w: number; h: number; friend: boolean };
+
+/**
+ * Houses with their owner in: a soft blue glow, or (a friend's) green,
+ * blinking in time with friends' dots, so you can see where they are.
+ */
+export function drawLitHomes(ctx: CanvasRenderingContext2D, homes: LitHome[], k: number, line: number, now: number) {
+  const on = Math.floor(now / 400) % 2 === 0;
+  const breath = 0.5 + 0.5 * Math.sin(now / 420);
+  for (const h of homes) {
+    const [x, y, w, hh] = [h.x * k, h.y * k, h.w * k, h.h * k];
+    const pad = Math.max(1.5, line * 1.5);
+    if (h.friend) {
+      ctx.fillStyle = on ? "rgba(75, 227, 106, 0.55)" : "rgba(28, 122, 56, 0.35)";
+      ctx.fillRect(x - pad, y - pad, w + pad * 2, hh + pad * 2);
+      ctx.strokeStyle = on ? "#4be36a" : "#1c7a38";
+    } else {
+      ctx.fillStyle = `rgba(95, 184, 255, ${0.28 + 0.14 * breath})`;
+      ctx.fillRect(x - pad, y - pad, w + pad * 2, hh + pad * 2);
+      ctx.strokeStyle = "#5fb8ff";
+    }
+    ctx.lineWidth = line;
+    ctx.strokeRect(x - pad + line / 2, y - pad + line / 2, w + pad * 2 - line, hh + pad * 2 - line);
+  }
+}
+
+/**
+ * Small name tags over people's dots (a big map): friends' in green, bots'
+ * in white, everyone else's in blue; one that'd overlap another is left off.
+ */
+export function drawNameTags(ctx: CanvasRenderingContext2D, others: Other[], k: number, r: number, dpr: number) {
+  const size = Math.round(7.5 * dpr);
+  ctx.font = `${size}px "Pixelify Sans", sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const placed: [number, number, number, number][] = [];
+  // Friends first (theirs win a tight spot), then the rest.
+  const order = [...others].filter((o) => o.name).sort((a, b) => Number(!!b.friend) - Number(!!a.friend));
+  for (const o of order) {
+    const name = o.name!.length > 14 ? `${o.name!.slice(0, 13)}…` : o.name!;
+    const tw = ctx.measureText(name).width + 6 * dpr;
+    const th = size + 4 * dpr;
+    const cx = (o.x + 0.5) * k;
+    const cy = (o.y + 0.5) * k - r * (o.friend ? 1.35 : 1) - th / 2 - 2 * dpr;
+    const box: [number, number, number, number] = [cx - tw / 2, cy - th / 2, cx + tw / 2, cy + th / 2];
+    if (placed.some(([a, b, c, d]) => box[0] < c && box[2] > a && box[1] < d && box[3] > b)) continue;
+    placed.push(box);
+    ctx.fillStyle = "rgba(24, 16, 8, 0.78)";
+    ctx.beginPath();
+    ctx.roundRect(box[0], box[1], tw, th, 3 * dpr);
+    ctx.fill();
+    ctx.fillStyle = o.friend ? "#7dff9a" : o.bot ? "#ffffff" : "#a8e2ff";
+    ctx.fillText(name, cx, cy + 0.5 * dpr);
+  }
+}
 
 /** The swarm's bots sign in as players called `Bot 1`, `Bot 2`… (as the leaderboards tell them). */
 export const isBotName = (name: string) => /^Bot [0-9]+$/.test(name);
@@ -176,7 +233,7 @@ export function drawHome(ctx: CanvasRenderingContext2D, x: number, y: number, s:
 
 export interface CityMapHost {
   /** The city map, the player's tile and their home's door, or null when not in the city. */
-  where(): { map: ZoneMap; here: TileXY; home: TileXY | null; route: TileXY[] | null; heading: number; others: Other[] } | null;
+  where(): { map: ZoneMap; here: TileXY; home: TileXY | null; route: TileXY[] | null; heading: number; others: Other[]; lit?: LitHome[] } | null;
   walk(t: TileXY): void;
   toCity(): void;
   /** What's on today, and where. */
@@ -268,7 +325,7 @@ const FILTERS = [
 type FilterKey = (typeof FILTERS)[number]["key"];
 
 /** Which buildings count as what (object kinds, and what to call them). */
-const FUN: Record<string, string> = { arena_bowl: "Arena", arcade_hall: "Arcade", paintball_hall: "Splat Yard", bowling_alley: "Bowling", casino: "Casino", concert_hall: "Concert Hall", bar: "The Cozy Cup", bandstand: "Bandstand" };
+const FUN: Record<string, string> = { minigolf: "Mini Golf", arena_bowl: "Arena", arcade_hall: "Arcade", paintball_hall: "Splat Yard", bowling_alley: "Bowling", casino: "Casino", concert_hall: "Concert Hall", bar: "The Cozy Cup", bandstand: "Bandstand" };
 const SHOPS: Record<string, string> = { mall_entrance: "Commons Mall", tailor: "Tailor", post_office: "Post Office", fisherman: "Fisherman" };
 const FILTER_KEY = "commons.mapfilters";
 
@@ -454,10 +511,14 @@ export class CityMapPanel extends Panel {
       ctx.font = `bold ${Math.round(8 * dpr)}px "Pixelify Sans", sans-serif`;
       ctx.fillText("M", x, y + 0.5 * dpr);
     }
-    if (w.home) drawHome(ctx, (w.home.x + 0.5) * k, (w.home.y + 0.5) * k, 6 * dpr);
     const now = performance.now();
+    // Houses with someone home: blue; a friend's, blinking green.
+    if (w.lit?.length) drawLitHomes(ctx, w.lit, k, 1.5 * dpr, now);
+    if (w.home) drawHome(ctx, (w.home.x + 0.5) * k, (w.home.y + 0.5) * k, 6 * dpr);
     if (w.route) drawRoute(ctx, w.route, k, 2.6 * dpr, now);
     drawOthers(ctx, w.others, k, 2.5 * dpr, now);
+    // Big (full size): whose dot is whose.
+    if (this.canvas.clientWidth >= 520) drawNameTags(ctx, w.others, k, 2.5 * dpr, dpr);
     const you = w.route?.[0] ?? here;
     drawArrow(ctx, (you.x + 0.5) * k, (you.y + 0.5) * k, 6.5 * dpr, w.heading, now);
     this.label.textContent = `You're at: ${placeName(here.x, here.y)}`;

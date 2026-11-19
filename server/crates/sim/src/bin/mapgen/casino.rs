@@ -10,19 +10,26 @@ use commons_sim::map::MapFile;
 pub fn floor() -> MapFile {
     let (w, h) = (26u16, 18u16);
     let mut b = Builder::new(w, h);
-    b.rect(0, 0, w, h, "parquet");
-    b.rect(2, 6, w - 4, h - 8, "rug");
+    // Dark Vegas carpet wall to wall; black marble along the machines and in from the door.
+    b.rect(0, 0, w, h, "casino_carpet");
+    b.rect(1, 4, w - 2, 1, "casino_marble");
     let door = (12u16, 2u16);
+    b.rect(door.0 - 1, 11, door.1 + 2, h - 11, "casino_marble");
     for x in 0..w {
-        b.decor(x, 0, "wood_wall");
+        b.decor(x, 0, "casino_wall");
         if !(door.0..door.0 + door.1).contains(&x) {
-            b.decor(x, h - 1, "wood_wall");
+            b.decor(x, h - 1, "casino_wall");
         }
     }
     for y in 0..h {
-        b.decor(0, y, "wood_wall");
-        b.decor(w - 1, y, "wood_wall");
+        b.decor(0, y, "casino_wall");
+        b.decor(w - 1, y, "casino_wall");
     }
+    // Neon on the back wall, over the machines.
+    b.object("casino_neon", 2, 0, 5, 1, Some("LUCKY 7|pink"), true);
+    b.object("casino_neon", 14, 0, 5, 1, Some("JACKPOT|gold"), true);
+    // The jukebox in the corner by the door.
+    b.object("casino_jukebox", 1, 14, 2, 1, Some("Jukebox"), true);
     // Along the back wall, a step out from it: two of the old three-reel
     // machines; the horse races, a big screen on a stand, facing the door;
     // and two big machines (twenty symbols).

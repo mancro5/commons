@@ -151,6 +151,7 @@ export class SkateShopPanel extends Panel {
       const d = DECKS[code];
       sw.style.background = hex(d.color);
       sw.style.boxShadow = d.glow ? `0 0 10px 2px ${hex(d.glow)}` : "";
+      if (d.fire) sw.classList.add("fire");
       if (d.shine) sw.classList.add("shine");
     } else if (part === "wheels") {
       sw.textContent = ["●", "•", "⬤"][code];
@@ -248,25 +249,76 @@ export class SkateShopPanel extends Panel {
 }
 
 /** Today's quests from `quests`: each, how far you've got, its coins (a Claim button, done). */
+/** An icon for what a mission's about. */
+const QUEST_ICON: Record<string, string> = {
+  runScore: "⏱️", runs: "⏱️", lineScore: "🔗", comboPts: "✨", comboTricks: "✨", banked: "🏦", tricks: "🛹",
+  grindPts: "🛤️", grindTime: "🛤️", manualTime: "⚖️", airHeight: "🚀", airTime: "🚀", grabTime: "🤙",
+  spin: "🌀", distance: "🗺️", topSpeed: "💨", dropIns: "⛰️", gaps: "🌉",
+};
+const TIERS = ["Easy", "Medium", "Hard"];
+
 export function questList(quests: Quests, claim: (day: number, slot: number) => void): HTMLElement {
   const box = el("div", "skate-quests");
   for (const q of quests.today()) {
-    const row = el("div", `skate-quest${q.done ? " done" : ""}${q.claimed ? " claimed" : ""}`);
+    const state = q.claimed ? "claimed" : q.done ? "done" : "open";
+    const row = el("div", `skate-quest ${state} t${q.slot}`);
+    const icon = el("span", "skate-quest-icon", q.claimed ? "✅" : (QUEST_ICON[q.metric] ?? "🎯"));
+    const info = el("div", "skate-quest-info");
+    const top = el("div", "skate-quest-top");
+    top.append(el("span", "skate-quest-tier", TIERS[q.slot] ?? ""), el("span", "skate-quest-prog", q.shown));
     const bar = el("span", "skate-quest-bar");
     const fill = el("span", "skate-quest-fill");
     fill.style.width = `${Math.round(Math.min(1, q.progress / q.target) * 100)}%`;
     bar.append(fill);
-    const info = el("div", "skate-quest-info");
-    info.append(el("strong", "", q.text), bar, el("span", "skate-quest-prog", q.shown));
+    info.append(top, el("strong", "", q.text), bar);
     const side = el("div", "skate-quest-side");
-    if (q.claimed) side.append(el("span", "skate-quest-got", "✓ Paid"));
-    else if (q.done) {
-      side.append(button(`Claim ${q.coins} 🪙`, () => claim(quests.day, q.slot), "primary"));
-    } else side.append(el("span", "skate-quest-coins", `${q.coins} 🪙`));
-    row.append(info, side);
+    if (q.claimed) side.append(el("span", "skate-quest-got", "Paid"));
+    else if (q.done) side.append(button(`Claim ${q.coins} 🪙`, () => claim(quests.day, q.slot), "primary skate-quest-claim"));
+    else side.append(el("span", "skate-quest-coins", `${q.coins} 🪙`));
+    row.append(icon, info, side);
     box.append(row);
   }
-  const left = 86_400_000 - (Date.now() % 86_400_000);
-  box.append(el("p", "hint", `New quests in ${Math.floor(left / 3_600_000)}h ${Math.floor((left % 3_600_000) / 60_000)}m.`));
   return box;
+}
+
+/** How many of today's missions are done, waiting to be claimed. */
+export function questsReady(quests: Quests): number {
+  return quests.today().filter((q) => q.done && !q.claimed).length;
+}
+
+/**
+ * Today's skate missions, on their own: how many done, the coins still to
+ * win, a card each (claim right there), and when the new ones come.
+ */
+export class MissionsPanel extends Panel {
+  constructor(
+    private quests: Quests,
+    private claim: (day: number, slot: number) => void,
+  ) {
+    super("🎯 Skate missions", "skate-missions");
+  }
+
+  render() {
+    const qs = this.quests.today();
+    const done = qs.filter((q) => q.done).length;
+    const ready = qs.filter((q) => q.done && !q.claimed);
+    const toWin = qs.filter((q) => !q.claimed).reduce((n, q) => n + q.coins, 0);
+    this.body.replaceChildren();
+    const head = el("div", "skate-missions-head");
+    const pips = el("div", "skate-missions-pips");
+    for (const q of qs) pips.append(el("i", q.claimed ? "paid" : q.done ? "done" : ""));
+    const left = 86_400_000 - (Date.now() % 86_400_000);
+    head.append(
+      el("div", "skate-missions-count", `${done} / ${qs.length}`),
+      el("div", "skate-missions-sub", done === qs.length ? "All done today! 🎉" : "missions done today"),
+      pips,
+      el("div", "skate-missions-meta", `${toWin ? `${toWin} 🪙 still to win · ` : ""}new ones in ${Math.floor(left / 3_600_000)}h ${Math.floor((left % 3_600_000) / 60_000)}m`),
+    );
+    this.body.append(head);
+    if (ready.length > 1) {
+      this.body.append(button(`Claim all · ${ready.reduce((n, q) => n + q.coins, 0)} 🪙`, () => ready.forEach((q) => this.claim(this.quests.day, q.slot)), "primary skate-missions-all"));
+    }
+    this.body.append(questList(this.quests, this.claim));
+    this.body.append(el("p", "hint skate-missions-foot", "They count anywhere you skate: in the park and out on the streets."));
+  }
 }

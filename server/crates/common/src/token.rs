@@ -132,10 +132,21 @@ pub struct JoinClaims {
     /// leaving it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrive: Option<String>,
-    /// Watching the arena on a home TV: in the city unseen, in the middle of
-    /// the arena, watching (no walking, no talking, nobody sees you there).
+    /// Watching on a home TV: in the city unseen, in the middle of what's
+    /// on (no walking, no talking, nobody sees you there).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub watch: bool,
+    /// The TV's channel: 0 the arena, 1 the paintball yard.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub channel: u8,
+    /// A bot playing as a player (botswarm's): shown with a badge, and in
+    /// the games (arena, paintball, pool) the server plays its seat for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bot: bool,
+}
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
 }
 
 impl Claims for JoinClaims {

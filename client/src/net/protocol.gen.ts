@@ -2,7 +2,7 @@
 // Do not edit by hand.
 /* eslint-disable */
 
-export const PROTOCOL_VERSION = 57;
+export const PROTOCOL_VERSION = 59;
 export const CELL_TILES = 16;
 
 export class Writer {
@@ -266,6 +266,7 @@ export interface PbPlayer {
   deaths: number;
   streak: number;
   fix: number;
+  class: number;
 }
 
 export function encPbPlayer(w: Writer, v: PbPlayer) {
@@ -286,6 +287,7 @@ export function encPbPlayer(w: Writer, v: PbPlayer) {
   w.u8(v.deaths);
   w.u8(v.streak);
   w.u8(v.fix);
+  w.u8(v.class);
 }
 
 export function decPbPlayer(r: Reader): PbPlayer {
@@ -307,6 +309,59 @@ export function decPbPlayer(r: Reader): PbPlayer {
     deaths: r.u8(),
     streak: r.u8(),
     fix: r.u8(),
+    class: r.u8(),
+  };
+}
+
+export interface PbFlag {
+  x: number;
+  y: number;
+  carrier: number;
+  home: boolean;
+}
+
+export function encPbFlag(w: Writer, v: PbFlag) {
+  w.u16(v.x);
+  w.u16(v.y);
+  w.u32(v.carrier);
+  w.bool(v.home);
+}
+
+export function decPbFlag(r: Reader): PbFlag {
+  return {
+    x: r.u16(),
+    y: r.u16(),
+    carrier: r.u32(),
+    home: r.bool(),
+  };
+}
+
+export interface PbPoint {
+  x: number;
+  y: number;
+  r: number;
+  value: number;
+  owner: number;
+  progress: number;
+}
+
+export function encPbPoint(w: Writer, v: PbPoint) {
+  w.u16(v.x);
+  w.u16(v.y);
+  w.u8(v.r);
+  w.u8(v.value);
+  w.u8(v.owner);
+  w.u8(v.progress);
+}
+
+export function decPbPoint(r: Reader): PbPoint {
+  return {
+    x: r.u16(),
+    y: r.u16(),
+    r: r.u8(),
+    value: r.u8(),
+    owner: r.u8(),
+    progress: r.u8(),
   };
 }
 
@@ -347,6 +402,32 @@ export function decSkateEntry(r: Reader): SkateEntry {
   };
 }
 
+export interface MapDot {
+  id: number;
+  x: number;
+  y: number;
+  name: string;
+  bot: boolean;
+}
+
+export function encMapDot(w: Writer, v: MapDot) {
+  w.u32(v.id);
+  w.u16(v.x);
+  w.u16(v.y);
+  w.str(v.name);
+  w.bool(v.bot);
+}
+
+export function decMapDot(r: Reader): MapDot {
+  return {
+    id: r.u32(),
+    x: r.u16(),
+    y: r.u16(),
+    name: r.str(),
+    bot: r.bool(),
+  };
+}
+
 export interface EntityInfo {
   id: number;
   name: string;
@@ -366,6 +447,7 @@ export interface EntityInfo {
   away: boolean;
   reading: number;
   calling: boolean;
+  bot: boolean;
 }
 
 export function encEntityInfo(w: Writer, v: EntityInfo) {
@@ -387,6 +469,7 @@ export function encEntityInfo(w: Writer, v: EntityInfo) {
   w.bool(v.away);
   w.u32(v.reading);
   w.bool(v.calling);
+  w.bool(v.bot);
 }
 
 export function decEntityInfo(r: Reader): EntityInfo {
@@ -409,6 +492,7 @@ export function decEntityInfo(r: Reader): EntityInfo {
     away: r.bool(),
     reading: r.u32(),
     calling: r.bool(),
+    bot: r.bool(),
   };
 }
 
@@ -489,6 +573,12 @@ export type ClientMsg =
   | { t: "SkateQuest"; day: number; slot: number }
   | { t: "SkateDuel"; join: boolean; bot: boolean; grinds: boolean }
   | { t: "SkateDuelScore"; points: number; done: boolean }
+  | { t: "PbBet"; pick: number }
+  | { t: "PbClass"; class: number }
+  | { t: "PbMode"; mode: number }
+  | { t: "GolfBall"; hole: number; x: number; y: number; strokes: number; state: number }
+  | { t: "GolfCard"; strokes: number[] }
+  | { t: "GolfBoardAsk" }
   ;
 
 export function encodeClientMsg(m: ClientMsg): Uint8Array {
@@ -855,6 +945,33 @@ export function encodeClientMsg(m: ClientMsg): Uint8Array {
       w.u32(m.points);
       w.bool(m.done);
       break;
+    case "PbBet":
+      w.u8(78);
+      w.u8(m.pick);
+      break;
+    case "PbClass":
+      w.u8(79);
+      w.u8(m.class);
+      break;
+    case "PbMode":
+      w.u8(80);
+      w.u8(m.mode);
+      break;
+    case "GolfBall":
+      w.u8(81);
+      w.u8(m.hole);
+      w.u16(m.x);
+      w.u16(m.y);
+      w.u8(m.strokes);
+      w.u8(m.state);
+      break;
+    case "GolfCard":
+      w.u8(82);
+      w.vec(m.strokes, (x) => w.u8(x));
+      break;
+    case "GolfBoardAsk":
+      w.u8(83);
+      break;
   }
   return w.finish();
 }
@@ -1092,6 +1209,24 @@ export function decodeClientMsg(b: Uint8Array): ClientMsg {
     case 77:
       m = { t: "SkateDuelScore", points: r.u32(), done: r.bool() };
       break;
+    case 78:
+      m = { t: "PbBet", pick: r.u8() };
+      break;
+    case 79:
+      m = { t: "PbClass", class: r.u8() };
+      break;
+    case 80:
+      m = { t: "PbMode", mode: r.u8() };
+      break;
+    case 81:
+      m = { t: "GolfBall", hole: r.u8(), x: r.u16(), y: r.u16(), strokes: r.u8(), state: r.u8() };
+      break;
+    case 82:
+      m = { t: "GolfCard", strokes: r.vec(() => r.u8()) };
+      break;
+    case 83:
+      m = { t: "GolfBoardAsk" };
+      break;
     default:
       throw new Error(`protocol: unknown ClientMsg tag ${tag}`);
   }
@@ -1145,7 +1280,7 @@ export type ServerMsg =
   | { t: "LuckyFound"; id: number; x: number; y: number }
   | { t: "LuckyOpened"; coins: number }
   | { t: "BoatState"; captain: number; until: number; seats: number[] }
-  | { t: "PbState"; status: number; now: number; phaseMs: number; blue: number; red: number; winner: number; slots: number[]; players: PbPlayer[]; pickups: PbPickup[]; level: number }
+  | { t: "PbState"; status: number; now: number; phaseMs: number; blue: number; red: number; winner: number; slots: number[]; players: PbPlayer[]; pickups: PbPickup[]; level: number; round: number; exhibit: boolean; betMs: number; bets: number[]; betPay: number; classes: number[]; mode: number; toWin: number; flags: PbFlag[]; points: PbPoint[]; winnerId: number; giant: number }
   | { t: "PbShot"; by: number; shot: number; x: number; y: number; aim: number; kind: number }
   | { t: "PbEvent"; kind: number; a: number; b: number; x: number; y: number; n: number }
   | { t: "SalvageJunk"; items: number[] }
@@ -1166,6 +1301,11 @@ export type ServerMsg =
   | { t: "SkateDuelState"; phase: number; opp: number; name: string; startIn: number; grinds: boolean }
   | { t: "SkateDuelScore"; points: number }
   | { t: "SkateDuelEnd"; mine: number; theirs: number; result: number }
+  | { t: "PbBetPlaced"; pick: number; pays: number }
+  | { t: "PbBetSettled"; coins: number; refund: boolean }
+  | { t: "MapDots"; dots: MapDot[] }
+  | { t: "GolfBall"; id: number; hole: number; x: number; y: number; strokes: number; state: number }
+  | { t: "GolfBoard"; rounds: SkateEntry[] }
   ;
 
 export function encodeServerMsg(m: ServerMsg): Uint8Array {
@@ -1522,6 +1662,18 @@ export function encodeServerMsg(m: ServerMsg): Uint8Array {
       w.vec(m.players, (x) => encPbPlayer(w, x));
       w.vec(m.pickups, (x) => encPbPickup(w, x));
       w.u8(m.level);
+      w.u32(m.round);
+      w.bool(m.exhibit);
+      w.u16(m.betMs);
+      w.vec(m.bets, (x) => w.u16(x));
+      w.u16(m.betPay);
+      w.vec(m.classes, (x) => w.u8(x));
+      w.u8(m.mode);
+      w.u8(m.toWin);
+      w.vec(m.flags, (x) => encPbFlag(w, x));
+      w.vec(m.points, (x) => encPbPoint(w, x));
+      w.u32(m.winnerId);
+      w.u32(m.giant);
       break;
     case "PbShot":
       w.u8(47);
@@ -1652,6 +1804,33 @@ export function encodeServerMsg(m: ServerMsg): Uint8Array {
       w.u32(m.mine);
       w.u32(m.theirs);
       w.u8(m.result);
+      break;
+    case "PbBetPlaced":
+      w.u8(68);
+      w.u8(m.pick);
+      w.u16(m.pays);
+      break;
+    case "PbBetSettled":
+      w.u8(69);
+      w.u16(m.coins);
+      w.bool(m.refund);
+      break;
+    case "MapDots":
+      w.u8(70);
+      w.vec(m.dots, (x) => encMapDot(w, x));
+      break;
+    case "GolfBall":
+      w.u8(71);
+      w.u32(m.id);
+      w.u8(m.hole);
+      w.u16(m.x);
+      w.u16(m.y);
+      w.u8(m.strokes);
+      w.u8(m.state);
+      break;
+    case "GolfBoard":
+      w.u8(72);
+      w.vec(m.rounds, (x) => encSkateEntry(w, x));
       break;
   }
   return w.finish();
@@ -1798,7 +1977,7 @@ export function decodeServerMsg(b: Uint8Array): ServerMsg {
       m = { t: "BoatState", captain: r.u32(), until: r.u32(), seats: r.vec(() => r.u32()) };
       break;
     case 46:
-      m = { t: "PbState", status: r.u8(), now: r.u32(), phaseMs: r.u32(), blue: r.u8(), red: r.u8(), winner: r.u8(), slots: r.vec(() => r.u32()), players: r.vec(() => decPbPlayer(r)), pickups: r.vec(() => decPbPickup(r)), level: r.u8() };
+      m = { t: "PbState", status: r.u8(), now: r.u32(), phaseMs: r.u32(), blue: r.u8(), red: r.u8(), winner: r.u8(), slots: r.vec(() => r.u32()), players: r.vec(() => decPbPlayer(r)), pickups: r.vec(() => decPbPickup(r)), level: r.u8(), round: r.u32(), exhibit: r.bool(), betMs: r.u16(), bets: r.vec(() => r.u16()), betPay: r.u16(), classes: r.vec(() => r.u8()), mode: r.u8(), toWin: r.u8(), flags: r.vec(() => decPbFlag(r)), points: r.vec(() => decPbPoint(r)), winnerId: r.u32(), giant: r.u32() };
       break;
     case 47:
       m = { t: "PbShot", by: r.u32(), shot: r.u16(), x: r.u16(), y: r.u16(), aim: r.u16(), kind: r.u8() };
@@ -1859,6 +2038,21 @@ export function decodeServerMsg(b: Uint8Array): ServerMsg {
       break;
     case 67:
       m = { t: "SkateDuelEnd", mine: r.u32(), theirs: r.u32(), result: r.u8() };
+      break;
+    case 68:
+      m = { t: "PbBetPlaced", pick: r.u8(), pays: r.u16() };
+      break;
+    case 69:
+      m = { t: "PbBetSettled", coins: r.u16(), refund: r.bool() };
+      break;
+    case 70:
+      m = { t: "MapDots", dots: r.vec(() => decMapDot(r)) };
+      break;
+    case 71:
+      m = { t: "GolfBall", id: r.u32(), hole: r.u8(), x: r.u16(), y: r.u16(), strokes: r.u8(), state: r.u8() };
+      break;
+    case 72:
+      m = { t: "GolfBoard", rounds: r.vec(() => decSkateEntry(r)) };
       break;
     default:
       throw new Error(`protocol: unknown ServerMsg tag ${tag}`);

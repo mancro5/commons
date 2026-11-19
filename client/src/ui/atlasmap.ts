@@ -9,6 +9,7 @@
 // shown, so the detail stays crisp (cached per map and size).
 
 import type { ZoneMap } from "../world/map";
+import { CELL_H, CELL_W, HOLES, cellOrigin } from "../activities/golfcourse";
 
 const GRASS = 0;
 const TREE = 1;
@@ -617,6 +618,28 @@ export function atlasMap(map: ZoneMap, size: number): HTMLCanvasElement {
       ctx.beginPath();
       ctx.arc(x + w / 2, y + h / 2, Math.min(w, h) / 2, 0, Math.PI * 2);
       ctx.stroke();
+      continue;
+    }
+    // The mini golf course: its nine greens, each a little rounded green in its rail.
+    if (o.kind === "minigolf") {
+      for (const hole of HOLES) {
+        const [cx, cy] = cellOrigin(hole);
+        const gx = x + (cx / 32) * k;
+        const gy = y + (cy / 32) * k;
+        const gw = (CELL_W / 32) * k;
+        const gh = (CELL_H / 32) * k;
+        ctx.fillStyle = "#8a5d36";
+        ctx.beginPath();
+        ctx.roundRect(gx, gy, gw, gh, Math.max(1, k * 1.5));
+        ctx.fill();
+        ctx.fillStyle = "#6cbf5e";
+        ctx.beginPath();
+        ctx.roundRect(gx + k * 0.35, gy + k * 0.35, gw - k * 0.7, gh - k * 0.7, Math.max(1, k * 1.2));
+        ctx.fill();
+        // Its flag.
+        ctx.fillStyle = "#e8566b";
+        ctx.fillRect(gx + ((hole.cup[0] / 32) * k), gy + ((hole.cup[1] / 32) * k) - k, Math.max(1, k * 0.6), Math.max(1, k * 0.5));
+      }
       continue;
     }
     // The amphitheatre: its stands, an oval ring round the sand.

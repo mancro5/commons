@@ -13,6 +13,7 @@ import { furnitureRelief, hasShape } from "./furniture3d";
 import { SURFACE_H, TOPS, WALLS } from "./cozyart";
 import { groundAt } from "./map";
 import { pondTexture } from "./roomskin";
+import { poolRelief } from "./poolart";
 import { bobberTexture, furnitureTexture, itemTexture, magnetBobberTexture, plantTexture, wetSoilTexture } from "./items";
 import { petTexture } from "./pets";
 import type { ZoneMap } from "./map";
@@ -35,8 +36,11 @@ const POND = "round_pond";
 /** A pool table, three tiles by two from its top left (played on: the pool panel). */
 const POOL = "pool_table";
 const poolTiles = (x: number, y: number): [number, number][] => [[x, y], [x + 1, y], [x + 2, y], [x, y + 1], [x + 1, y + 1], [x + 2, y + 1]];
-/** The pool table's picture, the bar's own at three tiles by two. */
-const poolArt = () => objectTexture({ kind: "pool_table", x: 0, y: 0, w: 3, h: 2, label: "Pool table" });
+/** The pool table's picture, the bar's own at three tiles by two (drawn once). */
+let poolPic: ReturnType<typeof objectTexture> | null = null;
+const poolArt = () => (poolPic ??= objectTexture({ kind: "pool_table", x: 0, y: 0, w: 3, h: 2, label: "Pool table" }));
+/** …and its shape in the 3D view (counted from its feet, its front edge). */
+const poolShape = poolRelief(3, 2, true);
 /** A garden pond's tiles, from its top left. */
 const pondTiles = (x: number, y: number): [number, number][] => [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]];
 
@@ -340,6 +344,8 @@ export class Props {
       s.position.set(x * TILE, (y + 2) * TILE);
       s.zIndex = (y + 2) * TILE - 2;
       this.scene.sorted.addChild(s);
+      // In the 3D view, a table: its top lying flat at its height, its front and side standing.
+      this.scene.setRelief(s, poolShape, s.position.y);
       return { sprite: s, item, rot, key: itemKey, on: false, live: null, tank: null, shelf: null, glow: null, pet: null, zzz: null, over: null };
     }
     if (WIDE.has(itemKey)) {

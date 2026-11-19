@@ -236,6 +236,7 @@ pub fn sample_vectors() -> String {
         away: false,
         reading: 0,
         calling: false,
+        bot: false,
     };
     let client = [
         ClientMsg::Hello {

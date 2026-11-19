@@ -53,6 +53,11 @@ impl Furniture {
             "amph_seat_hi",
             "amph_seat_pub",
             "amph_seat_pub_hi",
+            // (The outdoor paintball yard's bleachers, sat on as these are.)
+            "bleacher",
+            "bleacher_hi",
+            // (The concert hall's seats.)
+            "theatre_seat",
         ]
         .map(kind);
         let mut f = Furniture::default();

@@ -415,13 +415,20 @@ function rail(o: MapObject, axis: string, za: number, zb: number): { c: HTMLCanv
     // Its foot, bolted down.
     px(ctx, "#4e555c", x - 2, top + y - z + len, 5, 1);
   };
+  /** In the 3D view, (x, row)–(x + bw, row + bh) of the picture stands over ground row `gy` (as high as it's drawn above it). */
+  const stand = (x: number, row: number, bw: number, bh: number, gy: number) => {
+    for (let yy = Math.round(row); yy < Math.round(row + bh); yy++)
+      for (let xx = Math.round(x); xx < Math.round(x + bw); xx++) mark(drawing, xx, yy, gy, Math.max(0, top + gy - yy));
+  };
   if (axis === "v") {
     const x = w / 2;
     const y0 = 4;
     const y1 = d - 4;
     const zAt = (y: number) => za + ((zb - za) * (y - y0)) / (y1 - y0);
-    post(x, y0 + 2, zAt(y0 + 2));
-    post(x, y1 - 2, zAt(y1 - 2));
+    for (const y of [y0 + 2, y1 - 2]) {
+      post(x, y, zAt(y));
+      stand(x - 2, top + y - zAt(y), 5, Math.min(zAt(y), 16) + 2, y);
+    }
     for (let y = y0; y <= y1; y++) {
       const sy = top + y - zAt(y);
       px(ctx, O, x - 2, sy - 1, 5, 4);
@@ -431,6 +438,8 @@ function rail(o: MapObject, axis: string, za: number, zb: number): { c: HTMLCanv
       px(ctx, "#a8b2bb", x - 1, sy, 3, 2);
       px(ctx, "#eef3f6", x - 1, sy, 1, 1);
     }
+    // (The bar's marked last, over the posts' tops, row by row down the stairs.)
+    for (let y = y0; y <= y1; y++) stand(x - 2, top + y - zAt(y) - 1, 5, 4, y);
   } else {
     const y = d / 2;
     const x0 = 4;
@@ -448,6 +457,15 @@ function rail(o: MapObject, axis: string, za: number, zb: number): { c: HTMLCanv
     // Its shadow on what's under it.
     ctx.fillStyle = "rgba(0,0,0,0.18)";
     ctx.fillRect(x0 + 4, top + y - Math.min(za, zb) + 16 + 2, x1 - x0 - 4, 2);
+    // In the 3D view: the bar and its posts stand up along its line (an
+    // upright card, as anything standing is), and below the ground line,
+    // where its shadow is, it lies on the ground.
+    if (drawing)
+      for (let row = 0; row < d + top; row++)
+        for (let xx = 0; xx < w; xx++) {
+          const z = top + y - row;
+          mark(drawing, xx, row, z >= 0 ? y : y - z, Math.max(0, z));
+        }
   }
   return { c, top };
 }
@@ -497,6 +515,13 @@ export function skateObject(o: MapObject): { texture: Texture; overhang: number;
     // (Its canvas: as the piece draws it, a little room above, its shadow's beyond.)
     const top = o.kind === "sk_quarter" ? Math.ceil(h) + 10 : o.kind === "sk_box" ? h + 4 : isMound ? Math.ceil(h) + 6 : Math.ceil(h) + 4;
     drawing = relief(o.w * TILE + sx, o.h * TILE + top + sy);
+  }
+  // A rail stands up off the ground too (a bar on posts), its picture's size.
+  if (o.kind === "sk_rail") {
+    const [, a, b] = label.split(":");
+    const za = Number(a) || 14;
+    const zb = Number(b) || za;
+    drawing = relief(o.w * TILE, o.h * TILE + Math.max(za, zb) + 6);
   }
   let made: { c: HTMLCanvasElement; top: number };
   switch (o.kind) {

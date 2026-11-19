@@ -20,6 +20,7 @@ mod stalls;
 mod tables;
 #[cfg(test)]
 mod tests;
+mod trade;
 
 use commons_api::economy::Catalog;
 use commons_common::ratelimit::Bucket;
@@ -44,6 +45,8 @@ pub struct State {
     pub lounge: lounge::Lounge,
     /// The Casino's tables, every instance's (ADR 0017, K2).
     pub tables: tables::Tables,
+    /// Trades going on, face to face.
+    pub trades: trade::Trades,
     dm_limits: Mutex<HashMap<Uuid, Bucket>>,
     ring_limits: Mutex<HashMap<Uuid, Bucket>>,
     started: Instant,
@@ -61,6 +64,7 @@ impl State {
             concert: concert::Stages::default(),
             lounge: lounge::Lounge::default(),
             tables: tables::Tables::default(),
+            trades: trade::Trades::default(),
             dm_limits: Mutex::new(HashMap::new()),
             ring_limits: Mutex::new(HashMap::new()),
             started: routes::started(),

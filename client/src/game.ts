@@ -15,9 +15,12 @@ import { FRANCY_ID, Francy } from "./ambient/francy";
 import { ArcadePanel, BEAT_MS, BOT as ARCADE_BOT, PLAYING as ARCADE_PLAYING } from "./activities/arcade";
 import { PrizePanel } from "./ui/prizes";
 import { PoolPanel } from "./activities/pool";
+import { PoolLive } from "./world/poolview";
+import type { TradePanel } from "./ui/trade";
 import { BOT as BOWL_BOT, BowlingPanel, scoreSoFar } from "./activities/bowling";
 import { ArenaShow } from "./activities/arena";
 import { SkatePark } from "./activities/skate";
+import { MiniGolf } from "./activities/minigolf";
 import { SkateShop } from "./activities/skateshop";
 import { SkateTrainer } from "./activities/skatetrainer";
 import { SkateShopPanel } from "./ui/skateshop";
@@ -37,7 +40,7 @@ import { BigScreen } from "./activities/screen";
 import { Ambient } from "./ambient/ambient";
 import { DayNight } from "./ambient/daynight";
 import { COIN, type Economy, type Item } from "./economy";
-import type { ServerMsg } from "./net/protocol.gen";
+import type { MapDot, ServerMsg } from "./net/protocol.gen";
 import { isBotName, type Other } from "./ui/citymap";
 import type { Social } from "./social";
 import type { Gov } from "./gov";
@@ -107,6 +110,7 @@ import type { MetroPanel } from "./ui/metro";
 import type { BlackjackPanel, Casino, CagePanel, RoulettePanel, SlotsPanel, Tables } from "./ui/casino";
 import type { MegaSlotsPanel, RacePanel } from "./ui/casinogames";
 import { RouletteFx } from "./world/roulettefx";
+import { JukeboxMusic, JukeboxPanel } from "./activities/jukebox";
 import { PET_SPOTS, SEATS, TANKS, TOGGLES, WALK_OVER } from "./world/housewares";
 import { WALLS } from "./world/cozyart";
 import type { SalvageGame } from "./ui/salvage";
@@ -184,6 +188,8 @@ export interface Ui {
   room: RoomPanel;
   drone: DronePanel;
   social: Social;
+  /** Trading face to face with someone you tap. */
+  trade: TradePanel;
   friends: FriendsPanel;
   town: Town;
   quarter: QuarterPanel;
@@ -295,8 +301,8 @@ function found(): Set<string> {
 export interface Place {
   label: string;
   owner: string | null;
-  /** Watching the arena on a TV (unseen in the city, in the middle of the arena): `back`, whose home to go back to. */
-  watch?: { back: string | null };
+  /** Watching on a TV (unseen in the city, in the middle of what's on): `back`, whose home to go back to; `channel`, 0 the arena, 1 paintball. */
+  watch?: { back: string | null; channel?: number };
 }
 
 
@@ -367,7 +373,7 @@ const SKATE_KEY_STEPS = 20;
 /** How long a diagonal's other key gets to come up too (ms). */
 const KEY_RELEASE_GRACE_MS = 90;
 /** No input for this long and you're away from the keyboard (you doze off). */
-const AWAY_AFTER_MS = 60_000;
+const AWAY_AFTER_MS = 5 * 60_000;
 /** Map objects that are game machines (the server numbers them in map order, as here). */
 const CABINET_KINDS = ["arcade_cabinet", "dance_machine", "pinball"];
 const KEY_RESEND_MS = 180;
@@ -452,6 +458,8 @@ export class Game {
   private boatNagAt = 0;
   /** The roulette table in the room: chips, the ball, the croupier's calls. */
   private rouletteFx: RouletteFx | null = null;
+  /** The casino's jukebox: its music (yours, while you're in), and its window. */
+  private jukebox: { music: JukeboxMusic; panel: JukeboxPanel } | null = null;
   /** The Museum & Gallery's paintings and fish, in the room. */
   private museumFx: MuseumFx | null = null;
   /** The bugs and mushrooms out in the city (ADR 0019), and when to ask again what's out. */
@@ -557,6 +565,8 @@ export class Game {
   private rpsPicker = new RpsPicker((pick) => this.socket?.send({ t: "RpsPick", pick }));
   /** The bar's pool table, where the map has one. */
   private pool: PoolPanel | null = null;
+  /** The game on the pool table as the room sees it: the balls, the players round it, their cues. */
+  private poolLive: PoolLive | null = null;
   /** The bowling alley's lanes. */
   private bowling: BowlingPanel | null = null;
   /** The gladiator arena out in the park. */
@@ -565,6 +575,10 @@ export class Game {
   private paintball: PaintballShow | null = null;
   /** The skatepark, if this map has one, and its shop truck's seller. */
   private skate: SkatePark | null = null;
+  /** The Fairground's mini golf course, if the map has one. */
+  private golf: MiniGolf | null = null;
+  /** A walk golf's asked for (to your ball, the next tee): let through while you're playing. */
+  private golfWalk = false;
   private skateShop: SkateShop | null = null;
   /** The Skate Trainer by the park's gate, and a lesson waiting for you to get into the park to start. */
   private trainer: SkateTrainer | null = null;
@@ -630,6 +644,9 @@ export class Game {
   private inNook = 0;
   /** Whom we walk after, and who walks after us. */
   private following: number | null = null;
+  /** Everyone in the zone as the server last told it (for the maps), and when. */
+  private mapDots: MapDot[] = [];
+  private mapDotsAt = 0;
   private followers = new Set<number>();
   private followGoal = "";
   private followCheckAt = 0;
@@ -651,8 +668,8 @@ export class Game {
       onTravel(zone: string, arrive?: string): void;
       /** Knock on someone's home: visit them if they've invited you. */
       onVisit(owner: string): void;
-      /** Watch the arena on a TV (`owner`: whose home the TV's in, to come back to), or (null) stop and go back. */
-      onWatch(owner: string | null, stop?: boolean): void;
+      /** Watch on a TV (`owner`: whose home the TV's in, to come back to; `channel`: 0 the arena, 1 paintball), or (null) stop and go back. */
+      onWatch(owner: string | null, stop?: boolean, channel?: number): void;
       /** Something to pop up a notification for (a parcel landed…), seen only here. */
       onNote?(kind: string, body: Record<string, unknown>): void;
     },
@@ -698,7 +715,7 @@ export class Game {
     // Under the hedge maze, the labyrinth: always dusk, no weather, no birds.
     const underground = zoneId === "labyrinth";
     this.ambient = new Ambient(this.scene, map, indoors || underground || zoneId === "home");
-    this.daynight = new DayNight(app, this.scene, map, indoors, zoneId === "arcade" || zoneId === "bowling", underground ? 22.5 : null);
+    this.daynight = new DayNight(app, this.scene, map, indoors, zoneId === "arcade" || zoneId === "bowling" || zoneId === "casino" || zoneId === "concert_hall", underground ? 22.5 : null);
     this.milestones = new Milestones(this.scene, map, (x, y, s) => this.daynight.addLight(x, y, s), app.stage);
     // Lamps really light things, in a home and in a front yard.
     this.props.lightUp = {
@@ -851,6 +868,10 @@ export class Game {
     if (bar) this.clerk = new Clerk(map, bar, this.scene, labels, BARTENDER);
     // The Casino's croupier, behind the roulette table, calls the game for
     // everyone; the chips and the ball show on the table itself.
+    if (map.objects.some((o) => o.kind === "casino_jukebox")) {
+      const music = new JukeboxMusic();
+      this.jukebox = { music, panel: new JukeboxPanel(music) };
+    }
     const wheel = map.objects.find((o) => o.kind === "roulette_table");
     if (wheel) {
       this.clerk = new Clerk(map, wheel, this.scene, labels, CROUPIER);
@@ -946,6 +967,26 @@ export class Game {
       );
     }
     if (map.objects.some((o) => o.kind === "sk_shop")) this.skateShop = new SkateShop(map, this.scene, labels);
+    if (map.objects.some((o) => o.kind === "minigolf")) {
+      this.golf = new MiniGolf(
+        this.scene,
+        map,
+        app.canvas,
+        () => this.selfId,
+        (id) => this.avatars.get(id),
+        (m) => this.socket?.send(m),
+        () => this.socket?.clock.now() ?? performance.now(),
+        (t) => {
+          this.golfWalk = true;
+          try {
+            this.moveTo(t, false);
+          } finally {
+            this.golfWalk = false;
+          }
+        },
+        (x, y, scale) => this.daynight.addLight(x, y, scale),
+      );
+    }
     if (map.objects.some((o) => o.kind === "sk_park")) {
       this.skate = new SkatePark(
         this.scene,
@@ -961,7 +1002,7 @@ export class Game {
         this.daynight.lightLayer,
         // The bot you take on in a 1v1: a skater of its own, beside you.
         (x, y) => {
-          const info = { id: SKATE_BOT_ID, name: "Skate bot 🤖", look: SKATE_BOT_LOOK, x, y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, style: 0, pet: 0, vehicle: 0, tool: 0, reading: 0, calling: false };
+          const info = { id: SKATE_BOT_ID, name: "Skate bot 🤖", look: SKATE_BOT_LOOK, x, y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, style: 0, pet: 0, vehicle: 0, tool: 0, reading: 0, calling: false, bot: false };
           const bot = new Avatar(info, this.scene, this.labels, false, 0);
           bot.markNpc();
           return bot;
@@ -1039,6 +1080,8 @@ export class Game {
           if (m.t === "PbJoin") this.leaveRide();
           this.socket?.send(m);
         },
+        zoneId !== "paintball",
+        (x, y) => this.daynight.addGlow(x, y, 3.4, 2.9, 0xffffff, 0.55),
       );
     }
     const shoes = map.objects.find((o) => o.kind === "shoe_counter");
@@ -1049,6 +1092,14 @@ export class Game {
         () => this.selfId,
         (id) => this.avatars.get(id)?.info.name ?? "someone",
         (m) => this.socket?.send(m),
+      );
+      const pool = this.pool;
+      this.poolLive = new PoolLive(
+        this.scene,
+        () => map.objects.find((o) => o.kind === "pool_table") ?? this.props.poolTable,
+        (id) => this.avatars.get(id),
+        () => this.selfId,
+        () => pool.myAim,
       );
     }
     this.sky = new Sky(app, this.scene, () => this.onShootingStar());
@@ -1168,7 +1219,16 @@ export class Game {
   /** Where everyone else in view is (tiles), for the maps. */
   get others(): Other[] {
     const { social } = this.ui;
-    return [...this.avatars.values()].filter((a) => a.info.id !== this.selfId && a.info.id > 0).map((a) => ({ ...a.pos, bot: isBotName(a.info.name), friend: !!social.friendByName(a.info.name) }));
+    const near = [...this.avatars.values()].filter((a) => a.info.id !== this.selfId && a.info.id > 0);
+    const out: Other[] = near.map((a) => ({ ...a.pos, name: a.info.name, bot: a.info.bot || isBotName(a.info.name), friend: !!social.friendByName(a.info.name) }));
+    // Out of view (across town): where the server last said, while that's fresh.
+    if (performance.now() - this.mapDotsAt < 6000) {
+      for (const d of this.mapDots) {
+        if (d.id === this.selfId || this.avatars.has(d.id) || social.isBlockedName(d.name)) continue;
+        out.push({ x: d.x, y: d.y, name: d.name, bot: d.bot || isBotName(d.name), friend: !!social.friendByName(d.name) });
+      }
+    }
+    return out;
   }
 
   /** The rest of the player's walk (where they are, then each turn ahead), or null standing still. */
@@ -1317,8 +1377,8 @@ export class Game {
       menu.showWith("Your home", "", actions);
     } else if (r) {
       // A friend who lets you drop by: straight in. Anyone else: a knock (in if they've invited you).
-      if (this.ui.social.canDropIn(r.owner)) menu.showWith(`${r.name}'s home`, "Friends are welcome any time.", [["Go in", () => this.events.onVisit(r.owner)]]);
-      else menu.showWith(`${r.name}'s home`, "Friends can come in when they're invited.", [["Knock", () => this.events.onVisit(r.owner)]]);
+      if (this.ui.social.canDropIn(r.owner)) menu.showWith(`${r.name}'s home`, "Friends are welcome any time.", [["Go in", () => this.visit(r.owner)]]);
+      else menu.showWith(`${r.name}'s home`, "Friends can come in when they're invited.", [["Knock", () => this.visit(r.owner)]]);
     } else if (homes.mine) {
       menu.showWith("A free house", "Someone new could make it their home.", []);
     } else {
@@ -1727,6 +1787,11 @@ export class Game {
       case "casino_cage":
         walkUp();
         this.near(ui.cage, front, 5).show();
+        return true;
+      case "casino_jukebox":
+        if (!this.jukebox) return false;
+        walkUp();
+        this.near(this.jukebox.panel, front, 5).show();
         return true;
       // A metro station (ADR 0016): down the stairs, and the map of the lines.
       case "metro_entrance": {
@@ -2190,8 +2255,22 @@ export class Game {
       const name = this.avatars.get(id)?.info.name;
       if (name) carried.followers.set(name, until);
     }
-    if (this.followers.size) this.socket?.send({ t: "Going", zone, arrive: arrive ?? "" });
+    // (Into your home: whose it is, so whoever's following can come in as a visitor would.)
+    const mine = this.ui.homes.mine ? this.ui.homes.resident(this.ui.homes.mine)?.owner : undefined;
+    const going = zone === "home" ? (mine ?? "") : (arrive ?? "");
+    if (this.followers.size) this.socket?.send({ t: "Going", zone, arrive: going });
     this.events.onTravel(zone, arrive);
+  }
+
+  /** Into someone's home (a friend's, or a knock): anyone following us comes too, if they may. */
+  private visit(owner: string) {
+    const until = performance.now() + CARRY_MS;
+    for (const id of this.followers) {
+      const name = this.avatars.get(id)?.info.name;
+      if (name) carried.followers.set(name, until);
+    }
+    if (this.followers.size) this.socket?.send({ t: "Going", zone: "home", arrive: owner });
+    this.events.onVisit(owner);
   }
 
   /** Who we followed in through a door: once they're here too, follow on. */
@@ -2474,7 +2553,7 @@ export class Game {
       // On the second pad, beside yours (the server puts you on the first).
       const you = this.avatars.get(st.a);
       const x = d.floor.x + 2;
-      const info = { id: DANCE_BOT_ID, name: "AI bot 🤖", look: DANCE_BOT_LOOK, x, y: d.floor.y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, style: 0, pet: 0, vehicle: 0, tool: 0, reading: 0, calling: false };
+      const info = { id: DANCE_BOT_ID, name: "AI bot 🤖", look: DANCE_BOT_LOOK, x, y: d.floor.y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, style: 0, pet: 0, vehicle: 0, tool: 0, reading: 0, calling: false, bot: false };
       this.danceBot = new Avatar(info, this.scene, this.labels, false, serverNow);
       this.danceBot.markNpc();
       if (you) this.danceBot.faceToward(you.pos.x);
@@ -2647,8 +2726,8 @@ export class Game {
 
   /** Gets on something of yours (outdoors only), or off with null. */
   async rideOn(it: Item | null, quiet = false) {
-    // (Off your board altogether: off its physics first.)
-    if (!it && this.skate?.street) this.skate.stop();
+    // (Off your board altogether: off its physics first, out on the streets or skating the park.)
+    if (!it && this.skate?.capturing) this.skate.stop();
     if (it && this.zoneId !== "city") return this.hud.toast("Vehicles are for outdoors: ride once you're back outside.", 3500);
     this.boardGoal = null;
     if (!it) this.dismounting = true;
@@ -3072,6 +3151,10 @@ export class Game {
       case "Together":
         this.together(m.a, m.b, m.kind);
         break;
+      case "MapDots":
+        this.mapDots = m.dots;
+        this.mapDotsAt = performance.now();
+        break;
       case "Went": {
         // The one we follow went through a door: after them.
         if (m.id !== this.following) break;
@@ -3080,6 +3163,11 @@ export class Game {
         if (!name) break;
         carried.leader = { name, until: performance.now() + CARRY_MS, left: this };
         this.hud.toast(`👣 After ${name}…`, 2500);
+        // Into a home: as a visitor would (in if they let friends drop by, or you're invited).
+        if (m.zone === "home") {
+          if (m.arrive) this.visit(m.arrive);
+          break;
+        }
         this.goTo(m.zone, m.arrive || undefined);
         break;
       }
@@ -3101,6 +3189,10 @@ export class Game {
       }
       case "ArenaState":
         this.arena?.onState(m);
+        break;
+      case "GolfBall":
+      case "GolfBoard":
+        this.golf?.onMsg(m);
         break;
       case "Skating":
       case "Skater":
@@ -3133,6 +3225,12 @@ export class Game {
       case "ArenaBetSettled":
         this.arena?.onBetSettled(m.coins, m.refund);
         break;
+      case "PbBetPlaced":
+        this.paintball?.onBetPlaced(m.pick, m.pays);
+        break;
+      case "PbBetSettled":
+        this.paintball?.onBetSettled(m.coins, m.refund);
+        break;
       case "BowlRolled": {
         this.bowling?.onRolled(m);
         // The bowler picks up a ball, swings and lets go; it rolls up the lane.
@@ -3144,12 +3242,15 @@ export class Game {
       }
       case "PoolState":
         this.pool?.onState(m);
+        this.poolLive?.onState(m);
         break;
       case "PoolShot":
         this.pool?.onShot(m.by, m.vx, m.vy, m.shot);
+        this.poolLive?.onShot(m.by, m.vx, m.vy, m.shot);
         break;
       case "PoolAim":
         this.pool?.onAim(m.by, m.angle, m.pull);
+        this.poolLive?.onAim(m.by, m.angle, m.pull);
         break;
       case "ArcadeState":
         this.arcade?.onState(m);
@@ -3291,6 +3392,8 @@ export class Game {
       }
       return;
     }
+    // Playing mini golf: you walk to your ball (golf sees to it), not off about the course.
+    if (this.golf?.capturing && !this.golfWalk) return;
     // Mid-game at a bowling lane (or mid-fight in the arena, or skating the park) you stay put until you leave it.
     if (this.paintball?.capturing || this.arena?.capturing || (this.skate?.capturing && !this.skate.street)) return;
     if (this.bowlingNow()) {
@@ -3455,9 +3558,11 @@ export class Game {
   }
 
   private bindInput() {
-    // Away from the keyboard: a minute with no key, click, touch, scroll or
-    // even a mouse move (tabbed out counts), and everyone sees you doze off.
+    // Away from the keyboard: five minutes with no key, click, touch, scroll,
+    // mouse move or getting anywhere (walking, riding, skating) and everyone
+    // sees you doze off. (Tabbed out counts.)
     let lastInput = performance.now();
+    let lastAt = "";
     let away = false;
     const active = () => {
       lastInput = performance.now();
@@ -3467,15 +3572,24 @@ export class Game {
       }
     };
     const awayCheck = window.setInterval(() => {
+      // On the move (however: a key held down, a board rolling on): not away.
+      const p = this.self?.pos;
+      const at = p ? `${p.x.toFixed(2)},${p.y.toFixed(2)}` : "";
+      if (at !== lastAt) {
+        lastAt = at;
+        if (p) active();
+      }
       if (!away && performance.now() - lastInput > AWAY_AFTER_MS) {
         away = true;
         this.socket?.send({ t: "Away", away: true });
       }
     }, 2000);
-    for (const ev of ["keydown", "pointerdown", "pointermove", "wheel", "touchstart"]) window.addEventListener(ev, active, { passive: true });
+    // (Heard first, before anything takes a key for itself: skating keeps its keys from the rest of the page.)
+    const inputs = ["keydown", "keyup", "pointerdown", "pointerup", "pointermove", "wheel", "touchstart"];
+    for (const ev of inputs) window.addEventListener(ev, active, { passive: true, capture: true });
     this.disposers.push(() => {
       window.clearInterval(awayCheck);
-      for (const ev of ["keydown", "pointerdown", "pointermove", "wheel", "touchstart"]) window.removeEventListener(ev, active);
+      for (const ev of inputs) window.removeEventListener(ev, active, { capture: true });
     });
 
     // Two fingers pinch the world to zoom.
@@ -3547,6 +3661,8 @@ export class Game {
     stage.hitArea = this.app.screen;
     const tap = (e: FederatedPointerEvent) => {
       if (this.place.watch) return;
+      // Playing mini golf: the pointer aims (pull back, let go); it doesn't walk you.
+      if (this.golf?.capturing) return;
       // A pinch isn't a tap.
       if (touches.size > 1 || performance.now() - pinchedAt < 350) return;
       // Out on the paintball field: the mouse aims and shoots, it doesn't walk.
@@ -3708,7 +3824,7 @@ export class Game {
         wheel = 0;
         return;
       }
-      const watching = !!this.arena?.watchingNow;
+      const watching = !!this.arena?.watchingNow || !!this.paintball?.spectatingNow;
       this.scene.zoomFine(wheel < 0 ? 1 : -1, watching, !watching);
       wheel = 0;
     };
@@ -3775,8 +3891,11 @@ export class Game {
     }
     // The mini fridge: fish keep in it (a week out of it, they go off).
     if (key === "mini_fridge" && this.isOwnHome) actions.push(["🧊 Open the fridge", () => (walkUp(), this.near(ui.fridge, t, 4), void ui.fridge.openUp())]);
-    // A TV: the arena's matches, live (watched from here, unseen in the crowd).
-    if (key === "retro_tv") actions.push(["📺 Watch the arena", () => this.events.onWatch(this.place.owner)]);
+    // A TV: the arena's fights or the paintball yard's matches, live (watched from here, unseen).
+    if (key === "retro_tv") {
+      actions.push(["📺 Watch the arena", () => this.events.onWatch(this.place.owner, false, 0)]);
+      actions.push(["📺 Watch paintball", () => this.events.onWatch(this.place.owner, false, 1)]);
+    }
     if (TOGGLES.has(key)) {
       const on = this.props.isOn(t.x, t.y);
       actions.push([on ? "🔌 Turn it off" : "✨ Turn it on", () => (walkUp(), this.socket?.send({ t: "UseObject", x: t.x, y: t.y }))]);
@@ -3881,6 +4000,8 @@ export class Game {
       }
       if (this.following === them) actions.unshift(["👣 Stop following", () => this.stopFollowing(true)]);
       else actions.unshift([friend ? "👣 Follow" : "👣 Ask to follow", () => this.askToFollow(them, name, !!friend)]);
+      // Trade with them (or just give them something), face to face. (Not the town's bots.)
+      if (!isBotName(name)) actions.push(["🤝 Trade", () => void this.ui.trade.start(name)]);
       for (const [kind, t] of Object.entries(TOGETHER)) {
         actions.push([`${t.icon} ${t.offer}`, () => this.offer(a.info.id, Number(kind), name)]);
       }
@@ -4988,11 +5109,16 @@ export class Game {
     } else if (performance.now() - this.leftParkAt > 1500 && !this.rodeBefore && rides.riding) void this.rideOn(null, true);
   }
 
+  /** On a TV, the view held: the arena's whole ring (paintball's held by the match itself). */
+  private tvView(): { w: number; h: number } | null {
+    return this.place.watch && this.place.watch.channel !== 1 ? (this.arena?.tvView() ?? { w: 26, h: 19 }) : null;
+  }
+
   private watching() {
     if (!this.place.watch) return;
     if (this.self) this.self.ghost = true;
     // The whole ring in view, whatever the screen (the arena's 22 × 15, and its walls).
-    this.scene.lockView({ w: 26, h: 19 });
+    this.scene.lockView(this.tvView());
     if (this.watchBanner) return;
     const b = document.createElement("div");
     b.className = "place-banner watch-banner";
@@ -5000,7 +5126,9 @@ export class Game {
     back.className = "small";
     back.textContent = "🏠 Back home";
     back.onclick = () => this.events.onWatch(this.place.watch?.back ?? null, true);
-    b.append("📺 Watching the arena, live. ", back);
+    b.append(this.place.watch.channel === 1 ? "📺 Paintball, live from the Splat Yard. " : "📺 Watching the arena, live. ", back);
+    if (this.place.watch.channel === 1) this.paintball?.setTv(true);
+    else this.arena?.setTv(true);
     document.body.appendChild(b);
     // (Nobody there to hear you, nowhere to walk: the chat and the emotes are put away.)
     document.body.classList.add("watching-tv");
@@ -5021,9 +5149,11 @@ export class Game {
     this.paintball?.update(serverNow, wallNow);
     // The skatepark: skaters on their boards (yours, and everyone's).
     this.skate?.update(wallNow);
+    this.golf?.update(wallNow);
     if (this.paintball) {
       // Out on the field, everyone sees the same stretch of it, whatever their screen.
-      this.scene.lockView(this.paintball.capturing ? PB_VIEW : null);
+      // (Watching on a TV: what's on, all of it in view.)
+      this.scene.lockView(this.paintball.capturing ? PB_VIEW : (this.paintball.spectateView() ?? this.tvView()));
       this.paintball.frameView(this.scene.lockedPx);
     }
 
@@ -5033,7 +5163,10 @@ export class Game {
       self.update(serverNow, wallNow);
       // (Following where we're drawn, not the walk's own spot: that jumps a
       // little when a turn re-plans it, and the drawing blends it out.)
-      this.scene.follow(this.paintball ? this.paintball.camera(self.shown) : this.arena ? this.arena.camera(self.shown) : self.shown);
+      // (In the city there's the arena and the paintball yard both: the yard's
+      // camera only while you're playing or spectating it, else the arena's.)
+      const pb = this.paintball && (this.paintball.capturing || this.paintball.spectatingNow) ? this.paintball : null;
+      this.scene.follow(pb ? pb.camera(self.shown) : this.arena ? this.arena.camera(self.shown) : self.shown);
       this.scene.world.visible = true;
       this.selfSeen = wallNow;
       this.ui.minimap.update(self.pos, self.moving ? this.route : null, wallNow, this.heading, this.others);
@@ -5174,6 +5307,7 @@ export class Game {
     this.fountain?.update(wallNow);
     this.pond?.update(performance.now());
     this.laneBalls.update(wallNow);
+    this.poolLive?.update(performance.now());
     if (wallNow > this.playingCheckAt) {
       this.playingCheckAt = wallNow + 300;
       this.markPlayers();
@@ -5225,10 +5359,14 @@ export class Game {
     this.ui.catalogue.hide();
     this.rpsPicker.destroy();
     this.pool?.destroy();
+    this.jukebox?.music.stop();
+    this.jukebox?.panel.destroy();
+    this.poolLive?.destroy();
     this.bowling?.destroy();
     this.arena?.destroy();
     this.paintball?.destroy();
     this.skate?.destroy();
+    this.golf?.destroy();
     this.skateShop?.destroy();
     this.trainer?.destroy();
     this.skateShopPanel?.hide();

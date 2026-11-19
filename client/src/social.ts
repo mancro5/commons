@@ -246,6 +246,32 @@ export class Social {
     await this.auth.send("/api/social/gift", { to, item, qty, note, wrap, card, key: crypto.randomUUID() });
   }
 
+  /** Trading face to face (see ui/trade.ts): ask someone here by name. */
+  tradeAsk(name: string) {
+    return this.auth.send("/api/social/trade/ask", { name });
+  }
+
+  tradeAnswer(id: string, yes: boolean) {
+    return this.auth.send("/api/social/trade/answer", { id, yes });
+  }
+
+  /** What you put on the table: `[item, qty]`s and coins (the whole of your side). */
+  tradeOffer(id: string, items: [number, number][], coins: number) {
+    return this.auth.send("/api/social/trade/offer", { id, items, coins });
+  }
+
+  tradeLock(id: string, on: boolean) {
+    return this.auth.send("/api/social/trade/lock", { id, on });
+  }
+
+  tradeConfirm(id: string) {
+    return this.auth.send("/api/social/trade/confirm", { id });
+  }
+
+  tradeCancel(id: string) {
+    return this.auth.send("/api/social/trade/cancel", { id });
+  }
+
   async setDropIn(open: boolean) {
     await this.auth.send("/api/social/drop_in", { open });
     this.dropIn = open;

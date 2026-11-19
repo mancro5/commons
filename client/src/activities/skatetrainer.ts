@@ -137,7 +137,7 @@ export class SkateTrainer {
     /** On a board for a lesson (in a run or a line, or free). */
     private ride: (mode: "free" | "run" | "line") => boolean,
   ) {
-    const info: EntityInfo = { id: TRAINER_ID, name: TRAINER.name, look: TRAINER.look, x: SPOT.x, y: SPOT.y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, reading: 0, calling: false, style: 0, pet: 0, vehicle: 0, tool: 0 };
+    const info: EntityInfo = { id: TRAINER_ID, name: TRAINER.name, look: TRAINER.look, x: SPOT.x, y: SPOT.y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, reading: 0, calling: false, bot: false, style: 0, pet: 0, vehicle: 0, tool: 0 };
     this.avatar = new Avatar(info, scene, labels, false, Date.now());
     this.avatar.markNpc();
     try {

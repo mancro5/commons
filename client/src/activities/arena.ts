@@ -489,7 +489,7 @@ export function giftTexture(kind: number): Texture {
 
 function botInfo(id: number, at: { x: number; y: number }): EntityInfo {
   const k = (id - BOT_BASE) % SLOTS;
-  return { id, name: `${BOT_NAMES[k]} 🤖`, look: BOT_LOOKS[k], style: 0, pet: 0, vehicle: 0, tool: 0, x: Math.round(at.x), y: Math.round(at.y), state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, reading: 0, calling: false };
+  return { id, name: `${BOT_NAMES[k]} 🤖`, look: BOT_LOOKS[k], style: 0, pet: 0, vehicle: 0, tool: 0, x: Math.round(at.x), y: Math.round(at.y), state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, reading: 0, calling: false, bot: false };
 }
 
 /** A brazier's fire on a pillar: where (world px), its glows. */
@@ -3657,6 +3657,21 @@ export class ArenaShow {
     return !!me && !!b && !this.capturing && me.state === 1 && me.pos.x >= b.x && me.pos.x < b.x + b.w && me.pos.y >= b.y && me.pos.y < b.y + b.h;
   }
 
+  /** Watching on a TV: always watching (no seat to go back to), ◀ ▶ whom as from the stands. */
+  private tv = false;
+  setTv(on: boolean) {
+    this.tv = on;
+    this.watching = on;
+    this.watchWho = 0;
+    const a = this.arenaObj;
+    this.watchCam = { x: a.x + a.w / 2 - 0.5, y: a.y + a.h / 2 - 0.5 };
+  }
+
+  /** On a TV, the view held: the whole ring, or (following a fighter) closer on them. */
+  tvView(): { w: number; h: number } {
+    return this.watchWho ? { w: 16, h: 11 } : { w: 26, h: 19 };
+  }
+
   /** 🔭 on or off: the camera to the fight, or back to us. */
   private toggleWatch() {
     if (!this.seated()) return;
@@ -3726,9 +3741,11 @@ export class ArenaShow {
 
   /** The 🔭 button, shown while we're sat in the stands. */
   private updateWatch() {
-    const seated = this.seated();
+    // (On a TV it's as if sat in the best seat: always watching, no seat to go back to.)
+    const seated = this.tv || this.seated();
     if (!seated && this.watching) this.stopWatching();
     this.watchBar.hidden = !seated;
+    this.watchBtn.hidden = this.tv;
     const label = this.watching ? "🔭 Back to my seat" : "🔭 Watch the fight";
     if (this.watchBtn.textContent !== label) this.watchBtn.textContent = label;
     this.watchBtn.classList.toggle("on", this.watching);

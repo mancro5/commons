@@ -19,7 +19,7 @@ const SLOW_SPEED = 120.0;
 const SLOW_FRICTION = 40.0;
 const CUSHION = 0.86;
 const BALL_E = 0.975;
-const MAX_STEPS = 240 * 30;
+export const MAX_STEPS = 240 * 30;
 /** sim::pool::MAX_SPEED: the hardest shot. */
 const MAX_SPEED = 1600;
 /** sim::pool::SUBSTEP_OVER, POWER_SHOT_FROM: above this speed a step is split; from this power (of 1000) a shot is a power shot. */
@@ -44,7 +44,7 @@ const SOLIDS = 1;
 export const BOT = 0xfffffff3;
 const V_OFFSET = 32768;
 
-interface Ball {
+export interface Ball {
   n: number;
   x: number;
   y: number;
@@ -62,7 +62,7 @@ type Hit = (kind: "ball" | "cushion" | "pocket", speed: number, x: number) => vo
  * anything goes faster than an ordinary shot (a power shot), the step is
  * played as 2 or 4 shorter ones, as on the server.
  */
-function step(balls: Ball[], hit?: Hit): boolean {
+export function step(balls: Ball[], hit?: Hit): boolean {
   let fastest = 0;
   for (const b of balls) {
     if (b.on) fastest = Math.max(fastest, Math.sqrt(b.vx * b.vx + b.vy * b.vy));
@@ -211,7 +211,7 @@ export function simulate(start: { n: number; x: number; y: number }[], vx: numbe
 }
 
 /** `hole`: the pocket (index into POCKETS) the player up must sink the 8 in; NO_HOLE until they may. */
-type State = { a: number; b: number; turn: number; groups: number; status: number; shot: number; hole: number; balls: PoolBall[] };
+export type State = { a: number; b: number; turn: number; groups: number; status: number; shot: number; hole: number; balls: PoolBall[] };
 /** sim::pool::NO_HOLE. */
 const NO_HOLE = 255;
 
@@ -492,6 +492,12 @@ export class PoolPanel extends Panel {
     this.send({ t: "PoolShoot", angle, power: Math.round(power * 1000) });
     this.aimSent = "";
     this.unlock();
+  }
+
+  /** Your shot as you line it up here (radians, and how far the cue's drawn back, 0–1), for the table out in the room. */
+  get myAim(): { angle: number; pull: number } | null {
+    if (!this.open || !this.myTurn() || this.aim === null) return null;
+    return { angle: this.aim, pull: this.lockedAt === null ? 0 : this.powerNow() };
   }
 
   private myTurn(): boolean {

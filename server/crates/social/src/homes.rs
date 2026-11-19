@@ -43,9 +43,11 @@ pub async fn list(State(state): S, headers: HeaderMap) -> ApiResult<Json<serde_j
         .iter()
         .find(|(l, _)| l.player == me)
         .map(|(l, _)| l.plot.clone());
+    // (Who's in: their house glows on the map.)
+    let in_now = state.hub.at_home();
     let lots: Vec<_> = rows
         .iter()
-        .map(|(l, name)| json!({ "lot": l.plot, "owner": l.player.to_string(), "name": name }))
+        .map(|(l, name)| json!({ "lot": l.plot, "owner": l.player.to_string(), "name": name, "home": in_now.contains(&l.player) }))
         .collect();
     Ok(Json(json!({
         "mine": mine,

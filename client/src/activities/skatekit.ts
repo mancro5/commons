@@ -30,7 +30,7 @@ export interface Option {
 }
 
 /** The decks' colours: the deck, the stripe under it, and (the glow deck) its light. */
-export const DECKS: { color: number; stripe: number; glow?: number; shine?: boolean }[] = [
+export const DECKS: { color: number; stripe: number; glow?: number; shine?: boolean; fire?: boolean }[] = [
   { color: 0x3fa7e8, stripe: 0xffffff },
   { color: 0xe8566b, stripe: 0xffd23f },
   { color: 0xff8a3d, stripe: 0xfff3c4 },
@@ -42,6 +42,8 @@ export const DECKS: { color: number; stripe: number; glow?: number; shine?: bool
   { color: 0xf4f1e8, stripe: 0xe8566b },
   { color: 0xe8b923, stripe: 0xfff3c4, shine: true },
   { color: 0x7dffc4, stripe: 0xd9fff0, glow: 0x5fffb0 },
+  // Glows as the glow deck does, but in fire: flickering, embers off it.
+  { color: 0xe8381a, stripe: 0xffd23f, glow: 0xff4a12, fire: true },
 ];
 
 export const OPTIONS: Record<Part, Option[]> = {
@@ -57,6 +59,7 @@ export const OPTIONS: Record<Part, Option[]> = {
     { code: 8, name: "Ivory", about: "Clean white.", key: "deck_white" },
     { code: 9, name: "Gold", about: "It shines.", key: "deck_gold" },
     { code: 10, name: "Glow-in-the-Dark", about: "It glows, for real. Best after dark.", key: "deck_glow" },
+    { code: 11, name: "Inferno", about: "Glows like the glow deck, but on fire: it flickers and throws off embers. Best after dark.", key: "deck_fire" },
   ],
   wheels: [
     { code: 0, name: "Standard", about: "A good all-rounder." },
@@ -108,6 +111,8 @@ export interface Ride {
   turn: number;
   /** Surf trucks: steering side to side pumps you along (0: it doesn't). */
   pump: number;
+  /** Out on the streets: times the stock top speed your bearings let you build up to (it takes a while past cruising). */
+  cruise: number;
 }
 
 const ALL_FLIPS = ["", "left", "right", "up", "down"];
@@ -131,19 +136,27 @@ export function ride(k: Kit): Ride {
     body: t === 3 || pro,
     wobble: t === 2 ? 0.7 : pro ? 0.6 : 1,
     vert: t === 3 || pro ? 1.12 : 1,
-    turn: t === 5 ? 1.25 : 1,
+    turn: t === 5 ? 1.5 : 1,
     pump: t === 5 ? 1 : 0,
+    cruise: bearingCruise(k.bearings),
   };
 }
 
 /**
- * Your board out on the streets: as fast as your bearings and wheels make it,
- * but your trucks don't matter there (no surf pumping, steering as stock),
- * and an ollie and a kickflip (Space, and Space again in the air) always go.
+ * Your board out on the streets: just as you've built it, all of it (the
+ * bearings' and wheels' speed, the trucks' steering, steadiness and tricks,
+ * Surf trucks' carve and pump), and an ollie and a kickflip (Space, and
+ * Space again in the air) always go, whatever the trucks.
  */
 export function streetRide(k: Kit): Ride {
   const r = ride(k);
-  return { ...r, flips: new Set(["", ...r.flips]), turn: 1, pump: 0, wobble: 1 };
+  return { ...r, flips: new Set(["", ...r.flips]) };
+}
+
+/** Out on the streets, times the stock top speed by bearings level: a little more each level, the Pro ones far more. */
+export function bearingCruise(level: number): number {
+  const lv = Math.max(1, Math.min(6, level));
+  return lv === 6 ? 2.1 : 1 + 0.08 * (lv - 1);
 }
 
 /** Times the stock acceleration, by bearings level: 12% more a level up to Lv 5; the Pro ones (6), twice Lv 5. */

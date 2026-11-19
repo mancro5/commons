@@ -15,6 +15,10 @@
 //! always well) and smacks a rare catch flopping on the bank (not always fast
 //! enough).
 
+mod davidd;
+mod davidd_brain;
+mod davidd_park;
+
 use anyhow::{Context, bail};
 use clap::{Parser, ValueEnum};
 use commons_common::token::{self, AccessClaims, JoinClaims, TrustTier};
@@ -412,6 +416,8 @@ async fn bot_loop(
         muted_until: 0,
         arrive: None,
         watch: false,
+        channel: 0,
+        bot: true,
     };
     let join_token = token::sign(secret, &claims, 300);
     let (ws, _) = tokio_tungstenite::connect_async(&args.url)
@@ -742,6 +748,19 @@ async fn main() -> anyhow::Result<()> {
     });
     let spawn = (map.spawn.x, map.spawn.y);
     let secret = Arc::new(commons_common::config::secret());
+    // One bot, signed in: Davidd, who plays along as one of the gang.
+    if davidd::wanted(args.bots, &args.api) {
+        println!("botswarm: Davidd");
+        return davidd::run(
+            args.url.clone(),
+            args.api.clone().unwrap_or_default(),
+            args.social.clone(),
+            secret.to_vec(),
+            &world,
+            &map,
+        )
+        .await;
+    }
 
     println!(
         "botswarm: {} bots ({:?}) → {} zone={} instance={}, ramp {}s, measure {}s",

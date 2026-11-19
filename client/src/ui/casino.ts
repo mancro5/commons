@@ -33,6 +33,9 @@ export const SYMBOL_ICONS: Record<string, string> = { cherry: "üçí", lemon: "ü
 
 export type RouletteBet = { on: "red" | "black" | "odd" | "even" | "low" | "high" } | { on: "dozen"; n: number } | { on: "number"; n: number };
 
+/** What the server says to someone it doesn't think is in the casino (yet). */
+const NOT_HERE = "Games are played in the casino.";
+
 export class Casino {
   status: CasinoStatus | null = null;
   /** Called after any round, so the coins on screen catch up. */
@@ -41,6 +44,12 @@ export class Casino {
 
   async load(): Promise<CasinoStatus> {
     this.status = await this.auth.get<CasinoStatus>("/api/social/casino");
+    // Just come in through the doors: the town may not have heard yet that
+    // you're here (a moment behind). Ask again rather than turn you away.
+    for (let i = 0; i < 4 && this.status.why === NOT_HERE; i++) {
+      await new Promise((r) => setTimeout(r, 900));
+      this.status = await this.auth.get<CasinoStatus>("/api/social/casino");
+    }
     return this.status;
   }
 
@@ -337,7 +346,19 @@ export class Tables {
   }
 
   async load() {
-    this.take(await this.auth.get<Floor>("/api/social/casino/tables"));
+    // Just come in through the doors, the town may not have heard yet that
+    // you're here (a moment behind): ask again rather than leave the room's
+    // tables blank (the wheel, the chips, the croupier).
+    // (The server answers a table-less floor, no instance, to someone it doesn't place in the casino.)
+    for (let i = 0; ; i++) {
+      try {
+        const f = await this.auth.get<Floor>("/api/social/casino/tables");
+        if (f.instance !== null || i >= 8) return this.take(f);
+      } catch (e) {
+        if (i >= 8 || !(e instanceof ApiError) || e.code !== "not_here") throw e;
+      }
+      await new Promise((r) => setTimeout(r, 900));
+    }
   }
 
   private async send(path: string, body: unknown) {

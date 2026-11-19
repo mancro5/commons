@@ -359,6 +359,10 @@ impl Instance {
         let Some(ar) = self.arena.as_mut() else {
             return;
         };
+        // (A bot playing as a player: the server plays its seat.)
+        if self.avatars.get(&id).is_some_and(|a| a.bot) && !ar.m.pilots.contains(&id) {
+            ar.m.pilots.push(id);
+        }
         let was = ar.m.playing(id);
         if !ar.m.join(id, now) {
             self.error(

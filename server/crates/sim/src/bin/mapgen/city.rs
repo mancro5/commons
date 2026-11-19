@@ -1831,7 +1831,8 @@ fn skate_district(b: &mut Builder, ring: &Ring, inner: &Ring, geo: &Geometry, ci
                 } else {
                     b.ground[i] = g("grass");
                     n += 1;
-                    b.decor[i] = if n % 9 == 0 { lamp } else { d("fence") };
+                    // A tall galvanised steel fence, a street lamp in its line now and then.
+                    b.decor[i] = if n % 9 == 0 { lamp } else { d("skate_fence") };
                     b.solid[i] = true;
                 }
                 continue;
@@ -1858,7 +1859,7 @@ fn skate_district(b: &mut Builder, ring: &Ring, inner: &Ring, geo: &Geometry, ci
         .chain((99..103).map(|x| (x, y1 - 1)))
     {
         let i = b.i(x, y);
-        if b.decor[i] == d("fence") || b.decor[i] == lamp {
+        if b.decor[i] == d("skate_fence") || b.decor[i] == lamp {
             b.decor[i] = 0;
             b.solid[i] = false;
             b.ground[i] = g("skate");
@@ -1902,9 +1903,9 @@ fn skate_district(b: &mut Builder, ring: &Ring, inner: &Ring, geo: &Geometry, ci
     // The gap: up one kicker, over the flat, down the far one.
     put("sk_kicker", 111, 237, 3, 3, "e:22");
     put("sk_kicker", 119, 237, 3, 3, "w:22");
-    // A long flat rail, a ledge and a manual pad.
-    put("sk_rail", 95, 247, 14, 1, "h:13:13");
-    put("sk_box", 110, 244, 10, 1, "10");
+    // A really long flat rail along the south (the whole of the west side), a long ledge and a manual pad.
+    put("sk_rail", 80, 247, 48, 1, "h:13:13");
+    put("sk_box", 106, 244, 22, 1, "10");
     // A pyramid: four faces up to a square top.
     put("sk_pyramid", 112, 231, 5, 5, "50");
     // ---- East of the road ----
@@ -1925,9 +1926,9 @@ fn skate_district(b: &mut Builder, ring: &Ring, inner: &Ring, geo: &Geometry, ci
     // A volcano: a round mound, ridden up and over from any side.
     put("sk_volcano", 126, 220, 5, 5, "65");
     // A long ledge, a manual pad and a flat rail down the south.
-    put("sk_box", 135, 233, 9, 1, "10");
+    put("sk_box", 135, 233, 13, 1, "10");
     put("sk_box", 140, 237, 6, 2, "7");
-    put("sk_rail", 142, 240, 6, 1, "h:13:13");
+    put("sk_rail", 136, 240, 12, 1, "h:13:13");
     // The skate shop: a little camper van parked by the north fence, its
     // hatch open to the park (the shop inside it a row behind, so its
     // seller stands between).
@@ -1937,6 +1938,12 @@ fn skate_district(b: &mut Builder, ring: &Ring, inner: &Ring, geo: &Geometry, ci
     }
     for (x, y, v) in trucks {
         b.object("sk_shop_back", x, y - 1, 7, 1, Some(v), false);
+        // It's parked in the fence's line: the van closes the gap (still
+        // solid), with no fence showing over its roof.
+        for xx in x..x + 7 {
+            let i = b.i(xx, y - 1);
+            b.decor[i] = 0;
+        }
     }
     // No street lamp in the fence right behind a ramp or a box (it'd peek over its top).
     let pieces: Vec<(u16, u16, u16, u16)> = b
@@ -1950,7 +1957,18 @@ fn skate_district(b: &mut Builder, ring: &Ring, inner: &Ring, geo: &Geometry, ci
             for xx in x.saturating_sub(1)..x + w + 1 {
                 let i = b.i(xx, yy);
                 if b.decor[i] == lamp {
-                    b.decor[i] = d("fence");
+                    // In the fence's line, fence; out on the pavement, just no lamp
+                    // (not a lone bit of fence peeking over the van's roof).
+                    let fence = d("skate_fence");
+                    let in_line = [
+                        b.i(xx.saturating_sub(1), yy),
+                        b.i(xx + 1, yy),
+                        b.i(xx, yy.saturating_sub(1)),
+                        b.i(xx, yy + 1),
+                    ]
+                    .iter()
+                    .any(|&j| b.decor[j] == fence);
+                    b.decor[i] = if in_line { fence } else { 0 };
                 }
             }
         }
@@ -2814,25 +2832,43 @@ fn meadow(k: &mut Blk) {
     k.spot("picnic", 33, 33);
 }
 
-/// The Fairground: the bandstand stage for jams, and the sports pitch.
+/// The Fairground: the mini golf course over most of it (nine holes, painted
+/// and played client side: `client/src/activities/golfcourse.ts`), and south
+/// of it, either side of the way in, a little sports pitch and the bandstand
+/// stage for jams.
 fn fairground(k: &mut Blk) {
     k.lawn();
-    k.rect(8, 5, 32, 13, "pitch");
-    k.object("goal", 8, 10, 1, 3, "");
-    k.object("goal", 39, 10, 1, 3, "");
-    k.spot("pitch", 24, 19);
-    k.rect(22, 18, 4, 6, "path");
-    k.rect(12, 24, 24, 12, "plaza");
-    k.object("bandstand", 21, 25, 5, 3, "");
-    k.bench(15, 31, 4);
-    k.bench(29, 31, 4);
-    k.spot("stage", 23, 30);
-    k.rect(22, 36, 4, 10, "path");
-    for (x, y) in [(12, 24), (35, 24), (12, 35), (35, 35)] {
+    // The course: open lawn the greens are laid on (walked over, as on any course).
+    k.marker("minigolf", 3, 3, 42, 31, Some("Mini Golf"));
+    // (Plain lawn under it: no darker patches showing between the greens.)
+    k.rect(3, 3, 42, 31, "grass");
+    k.spot("minigolf", 24, 35);
+    // The way in, from the south edge up to the course.
+    k.rect(22, 34, 4, 12, "path");
+    for (x, y) in [(21, 34), (26, 34)] {
         k.decor(x, y, "lamp");
     }
-    k.scatter(3, 20, 11, N - 3, 6, &["tree", "bush"]);
-    k.scatter(37, 20, N - 3, N - 3, 6, &["tree", "bush"]);
+    // The pitch, south-west: smaller, five-a-side.
+    k.rect(4, 37, 16, 8, "pitch");
+    k.object("goal", 4, 39, 1, 3, "");
+    k.object("goal", 19, 39, 1, 3, "");
+    k.spot("pitch", 12, 36);
+    // The bandstand, south-east, on its own little square with benches.
+    k.rect(28, 36, 15, 9, "plaza");
+    k.object("bandstand", 33, 37, 5, 3, "");
+    k.bench(29, 42, 3);
+    k.bench(39, 42, 3);
+    k.spot("stage", 35, 41);
+    for (x, y) in [(28, 36), (42, 36), (28, 44), (42, 44)] {
+        k.decor(x, y, "lamp");
+    }
+    k.rect(26, 39, 2, 3, "path");
+    // Trees round the edges (not on the course, the pitch or the square).
+    k.scatter(2, 34, 4, N - 2, 5, &["tree", "bush"]);
+    k.scatter(20, 35, 22, N - 2, 5, &["bush"]);
+    k.scatter(44, 34, N - 2, N - 2, 5, &["tree", "bush"]);
+    k.scatter(2, 2, 3, 34, 4, &["bush"]);
+    k.scatter(45, 2, N - 2, 34, 4, &["bush"]);
 }
 
 /// The gladiator arena: an amphitheatre in the desert, a rounded square of
@@ -3128,8 +3164,10 @@ fn arena(k: &mut Blk) {
 fn fun_corner(k: &mut Blk) {
     k.lawn();
     k.rect(2, 16, 44, 10, "plaza");
-    // The way down to the street, flower beds along the promenade's edge.
-    k.rect(22, 26, 4, 20, "path");
+    // The ways down to the street, either side of the yard; flower beds
+    // along the promenade's edge.
+    k.rect(2, 26, 2, 20, "path");
+    k.rect(44, 26, 2, 20, "path");
     for x in [4u16, 9, 14, 30, 35, 40] {
         k.rect(x, 26, 3, 1, "flowers");
     }
@@ -3188,27 +3226,89 @@ fn fun_corner(k: &mut Blk) {
     for x in (4..45u16).step_by(5) {
         k.decor(x, 25, "lantern");
     }
-    // Behind, on the lawn: a little course to run round (bunkers, a hay
-    // wall, tyres, a hedge to hide in), and benches to watch from.
-    for (kind, x, y, w, h) in [
-        ("pb_snake", 6u16, 30u16, 4u16, 1u16),
-        ("pb_x", 12, 33, 2, 2),
-        ("pb_hay", 7, 36, 2, 1),
-        ("pb_tires", 15, 30, 1, 1),
-        ("pb_tires", 16, 30, 1, 1),
-        ("pb_drum", 10, 39, 1, 1),
-        ("pb_hedge", 15, 37, 2, 2),
-        ("pb_snake", 32, 31, 1, 4),
-        ("pb_crate", 36, 34, 1, 1),
-        ("pb_crate", 37, 34, 1, 1),
-        ("pb_hay", 39, 38, 2, 1),
-        ("pb_x", 34, 39, 2, 2),
-    ] {
-        k.object(kind, x, y, w, h, "");
+    // Behind, on the lawn: the yard out in the open. A field of turf fenced
+    // round with tall netting, floodlights on its corners, the scoreboard
+    // over its far side, Blue's flag at the west end and Red's at the east;
+    // along the near side, bleachers to watch from either side of the booth,
+    // and more along the far side (sign up to play, or bet on the bots' match
+    // that's on whenever nobody else is). The same game as inside, mirrored
+    // so neither side has the better of it.
+    let (fx, fy, fw, fh) = (5u16, 28u16, 38u16, 14u16);
+    k.rect(fx, fy, fw, fh, "pitch");
+    k.object("pb_field", fx, fy, fw, fh, "Splat Yard");
+    k.marker("pb_grounds", 2, 26, 44, 20, Some("Splat Yard"));
+    let half: &[(&str, u16, u16, u16, u16)] = &[
+        ("pb_snake", 3, 1, 3, 1),
+        ("pb_snake", 3, 12, 3, 1),
+        ("pb_hay", 5, 6, 1, 2),
+        ("pb_crate", 8, 3, 1, 1),
+        ("pb_crate", 9, 3, 1, 1),
+        ("pb_crate", 8, 4, 1, 1),
+        ("pb_crate", 8, 10, 1, 1),
+        ("pb_crate", 9, 10, 1, 1),
+        ("pb_crate", 8, 9, 1, 1),
+        ("pb_hedge", 11, 0, 2, 2),
+        ("pb_hedge", 11, 12, 2, 2),
+        ("pb_tires", 12, 6, 1, 2),
+        ("pb_drum", 14, 3, 1, 1),
+        ("pb_drum", 14, 10, 1, 1),
+        ("pb_hay", 15, 6, 2, 1),
+        ("pb_hay", 15, 7, 2, 1),
+    ];
+    for &(kind, x, y, w, h) in half {
+        k.marker(kind, fx + x, fy + y, w, h, None);
+        k.marker(kind, fx + fw - x - w, fy + y, w, h, None);
     }
-    k.bench(18, 42, 3);
-    k.bench(28, 42, 3);
-    k.scatter(2, 27, N - 2, N - 3, 9, &["tree", "bush", "bush"]);
+    // The middle: the X, and a power-up pad up each flank.
+    k.marker("pb_x", fx + 18, fy + 6, 2, 2, None);
+    k.marker("pb_pad", fx + 18, fy + 1, 2, 2, None);
+    k.marker("pb_pad", fx + 18, fy + 11, 2, 2, None);
+    for y in [3u16, 7, 10] {
+        k.marker("pb_spawn", fx + 1, fy + y, 1, 1, Some("blue"));
+        k.marker("pb_spawn", fx + fw - 2, fy + y, 1, 1, Some("red"));
+    }
+    // The netting all round (a floodlight on each corner, the teams' flags halfway along the ends);
+    // along the far side, only at its corners and under the scoreboard: the
+    // rest's open to two tiers of seats, to watch from the promenade.
+    let far_seats = |x: u16| (fx + 3..20).contains(&x) || (28..fx + fw - 2).contains(&x);
+    for x in fx - 1..=fx + fw {
+        if far_seats(x) {
+            k.decor(x, fy - 1, "bleacher");
+            k.decor(x, fy - 2, "bleacher_hi");
+        } else {
+            k.decor(x, fy - 1, "netfence");
+        }
+        k.decor(x, fy + fh, "netfence");
+    }
+    for y in fy..fy + fh {
+        k.decor(fx - 1, y, "netfence");
+        k.decor(fx + fw, y, "netfence");
+    }
+    for (x, y) in [
+        (fx - 1, fy - 1),
+        (fx + fw, fy - 1),
+        (fx - 1, fy + fh),
+        (fx + fw, fy + fh),
+    ] {
+        k.decor(x, y, "none");
+        k.object("pb_floodlight", x, y, 1, 1, "");
+    }
+    k.decor(fx - 1, fy + 6, "none");
+    k.object("pb_flag", fx - 1, fy + 6, 1, 1, "blue");
+    k.decor(fx + fw, fy + 6, "none");
+    k.object("pb_flag", fx + fw, fy + 6, 1, 1, "red");
+    // The scoreboard over the far side, on the promenade's edge.
+    k.object("pb_scoreboard", 20, 26, 8, 1, "Splat Yard");
+    // The near side: the booth in the middle, bleachers either side (two tiers).
+    k.object("pb_desk", 21, fy + fh + 1, 6, 1, "Sign up · Bets");
+    for x in (fx + 1..20).chain(28..fx + fw - 1) {
+        k.decor(x, fy + fh + 1, "bleacher");
+        k.decor(x, fy + fh + 2, "bleacher_hi");
+    }
+    // A bush or two at the corners of the walk round.
+    for (x, y) in [(4u16, 45u16), (43, 45)] {
+        k.decor(x, y, "bush");
+    }
 }
 
 /// Round the Market, so there's always something going on and you can

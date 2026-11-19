@@ -24,12 +24,14 @@ import type { EntityInfo, ServerMsg } from "../net/protocol.gen";
 import { button, el, isTyping } from "../ui/panels";
 import { TILE, toTexture } from "../world/art";
 import { Avatar } from "../world/avatars";
-import { encodeLook } from "../world/look";
+import { decodeLook, encodeLook } from "../world/look";
 import type { MapObject } from "../world/map";
 import { BLUE_PAINT, RED_PAINT, splat } from "../world/paintballart";
 import { drawPixelText, pixelWidth } from "../world/pixelfont";
 import type { Scene } from "../world/scene";
 import { levelLabel, levelPicker } from "./botlevel";
+import { NightGlows } from "./arenaglow";
+import { BET_STAKE, BetPanel } from "./arenabets";
 
 // ---- the rules (as commons_sim::paintball) -------------------------------------
 
@@ -43,7 +45,7 @@ const BOT_BASE = 0xffffff10;
  * inside the screen and the rest blacked out, so a wide or a tall window, or
  * zooming out, is no way of seeing further.
  */
-export const PB_VIEW = { w: 28, h: 16 };
+export const PB_VIEW = { w: 28, h: 16, flat: false };
 const SLOTS = 6;
 const HP = 3;
 const HOPPER = 12;
@@ -64,9 +66,72 @@ const MUZZLE = 0.45;
 const SPREAD = 0.15;
 const RELOAD_MS = 1300;
 const TO_WIN = 10;
+/** The teams' kit colours (as a look's hue, 0–255): blue, red. */
+const KIT_HUE = [150, 252];
+/** `look` in a kit of `hue`: a jacket and a cap in its colour (face, hair, skin their own). */
+function teamKit(look: number, hue: number, bare = false): number {
+  const l = decodeLook(look);
+  // (The giant goes bare-headed: its mask shows whole.)
+  return encodeLook({ ...l, hue, outfit: 5, hat: bare ? 0 : 2, hatHue: hue, accessory: bare || l.accessory === 4 ? 0 : l.accessory });
+}
+
+/** How far off the yard's grounds (tiles) its sounds fade out to nothing. */
+const FADE_TILES = 3;
+
+/** The Shotgun's three, close together (a Spread power-up's are wider). */
+const SHOTGUN_SPREAD = 0.07;
+/** The classes (as `paintball::class`), and each one's gun (`paintball::GUNS`). */
+export const CLASS = { ASSAULT: 0, SNIPER: 1, SHOTGUN: 2, GUNNER: 3, COUNT: 4 };
+interface Gun {
+  fire: number;
+  hopper: number;
+  reload: number;
+  speed: number;
+  range: number;
+  damage: number;
+  pellets: number[];
+}
+const GUNS: Gun[] = [
+  { fire: FIRE_MS, hopper: HOPPER, reload: RELOAD_MS, speed: BALL_SPEED, range: RANGE, damage: 1, pellets: [0] },
+  { fire: 750, hopper: 5, reload: 1800, speed: 30, range: 26, damage: 2, pellets: [0] },
+  { fire: 480, hopper: 6, reload: 1500, speed: BALL_SPEED, range: RANGE, damage: 1, pellets: [0, -SHOTGUN_SPREAD, SHOTGUN_SPREAD] },
+  { fire: 100, hopper: 50, reload: 2200, speed: 13, range: RANGE, damage: 1, pellets: [0] },
+];
+const gunOf = (c: number | undefined): Gun => GUNS[c ?? 0] ?? GUNS[0];
+/** The giant's marker (as `paintball::GIANT_GUN`). */
+const GIANT_GUN: Gun = { fire: 120, hopper: 60, reload: 2600, speed: 15, range: 16, damage: 1, pellets: [0, -0.11, 0.11] };
+/** How each class is shown: its name, a badge, and what it's like. */
+export const CLASSES = [
+  { name: "Assault", icon: "🔫", tip: "The all-rounder: 12 balls, a steady rate of fire" },
+  { name: "Sniper", icon: "🔭", tip: "Fast shots that fly far and take 2 hearts · a long wait between them · 5 balls" },
+  { name: "Shotgun", icon: "💥", tip: "3 balls a shot, close together · slower to fire · 6 balls" },
+  { name: "Machine Gun", icon: "🌀", tip: "50 balls · fires quicker · the balls fly a bit slower" },
+];
 const OB = { HAY: 1, CRATE: 2, TIRES: 3, DRUM: 4, SNAKE: 5, XBUNK: 6, HEDGE: 7 };
 const POWER = { RAPID: 1, SPREAD: 2, SHIELD: 3, BOUNCE: 4 };
-const EV = { HIT: 1, OUT: 2, SHIELDED: 3, PICKUP: 5, PAD: 6, SHUTDOWN: 7, MATCH_POINT: 8, RESPAWN: 9, DASH: 10, START: 11, END: 12, RELOAD: 13, HOT: 14 };
+const EV = { LATE: 20, HIT: 1, OUT: 2, SHIELDED: 3, PICKUP: 5, PAD: 6, SHUTDOWN: 7, MATCH_POINT: 8, RESPAWN: 9, DASH: 10, START: 11, END: 12, RELOAD: 13, HOT: 14, FLAG_TAKEN: 15, FLAG_DROPPED: 16, FLAG_RETURNED: 17, FLAG_CAPTURED: 18, POINT_TAKEN: 19 };
+/** The modes (as `paintball::mode`), and how each is shown. */
+const MODE = { TEAM: 0, FLAG: 1, POINT: 2, GOLIATH: 3, FFA: 4 };
+/** Free-for-all: each place its own colour (and its kit's hue). */
+const FFA_COLOR = [0x3fa9ff, 0xff4f6a, 0x5ad06a, 0xffc93f, 0xb06aff, 0xff8a3f];
+const FFA_CSS = ["#3fa9ff", "#ff4f6a", "#5ad06a", "#ffc93f", "#b06aff", "#ff8a3f"];
+const FFA_HUE = [150, 252, 85, 35, 195, 18];
+/** Goliath's giant (as `paintball::GIANT_*`): its hearts, its size, its pace, its body's reach, its gun. */
+const GIANT_HP = 160;
+const GIANT_HP_HUMAN = 110;
+const GIANT_HUMAN_FIRE = 1.25;
+const GIANT_SCALE = 1.8;
+const GIANT_SPEED = 0.8;
+const GIANT_HIT_R = 1.0;
+const MODES = [
+  { name: "Team Splat", icon: "🎯", short: "first to 10 outs", tip: "Every out's a point for your side. First to 10 wins." },
+  { name: "Capture the Flag", icon: "🚩", short: "first to 3 captures", tip: "Grab their flag and run it home to yours (while yours is there). Splatted, you drop it; touch your own to send it home. First to 3." },
+  { name: "Control Point", icon: "⭕", short: "first to 200", tip: "Three points: one before each base, the middle worth 1.5×. Stand on one to take it (two of you, twice as fast; theirs on it too, more of you wins). Each scores every second it's yours. First to 200." },
+  { name: "Goliath", icon: "👹", short: "5 hunters v 1 giant", tip: "Five hunters against one giant: 160 hearts, a huge spray of paint, and no coming back. Hunters win by bringing it down; the giant by splatting 15 of them, or lasting the clock." },
+  { name: "Free-for-all", icon: "🎨", short: "first to 10 outs", tip: "Everyone for themselves, each in their own colour. First to 10 outs wins." },
+];
+/** The control points' names (west, middle, east). */
+const POINT_NAMES = ["BLUE SIDE", "MIDDLE", "RED SIDE"];
 const FLAG = { OUT: 1, SPAWN_SHIELD: 2, DASHING: 4, HIDDEN: 8, HOT: 16, RELOADING: 32 };
 const POWERS: Record<number, { icon: string; name: string; color: number; css: string; tip: string }> = {
   [POWER.RAPID]: { icon: "⚡", name: "RAPID FIRE", color: 0xffd23f, css: "#ffd23f", tip: "Twice the rate, and the hopper never runs dry" },
@@ -99,6 +164,9 @@ export type PbSend =
   | { t: "PbStart"; bots: boolean }
   | { t: "PbBot"; slot: number; on: boolean }
   | { t: "PbLevel"; level: number }
+  | { t: "PbClass"; class: number }
+  | { t: "PbMode"; mode: number }
+  | { t: "PbBet"; pick: number }
   | { t: "PbMove"; x: number; y: number; aim: number }
   | { t: "PbFire"; shot: number; x: number; y: number; aim: number }
   | { t: "PbDash" }
@@ -161,6 +229,8 @@ class Ball {
   vx: number;
   vy: number;
   left = RANGE;
+  /** Tiles a second. */
+  speed = BALL_SPEED;
   constructor(
     readonly by: number,
     readonly team: number,
@@ -219,11 +289,25 @@ class Ball {
 
 // ---- sound -------------------------------------------------------------------
 
-/** How loud something at field point (x, y) is for us (set each frame). */
+/**
+ * Whether we're close enough to hear the game at all (0–1, set each
+ * frame): playing, in the hall, or on the yard's grounds, yes; a couple of
+ * tiles off them, fading; further, nothing.
+ */
+let reach = 1;
+/** How loud something at field point (x, y) is for us (set each frame): where we are on or by the field. */
 let ear: { x: number; y: number } | null = null;
-const near = (x: number, y: number) => (ear ? Math.max(0.12, 1 - Math.hypot(x - ear.x, y - ear.y) / 20) : 0.5);
+const near = (x: number, y: number) => (ear ? Math.max(0.12, 1 - Math.hypot(x - ear.x, y - ear.y) / 20) : 0.5) * reach;
+/** Sounds of the game: none of them carries off its grounds. */
+function heard<T extends Record<string, (...a: never[]) => void>>(o: T): T {
+  const out = {} as Record<string, (...a: never[]) => void>;
+  for (const [k, fn] of Object.entries(o)) out[k] = (...a: never[]) => (reach > 0.05 ? fn(...a) : undefined);
+  return out as T;
+}
+/** The crowd, as heard from here. */
+const roar = () => reach > 0.05 && sfx.crowdRoar(reach);
 
-const snd = {
+const snd = heard({
   shot(vol: number) {
     const t = sfx.at(0);
     sfx.burst(t, 0.06, 0.32 * vol, "lowpass", 900, 260, 0.7);
@@ -291,13 +375,13 @@ const snd = {
     const t = sfx.at(0);
     const notes = win ? [523, 659, 784, 1047] : [440, 392, 349, 262];
     notes.forEach((hz, k) => sfx.tone(t + k * 0.13, k === 3 ? 0.6 : 0.16, 0.12, "square", hz));
-    if (win) sfx.crowdRoar();
+    if (win) roar();
   },
   ricochet(vol: number) {
     const t = sfx.at(0);
     sfx.tone(t, 0.12, 0.09 * vol, "triangle", 2400, 900);
   },
-};
+});
 
 let lastClang = 0;
 function clang(x: number, y: number) {
@@ -423,6 +507,8 @@ interface Floater {
   sprite: Sprite;
   x: number;
   y: number;
+  /** Its size as made (scaled on where it's seen). */
+  scale: number;
   at: number;
   life: number;
 }
@@ -437,7 +523,7 @@ interface Gear {
 /** What a bot looks like (the server only knows its id). */
 function botInfo(id: number, at: { x: number; y: number }): EntityInfo {
   const k = (id - BOT_BASE) % SLOTS;
-  return { id, name: `${BOT_NAMES[k]} 🤖`, look: BOT_LOOKS[k], style: 0, pet: 0, vehicle: 0, tool: 0, x: Math.round(at.x), y: Math.round(at.y), state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, reading: 0, calling: false };
+  return { id, name: `${BOT_NAMES[k]} 🤖`, look: BOT_LOOKS[k], style: 0, pet: 0, vehicle: 0, tool: 0, x: Math.round(at.x), y: Math.round(at.y), state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, reading: 0, calling: false, bot: false };
 }
 
 export class PaintballShow {
@@ -526,6 +612,38 @@ export class PaintballShow {
   private touchPad = el("div", "pb-touch");
   private lobbyKey = "";
   private shownResults = false;
+  /**
+   * Out in the city (the yard behind the Splat Yard): the fenced ground
+   * round the field (tiles), where the lobby's shown to you; and the bets
+   * on the bots' match, when one's on.
+   */
+  private grounds: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  /** The yard's scoreboard: the live score on its face (and what it last showed). */
+  private board: { sprite: Sprite; canvas: HTMLCanvasElement; key: string } | null = null;
+  private bets: BetPanel | null = null;
+  /** After dark, everyone stands in a pool of their team's light. */
+  private glows: NightGlows;
+  /** Where each player's drawn this frame (field tiles), and their sprite's depth: a carried flag goes with them. */
+  private drawnAt = new Map<number, { x: number; y: number; z: number }>();
+  /**
+   * Spectating (like the arena's stands): the camera off us and on the
+   * match, gliding after the action or right on one player (`specWho`, 0:
+   * the action); and whether we're watching on a TV (spectating's all
+   * there is to do then).
+   */
+  /** Out: who got us, for the camera to look on at till we're back. */
+  private killer = 0;
+  private killCam: { x: number; y: number } | null = null;
+  /** Whom we've hit lately (when): their out by someone else soon after is an assist. */
+  private hitLately = new Map<number, number>();
+  private spectating = false;
+  private specWho = 0;
+  private specCam: { x: number; y: number } | null = null;
+  private tv = false;
+  private specBar = el("div", "pb-spec");
+  private specKey = "";
+  /** The flags (Capture the Flag), standing on the field: one each. */
+  private flagG = [new Graphics(), new Graphics()];
 
   constructor(
     private scene: Scene,
@@ -537,24 +655,62 @@ export class PaintballShow {
     private nameOf: (id: number) => string,
     private serverNow: () => number,
     private send: (m: PbSend) => void,
+    /** Out in the open (the city's yard), not the hall. */
+    outdoor = false,
+    /** A light of the night's (null: this place has no night), for each player's glow. */
+    nightGlow: (x: number, y: number) => Sprite | null = () => null,
   ) {
+    this.glows = new NightGlows(nightGlow);
     const f = map.objects.find((o) => o.kind === "pb_field")!;
     this.ox = f.x;
     this.oy = f.y;
+    // (Only what's on the field: the kit piled up by the Splat Yard's door isn't in play.)
+    const on = (o: MapObject) => o.x >= f.x && o.y >= f.y && o.x + o.w <= f.x + f.w && o.y + o.h <= f.y + f.h;
     this.field = new Field(
       f.w,
       f.h,
-      map.objects.filter((o) => KINDS[o.kind]).map((o) => ({ kind: KINDS[o.kind], x: o.x - f.x, y: o.y - f.y, w: o.w, h: o.h })),
+      map.objects.filter((o) => KINDS[o.kind] && on(o)).map((o) => ({ kind: KINDS[o.kind], x: o.x - f.x, y: o.y - f.y, w: o.w, h: o.h })),
     );
-    // Paint on the turf: just over the field's markings, under everyone.
+    if (outdoor) {
+      const g = map.objects.find((o) => o.kind === "pb_grounds") ?? { x: f.x - 3, y: f.y - 3, w: f.w + 6, h: f.h + 6 };
+      this.grounds = { x0: g.x, y0: g.y, x1: g.x + g.w, y1: g.y + g.h };
+      // The scoreboard over the far side: the score put on its face as it changes.
+      const sb = map.objects.find((o) => o.kind === "pb_scoreboard");
+      if (sb) {
+        const cv = document.createElement("canvas");
+        cv.width = sb.w * TILE - 36;
+        cv.height = 28;
+        const sprite = new Sprite(toTexture(cv));
+        const foot = (sb.y + sb.h) * TILE - 1;
+        // (On the board's black face: its picture stands 70 px over its tile, the face 14 px into that.)
+        sprite.position.set(sb.x * TILE + 18, (sb.y + sb.h) * TILE - (sb.h * TILE + 70) + 14);
+        sprite.zIndex = foot + 0.1;
+        this.scene.standOn(sprite, foot);
+        this.scene.sorted.addChild(sprite);
+        this.board = { sprite, canvas: cv, key: "" };
+      }
+      this.bets = new BetPanel({
+        bet: (pick) => this.send({ t: "PbBet", pick }),
+        name: (slot) => BOT_NAMES[slot] ?? "",
+        css: (slot) => (slot < 3 ? "#5aa8ff" : "#ff6a5a"),
+      });
+    }
+    // Paint on the turf: just over the field's markings, under everyone (laid flat on it in 3D).
     this.decals.zIndex = f.y * TILE + 2;
+    this.scene.lieFlat(this.decals);
     this.scene.sorted.addChild(this.decals);
     this.pads.zIndex = f.y * TILE + 3;
+    this.scene.lieFlat(this.pads);
     this.scene.sorted.addChild(this.pads);
+    for (const g of this.flagG) this.scene.sorted.addChild(g);
     this.top.zIndex = 1e9;
     this.top.addChild(this.aimLine, this.fx, this.bars);
-    this.scene.world.addChild(this.top);
+    // (Drawn where things are seen, `at`: in 3D, over their spot in perspective.)
+    this.scene.drawnAsIs(this.top);
+    this.scene.sorted.addChild(this.top);
     this.buildHud();
+    this.specBar.hidden = true;
+    document.body.append(this.specBar);
     window.addEventListener("keydown", this.onKey, true);
     window.addEventListener("keyup", this.onKeyUp, true);
     window.addEventListener("blur", this.onBlur);
@@ -575,6 +731,69 @@ export class PaintballShow {
     const [w, h] = [`${Math.round(px.w)}px`, `${Math.round(px.h)}px`];
     if (this.sight.style.width !== w) this.sight.style.width = w;
     if (this.sight.style.height !== h) this.sight.style.height = h;
+  }
+
+  /** Whether you're by the field (in the hall, always; out in the city, on its grounds). */
+  private near(): boolean {
+    const g = this.grounds;
+    if (!g) return true;
+    const a = this.avatarOf(this.selfId());
+    if (!a) return false;
+    const p = a.pos;
+    return p.x >= g.x0 && p.x < g.x1 && p.y >= g.y0 && p.y < g.y1;
+  }
+
+  /** Our bet on the bots' match was taken. */
+  onBetPlaced(pick: number, pays: number) {
+    const s = this.state;
+    this.bets?.placed(s ? this.betState(s) : null, pick, pays);
+    sfx.cash(0.5, 1);
+  }
+
+  /** How our bet went. */
+  onBetSettled(coins: number, refund: boolean) {
+    this.bets?.settled();
+    if (refund) this.announce("🪙 BET RETURNED", "#c9c2b0", 1, "the match came to nothing");
+    else if (coins > 0) {
+      this.announce(`🪙 +${coins} COINS!`, "#ffd23f", 1.6, "your team took it");
+      sfx.cash(1, coins);
+    } else this.announce("🪙 YOUR BET'S LOST", "#c9c2b0", 1);
+  }
+
+  /** The yard's scoreboard: Blue's score, Red's, and what's on (a match, the bots', or the next one coming). */
+  private drawBoard() {
+    const b = this.board;
+    if (!b) return;
+    const s = this.state;
+    const on = !!s && s.status !== LOBBY;
+    const secs = s ? Math.ceil(Math.max(0, s.phaseMs) / 1000) : 0;
+    const what = !s || !on ? "NEXT MATCH SOON" : s.status === COUNTDOWN ? `STARTING ${secs}` : s.status === OVER ? (s.winner === 0 ? "BLUE WINS" : s.winner === 1 ? "RED WINS" : "A DRAW") : s.exhibit ? "BOTS' MATCH" : "LIVE";
+    const key = `${s?.blue ?? 0}|${s?.red ?? 0}|${what}`;
+    if (key === b.key) return;
+    b.key = key;
+    const ctx = b.canvas.getContext("2d")!;
+    const w = b.canvas.width;
+    ctx.clearRect(0, 0, w, b.canvas.height);
+    const big = (text: string, x: number, color: string) => {
+      // Lamp digits: drawn twice as big, a glow behind.
+      const tmp = document.createElement("canvas");
+      tmp.width = pixelWidth(text) + 2;
+      tmp.height = 8;
+      const t = tmp.getContext("2d")!;
+      drawPixelText(t, text, 1, 1, color);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(tmp, Math.round(x - tmp.width), 1, tmp.width * 2, 16);
+    };
+    big(String(on ? (s?.blue ?? 0) : 0), w / 2 - 10, "#7fb8e8");
+    big(String(on ? (s?.red ?? 0) : 0), w / 2 + 10 + 16, "#e88a8a");
+    drawPixelText(ctx, "-", Math.round(w / 2 - 2), 6, "#d8d0b8");
+    drawPixelText(ctx, what, Math.round(w / 2 - pixelWidth(what) / 2), 20, on ? "#d8c070" : "#8a8a8a");
+    b.sprite.texture.source.update();
+  }
+
+  /** The bots' match as the bet panel reads it (the teams: places 0–2, 3–5). */
+  private betState(s: State) {
+    return { round: s.round, mode: 3, slots: s.slots, goliath: 0, betMs: s.betMs, bets: s.bets, betPay: s.betPay };
   }
 
   get capturing(): boolean {
@@ -598,6 +817,40 @@ export class PaintballShow {
     return this.nameOf(id);
   }
 
+  /** Whether `id` is Goliath's giant. */
+  private isGiant(id: number): boolean {
+    return !!this.state && this.state.mode === MODE.GOLIATH && this.state.giant === id;
+  }
+
+  /** The giant's hearts when whole: a bot's, or (fewer) a person's. */
+  private giantMax(): number {
+    const id = this.state?.giant ?? 0;
+    return id >= BOT_BASE && id < BOT_BASE + SLOTS ? GIANT_HP : GIANT_HP_HUMAN;
+  }
+
+  /** `p`'s gun: its class's, or the giant's. */
+  private gunFor(p: { id: number; class: number } | undefined): Gun {
+    return p && this.isGiant(p.id) ? GIANT_GUN : gunOf(p?.class);
+  }
+
+  /** `id`'s colour: their side's, or (Free-for-all) their own. */
+  private colorOf(id: number): number {
+    const s = this.state;
+    if (s?.mode === MODE.FFA) return FFA_COLOR[Math.max(0, s.slots.indexOf(id)) % 6];
+    return TEAM_COLOR[this.teamOf(id)];
+  }
+  private cssOf(id: number): string {
+    const s = this.state;
+    if (s?.mode === MODE.FFA) return FFA_CSS[Math.max(0, s.slots.indexOf(id)) % 6];
+    return TEAM_CSS[this.teamOf(id)];
+  }
+  /** `id`'s kit hue (Free-for-all: their own colour's). */
+  private hueOf(id: number): number {
+    const s = this.state;
+    if (s?.mode === MODE.FFA) return FFA_HUE[Math.max(0, s.slots.indexOf(id)) % 6];
+    return KIT_HUE[this.teamOf(id)] ?? KIT_HUE[0];
+  }
+
   private teamOf(id: number): number {
     return this.state?.players.find((p) => p.id === id)?.team ?? (this.state ? Math.floor(Math.max(0, this.state.slots.indexOf(id)) / 3) : 0);
   }
@@ -619,7 +872,24 @@ export class PaintballShow {
 
   /** Where the camera looks: a little ahead of us toward the aim, shaking when we're hit. */
   camera(pos: { x: number; y: number }): { x: number; y: number } {
+    if (this.spectating && !this.capturing) {
+      const f = this.specFocus();
+      if (!this.specCam) this.specCam = { ...f };
+      this.specCam.x += (f.x - this.specCam.x) * 0.08;
+      this.specCam.y += (f.y - this.specCam.y) * 0.08;
+      return this.specCam;
+    }
     if (!this.capturing) return pos;
+    // Out: the camera goes over to whoever got us, till we're back.
+    const k = this.me.out && this.killer ? this.drawnAt.get(this.killer) : undefined;
+    if (k) {
+      const t = this.toTile(k.x, k.y);
+      if (!this.killCam) this.killCam = { x: pos.x, y: pos.y };
+      this.killCam.x += (t.x - this.killCam.x) * 0.06;
+      this.killCam.y += (t.y - this.killCam.y) * 0.06;
+      return this.killCam;
+    }
+    this.killCam = null;
     const sx = this.shake > 0 ? (Math.random() - 0.5) * this.shake : 0;
     const sy = this.shake > 0 ? (Math.random() - 0.5) * this.shake : 0;
     return { x: pos.x + this.camLead.x + sx, y: pos.y + this.camLead.y + sy };
@@ -628,9 +898,26 @@ export class PaintballShow {
   // ---- input -------------------------------------------------------------------
 
   private onKey = (e: KeyboardEvent) => {
+    if (this.spectating && !this.capturing && !isTyping(e)) {
+      const dir = e.code === "ArrowLeft" || e.code === "KeyA" ? -1 : e.code === "ArrowRight" || e.code === "KeyD" ? 1 : 0;
+      if (dir || (e.code === "Escape" && !this.tv)) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (dir && !e.repeat) this.cycleSpec(dir);
+        else if (!dir) this.setSpectating(false);
+        return;
+      }
+    }
     if (!this.capturing || isTyping(e)) return;
     const code = e.code;
     const move = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(code);
+    const digit = /^Digit([1-4])$/.exec(code);
+    if (digit && !e.repeat) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.pickClass(Number(digit[1]) - 1);
+      return;
+    }
     if (!move && !["Space", "ShiftLeft", "ShiftRight", "KeyR"].includes(code)) return;
     e.preventDefault();
     e.stopPropagation();
@@ -795,8 +1082,9 @@ export class PaintballShow {
   private reload() {
     const now = this.serverNow();
     const rapid = this.powerOf(this.mine()) === POWER.RAPID;
-    if (this.me.out || rapid || this.me.reloadUntil > now || this.me.ammo >= HOPPER) return;
-    this.me.reloadUntil = now + RELOAD_MS;
+    const gun = this.gunFor(this.mine());
+    if (this.me.out || rapid || this.me.reloadUntil > now || this.me.ammo >= gun.hopper) return;
+    this.me.reloadUntil = now + gun.reload;
     this.send({ t: "PbReload" });
     snd.reload(1);
   }
@@ -874,11 +1162,17 @@ export class PaintballShow {
       case EV.HIT:
       case EV.OUT: {
         this.dropBall(e.a, e.n);
-        const team = this.teamOf(e.a);
-        const color = TEAM_COLOR[team];
+        const color = this.colorOf(e.a);
         this.decal(x, y, color, e.kind === EV.OUT ? 7 : 4);
         this.burst(x, y, color, e.kind === EV.OUT ? 26 : 10, e.kind === EV.OUT ? 1.6 : 1);
         this.paintOn(e.b, color);
+        if (e.a === me) this.hitLately.set(e.b, now);
+        if (e.b === me && e.kind === EV.OUT) this.killer = e.a;
+        // Someone we'd hit just now, put out by another: an assist.
+        if (e.kind === EV.OUT && e.a !== me && e.b !== me && now - (this.hitLately.get(e.b) ?? -1e9) < 4000) {
+          this.hitLately.delete(e.b);
+          this.float("+ASSIST", "#ffd23f", x, y - 2, 1.1);
+        }
         if (e.a === me) {
           this.flashCross(e.kind === EV.OUT);
           this.buzz(e.kind === EV.OUT ? [25, 40, 25] : 12);
@@ -894,7 +1188,7 @@ export class PaintballShow {
         }
         // Out!
         snd.out(near(x, y));
-        this.float("SPLAT!", TEAM_CSS[team], x, y - 1.4, 1.6);
+        this.float("SPLAT!", this.cssOf(e.a), x, y - 1.4, 1.6);
         this.addFeed(e.a, e.b);
         this.clearPaint(e.b);
         if (e.a === me) {
@@ -904,11 +1198,15 @@ export class PaintballShow {
           const n = this.recentKills.length;
           this.announce(n >= 4 ? "SPLATTASTIC!" : n === 3 ? "TRIPLE SPLAT!" : n === 2 ? "DOUBLE SPLAT!" : `SPLATTED ${this.who(e.b).toUpperCase()}`, n >= 2 ? "#ffd23f" : "#ffffff", n >= 2 ? 1.25 : 1);
         } else if (e.b === me) {
-          this.announce(`SPLATTED BY ${this.who(e.a).toUpperCase()}`, TEAM_CSS[team], 1);
+          this.announce(`SPLATTED BY ${this.who(e.a).toUpperCase()}`, this.cssOf(e.a), 1);
         }
-        if (this.state) sfx.crowdRoar();
+        if (this.state) roar();
         break;
       }
+      case EV.LATE:
+        this.dropBall(e.a, e.n);
+        this.decal(x, y, this.colorOf(e.a), 3);
+        break;
       case EV.SHIELDED:
         this.dropBall(e.a, e.n);
         this.ring(x, y, 0x7af7ff);
@@ -937,7 +1235,7 @@ export class PaintballShow {
         snd.heart();
         break;
       case EV.RESPAWN:
-        this.ring(x, y, TEAM_COLOR[this.teamOf(e.a)]);
+        this.ring(x, y, this.colorOf(e.a));
         if (e.a === me) this.announce("BACK IN!", "#7ee05a", 0.9);
         break;
       case EV.DASH:
@@ -956,6 +1254,38 @@ export class PaintballShow {
       case EV.HOT:
         this.announce(e.a === me ? "🔥 YOU'RE ON FIRE!" : `🔥 ${this.who(e.a).toUpperCase()} IS ON FIRE`, "#ff9a3f", 1.2);
         break;
+      case EV.FLAG_TAKEN: {
+        const mineFlag = this.mine()?.team === e.b;
+        this.burst(x, y, TEAM_COLOR[e.b], 16, 1);
+        snd.pickup();
+        if (e.a === me) this.announce("🚩 YOU HAVE THEIR FLAG!", "#ffd23f", 1.3, "Run it home to yours");
+        else this.announce(mineFlag ? `🚩 ${this.who(e.a).toUpperCase()} TOOK YOUR FLAG` : `🚩 ${this.who(e.a).toUpperCase()} HAS ${TEAM_NAME[e.b]}'S FLAG`, TEAM_CSS[1 - e.b], 1.1);
+        break;
+      }
+      case EV.FLAG_DROPPED:
+        this.ring(x, y, TEAM_COLOR[e.b]);
+        this.float("DROPPED", TEAM_CSS[e.b], x, y - 1.4, 1.2);
+        break;
+      case EV.FLAG_RETURNED:
+        this.ring(x, y, TEAM_COLOR[e.b]);
+        this.announce(`🚩 ${TEAM_NAME[e.b]} FLAG RETURNED`, TEAM_CSS[e.b], 0.9, e.a ? `by ${this.who(e.a)}` : "");
+        break;
+      case EV.FLAG_CAPTURED: {
+        const team = 1 - e.b;
+        this.burst(x, y, TEAM_COLOR[team], 40, 2);
+        this.ring(x, y, TEAM_COLOR[team]);
+        this.announce(e.a === me ? "🏁 YOU CAPTURED IT!" : `🏁 ${this.who(e.a).toUpperCase()} CAPTURED!`, TEAM_CSS[team], 1.6, `${TEAM_NAME[team]} ${e.n}`);
+        snd.fanfare(this.mine()?.team !== e.b);
+        roar();
+        break;
+      }
+      case EV.POINT_TAKEN: {
+        const where = POINT_NAMES[e.n] ?? "A POINT";
+        this.ring(x, y, e.b < 2 ? TEAM_COLOR[e.b] : 0xf2e8d4);
+        this.announce(e.b < 2 ? `⭕ ${TEAM_NAME[e.b]} TOOK ${where === "MIDDLE" ? "THE MIDDLE" : where}` : `⭕ ${where} IS NOBODY'S`, e.b < 2 ? TEAM_CSS[e.b] : "#f2e8d4", e.n === 1 ? 1.2 : 1);
+        if (e.b < 2) roar();
+        break;
+      }
     }
   }
 
@@ -964,12 +1294,14 @@ export class PaintballShow {
   private launch(by: number, team: number, n: number, x: number, y: number, aim: number, kind: number, mine: boolean) {
     const hot = (this.state?.players.find((p) => p.id === by)?.flags ?? 0) & FLAG.HOT;
     const bounce = kind & 1 ? 1 : 0;
-    const add = (k: number, off: number) => this.balls.push({ ball: new Ball(by, team, (n & 0x0fff) | (k << 12), x, y, aim + off, bounce), color: TEAM_COLOR[team], hot: !!hot, trail: [], mine });
-    if (kind & 2) {
-      add(0, 0);
-      add(1, -SPREAD);
-      add(2, SPREAD);
-    } else add(0, 0);
+    const cls = (kind >> 2) & 3;
+    const gun = kind & 16 ? GIANT_GUN : gunOf(cls);
+    [...gun.pellets, ...(kind & 2 ? [-SPREAD, SPREAD] : [])].forEach((off, k) => {
+      const ball = new Ball(by, team, (n & 0x0fff) | (k << 12), x, y, aim + off, bounce);
+      ball.speed = gun.speed;
+      ball.left = gun.range;
+      this.balls.push({ ball, color: this.colorOf(by), hot: !!hot, trail: [], mine });
+    });
   }
 
   private dropBall(by: number, n: number) {
@@ -992,18 +1324,20 @@ export class PaintballShow {
       return;
     }
     const hot = (p.flags & FLAG.HOT) !== 0;
-    this.me.nextFire = now + (rapid ? FIRE_RAPID_MS : hot ? FIRE_HOT_MS : FIRE_MS);
+    const gun = this.gunFor(p);
+    const trigger = this.isGiant(p.id) ? GIANT_HUMAN_FIRE : 1;
+    this.me.nextFire = now + (gun.fire * trigger * (rapid ? FIRE_RAPID_MS : hot ? FIRE_HOT_MS : FIRE_MS)) / FIRE_MS;
     this.me.lastShotAt = now;
     this.me.shotN = (this.me.shotN + 1) & 0x0fff;
     const aim = this.me.aim;
-    const kind = (power === POWER.BOUNCE ? 1 : 0) | (power === POWER.SPREAD ? 2 : 0);
+    const kind = (power === POWER.BOUNCE ? 1 : 0) | (power === POWER.SPREAD ? 2 : 0) | (p.class << 2) | (this.isGiant(p.id) ? 16 : 0);
     this.launch(this.selfId(), p.team, this.me.shotN, this.me.x, this.me.y, aim, kind, true);
     this.send({ t: "PbFire", shot: this.me.shotN, x: Math.round(this.me.x * 100), y: Math.round(this.me.y * 100), aim: Math.round((((aim % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * 65536) & 0xffff });
     if (!rapid) {
       this.me.ammo--;
       if (this.me.ammo <= 0) {
         // Empty: reloading (and saying so, in case the server's count is a ball behind).
-        this.me.reloadUntil = now + RELOAD_MS;
+        this.me.reloadUntil = now + gun.reload;
         this.send({ t: "PbReload" });
         snd.reload(0.6);
       }
@@ -1024,6 +1358,11 @@ export class PaintballShow {
     const dt = Math.min(0.05, (wallNow - this.lastFrame) / 1000);
     this.lastFrame = wallNow;
     const s = this.state;
+    this.drawBoard();
+    // (Out in the city, the lobby shows as you walk onto the grounds, not only when the match changes.)
+    if (this.grounds) this.renderLobby();
+    // Out in the city: bets on the bots' match, for those watching from the grounds.
+    if (this.bets) this.bets.update(s && s.exhibit ? this.betState(s) : null, this.near() && !this.capturing);
     const live = !!s && s.status !== LOBBY;
     const me = this.selfId();
     const p = this.mine();
@@ -1032,7 +1371,7 @@ export class PaintballShow {
       // A reload done on our clock: the hopper's full again now (the server's agrees a beat later).
       if (this.me.reloadUntil && serverNow >= this.me.reloadUntil) {
         this.me.reloadUntil = 0;
-        this.me.ammo = HOPPER;
+        this.me.ammo = this.gunFor(p).hopper;
         this.me.reloadDoneAt = serverNow;
       }
       const d = this.moveDir();
@@ -1062,8 +1401,9 @@ export class PaintballShow {
         } else {
           // Ease into a run and out of it (quick, but no jolt).
           const k = Math.min(1, dt * (d.x || d.y ? 16 : 20));
-          this.me.vx += (d.x * SPEED - this.me.vx) * k;
-          this.me.vy += (d.y * SPEED - this.me.vy) * k;
+          const pace = SPEED * (this.isGiant(p.id) ? GIANT_SPEED : 1);
+          this.me.vx += (d.x * pace - this.me.vx) * k;
+          this.me.vy += (d.y * pace - this.me.vy) * k;
           if (!d.x && !d.y && Math.hypot(this.me.vx, this.me.vy) < 0.05) this.me.vx = this.me.vy = 0;
         }
         const [nx, ny] = this.field.slide(this.me.x, this.me.y, this.me.vx * dt, this.me.vy * dt, PLAYER_R);
@@ -1100,7 +1440,8 @@ export class PaintballShow {
       this.camLead.x += (lead.x - this.camLead.x) * Math.min(1, dt * 3);
       this.camLead.y += (lead.y - this.camLead.y) * Math.min(1, dt * 3);
       ear = { x: this.me.x, y: this.me.y };
-    } else ear = null;
+      reach = 1;
+    } else this.listen();
     this.drawSticks(p);
     this.shake = Math.max(0, this.shake - dt * 0.6);
     // Bots come and go with the match.
@@ -1134,7 +1475,9 @@ export class PaintballShow {
         const walking = self ? Math.hypot(this.me.vx, this.me.vy) > 0.6 || serverNow < this.me.dashUntil : !!prev && Math.hypot(pos.x - prev.x, pos.y - prev.y) > 0.05;
         const out = (q.flags & FLAG.OUT) !== 0;
         const t = this.toTile(pos.x, pos.y);
-        avatar.setArena({ x: t.x, y: t.y, facing: Math.cos(pos.aim) >= 0 ? 1 : -1, frame: null, walking: walking && !out, hurt: false });
+        avatar.setArena({ x: t.x, y: t.y, facing: Math.cos(pos.aim) >= 0 ? 1 : -1, frame: null, walking: walking && !out, hurt: false, look: teamKit(avatar.info.look, this.hueOf(q.id), this.isGiant(q.id)), height: (this.isGiant(q.id) ? GIANT_SCALE : 1) * 34 + 12, ...(this.isGiant(q.id) ? { scale: GIANT_SCALE, mask: true } : {}) });
+        avatar.setTag("pb");
+        this.drawnAt.set(q.id, { x: pos.x, y: pos.y, z: avatar.sprite.zIndex });
         // Hiding: faint to friends, gone to the other side (bar a rustle).
         const hidden = (q.flags & FLAG.HIDDEN) !== 0;
         const myTeam = p?.team ?? -1;
@@ -1153,14 +1496,153 @@ export class PaintballShow {
         if (a) {
           a.setArena(null);
           a.setFade(1);
+          a.setTag(null);
         }
       }
     }
     for (const a of this.bots.values()) a.update(serverNow, wallNow);
+    this.glows.flush();
     this.flyBalls(dt, s);
     this.drawFx(wallNow, dt);
     this.drawPads(wallNow);
+    this.drawObjectives(wallNow);
     this.updateHud(serverNow, wallNow);
+    this.updateSpec();
+  }
+
+  /**
+   * Not playing: our ear's wherever we stand (field tiles). In the hall the
+   * game's all round us; out in the city, only on the yard's grounds, fading
+   * out over a couple of tiles off them.
+   */
+  private listen() {
+    if (this.spectating && this.specCam) {
+      const f = this.specCam;
+      ear = { x: f.x + 0.5 - this.ox, y: f.y + 1 - this.oy };
+      reach = 1;
+      return;
+    }
+    const a = this.avatarOf(this.selfId());
+    if (!a) {
+      ear = null;
+      reach = this.grounds ? 0 : 1;
+      return;
+    }
+    ear = { x: a.pos.x + 0.5 - this.ox, y: a.pos.y + 0.5 - this.oy };
+    const g = this.grounds;
+    if (!g) {
+      reach = 1;
+      return;
+    }
+    const dx = Math.max(g.x0 - a.pos.x, 0, a.pos.x - (g.x1 - 1));
+    const dy = Math.max(g.y0 - a.pos.y, 0, a.pos.y - (g.y1 - 1));
+    reach = Math.max(0, 1 - Math.hypot(dx, dy) / FADE_TILES);
+  }
+
+  // ---- spectating ----------------------------------------------------------------
+
+  /** Watching on a TV: spectating from the start, and nothing else to do. */
+  setTv(on: boolean) {
+    this.tv = on;
+    this.setSpectating(on);
+  }
+
+  get spectatingNow(): boolean {
+    return this.spectating && !this.capturing;
+  }
+
+  /**
+   * The view to hold while spectating (null: as you like it): on a TV the
+   * whole field (or, following one player, the players' own view); in
+   * person, free (the wheel zooms).
+   */
+  spectateView(): { w: number; h: number; flat?: boolean } | null {
+    if (!this.spectatingNow || !this.tv) return null;
+    return this.specWho ? PB_VIEW : { w: this.field.w + 6, h: this.field.h + 8, flat: false };
+  }
+
+  /** Whether there's a match to spectate, from here (by or in the field, or on a TV). */
+  private canSpectate(): boolean {
+    const s = this.state;
+    return !this.capturing && !!s && s.status !== LOBBY && (this.tv || this.near());
+  }
+
+  private setSpectating(on: boolean) {
+    if (on === this.spectating) return;
+    this.spectating = on;
+    this.specWho = 0;
+    this.specCam = null;
+    this.specKey = "";
+    if (!on) this.scene.zoomSnap();
+    sfx.tone(sfx.at(0), 0.08, 0.06, "triangle", on ? 880 : 660);
+  }
+
+  /** Who can be followed, in turn: the action, then each player (by place). */
+  private specList(): number[] {
+    const s = this.state;
+    const ids = s && s.status !== LOBBY ? s.slots.filter((id) => id && s.players.some((p) => p.id === id)) : [];
+    return [0, ...ids];
+  }
+
+  private cycleSpec(dir: 1 | -1) {
+    const list = this.specList();
+    const i = Math.max(0, list.indexOf(this.specWho));
+    this.specWho = list[(i + dir + list.length) % list.length];
+    sfx.tone(sfx.at(0), 0.05, 0.05, "triangle", 990);
+  }
+
+  /**
+   * Where the spectating camera looks (avatar tiles): right on whoever's
+   * followed; else the action, between the field's middle and everyone still
+   * in (a flag-carrier counting double).
+   */
+  private specFocus(): { x: number; y: number } {
+    const mid = this.toTile(this.field.w / 2, this.field.h / 2 + 1);
+    const s = this.state;
+    if (!s || s.status === LOBBY) return mid;
+    const one = this.specWho ? this.drawnAt.get(this.specWho) : undefined;
+    if (one) return this.toTile(one.x, one.y);
+    const carriers = new Set(s.mode === MODE.FLAG ? s.flags.map((f) => f.carrier).filter(Boolean) : []);
+    let x = 0;
+    let y = 0;
+    let n = 0;
+    for (const p of s.players) {
+      if (p.flags & FLAG.OUT) continue;
+      const at = this.drawnAt.get(p.id);
+      if (!at) continue;
+      const k = carriers.has(p.id) ? 2 : 1;
+      x += at.x * k;
+      y += at.y * k;
+      n += k;
+    }
+    if (!n) return mid;
+    const t = this.toTile(x / n, y / n);
+    return { x: mid.x * 0.35 + t.x * 0.65, y: mid.y * 0.35 + t.y * 0.65 };
+  }
+
+  /** The 🔭 bar: spectate (or stop), and whom (◀ the action, or a player in their colour ▶). */
+  private updateSpec() {
+    const can = this.canSpectate();
+    if (!can && this.spectating && !this.tv) this.setSpectating(false);
+    this.specBar.hidden = !can;
+    if (!can) return;
+    if (!this.specList().includes(this.specWho)) this.specWho = 0;
+    const s = this.state!;
+    const who = this.specWho;
+    const team = who ? (s.players.find((p) => p.id === who)?.team ?? 0) : -1;
+    const key = `${this.spectating}|${who}|${team}|${this.tv}`;
+    if (key === this.specKey) return;
+    this.specKey = key;
+    this.specBar.replaceChildren();
+    if (!this.tv) this.specBar.append(button(this.spectating ? "🔭 Stop spectating" : "🔭 Spectate", () => this.setSpectating(!this.spectating), `pb-spec-btn${this.spectating ? " on" : ""}`));
+    if (this.spectating) {
+      const pick = el("div", "pb-spec-pick");
+      const name = el("b", "", who ? this.who(who) : "🎥 The action");
+      if (who) name.style.color = this.cssOf(who);
+      pick.append(button("◀", () => this.cycleSpec(-1), "subtle"), name, button("▶", () => this.cycleSpec(1), "subtle"));
+      this.specBar.append(pick);
+      this.specBar.append(el("small", "", this.tv ? "← → to follow a player" : "← → to follow a player · Esc to stop"));
+    }
   }
 
   /** The sticks under the thumbs, and (by touch) a dotted line where we're aiming. */
@@ -1187,7 +1669,8 @@ export class PaintballShow {
       const x = this.me.x + c * t;
       const y = this.me.y + sn * t;
       if (!this.field.free(x, y, 0.02)) break;
-      g.rect(Math.round(this.wx(x)) - 1, Math.round(this.wy(y) - 12) - 1, 2, 2).fill({ color: TEAM_COLOR[p.team], alpha: (this.aimStick ? 0.8 : 0.35) * (1 - t / reach) });
+      const d = this.at(this.wx(x), this.wy(y), 12);
+      g.rect(Math.round(d.x) - 1, Math.round(d.y) - 1, 2 * d.s, 2 * d.s).fill({ color: this.colorOf(p.id), alpha: (this.aimStick ? 0.8 : 0.35) * (1 - t / reach) });
     }
   }
 
@@ -1256,43 +1739,62 @@ export class PaintballShow {
     // The ring under them, in their colour (brighter for us).
     const self = q.id === this.selfId();
     g.ring.clear();
-    g.ring.ellipse(fx, fy + 1, 11, 5).stroke({ width: self ? 2 : 1.5, color: TEAM_COLOR[q.team], alpha: self ? 0.95 : 0.7 });
+    const col = this.colorOf(q.id);
+    const big = this.isGiant(q.id) ? GIANT_SCALE : 1;
+    const out = (q.flags & FLAG.OUT) !== 0;
+    if (!out) {
+      const p = 0.5 + 0.5 * Math.sin(now / 260 + q.id);
+      g.ring.ellipse(fx, fy + 1, (20 + p * 2) * big, (9 + p) * big).fill({ color: col, alpha: 0.12 });
+      g.ring.ellipse(fx, fy + 1, 14 * big, 6 * big).fill({ color: col, alpha: 0.18 });
+      if (alpha > 0.05) this.glows.add(fx, fy, col, 2 * big, 1.3 * big, 0.6 * alpha);
+    }
+    g.ring.ellipse(fx, fy + 1, 11 * big, 5 * big).stroke({ width: self ? 2 : 1.5, color: col, alpha: self ? 0.95 : 0.7 });
     if (q.flags & FLAG.HOT) g.ring.ellipse(fx, fy + 1, 13 + Math.sin(now / 90) * 1.5, 6).stroke({ width: 1, color: 0xff9a3f, alpha: 0.8 });
     g.ring.zIndex = feet - 0.6;
     // The marker, in their hands, pointing where they aim (hopper up).
     const left = Math.cos(pos.aim) < 0;
     g.kick = Math.max(0, g.kick - 0.25);
-    g.gun.position.set(Math.round(fx + (left ? -3 : 3) - Math.cos(pos.aim) * g.kick * 2), Math.round(feet - 15 - Math.sin(pos.aim) * g.kick * 2));
+    g.gun.position.set(Math.round(fx + (left ? -3 : 3) * big - Math.cos(pos.aim) * g.kick * 2), Math.round(feet - 15 * big - Math.sin(pos.aim) * g.kick * 2));
     g.gun.rotation = pos.aim;
-    g.gun.scale.set(1, left ? -1 : 1);
+    g.gun.scale.set(big, left ? -big : big);
     // Aiming up, it's behind them; down, in front.
     g.gun.zIndex = avatar.sprite.zIndex + (Math.sin(pos.aim) < -0.3 ? -0.2 : 0.3);
     g.paint.position.set(fx, feet);
+    g.paint.scale.set(big);
     g.paint.zIndex = avatar.sprite.zIndex + 0.25;
     if (alpha <= 0.05) return;
     // Overhead: paint left, the reload, the power-up.
-    const hy = feet - 42;
+    // (Just over their head, under the name: drawn where it's seen, 3D or not.)
+    const o = this.at(fx, feet, 39 * big);
+    const k = o.s;
+    const hx = o.x;
+    const hy = o.y;
     const b = this.bars;
-    for (let i = 0; i < HP; i++) {
-      const x = fx - 8 + i * 6;
-      b.rect(x - 1, hy - 1, 5, 5).fill({ color: 0x1a1020, alpha: 0.8 * alpha });
-      b.rect(x, hy, 3, 3).fill({ color: i < q.hp ? TEAM_COLOR[q.team] : 0x4a4250, alpha });
-    }
+    if (big > 1) {
+      // The giant's hearts: one long bar.
+      b.rect(hx - 26 * k, hy - 1 * k, 52 * k, 7 * k).fill({ color: 0x1a1020, alpha: 0.85 * alpha });
+      b.rect(hx - 25 * k, hy, 50 * k * Math.max(0, q.hp / this.giantMax()), 5 * k).fill({ color: col, alpha });
+    } else
+      for (let i = 0; i < HP; i++) {
+        const x = hx + (-10 + i * 7) * k;
+        b.rect(x - 1 * k, hy - 1 * k, 7 * k, 7 * k).fill({ color: 0x1a1020, alpha: 0.85 * alpha });
+        b.rect(x, hy, 5 * k, 5 * k).fill({ color: i < q.hp ? col : 0x4a4250, alpha });
+        if (i < q.hp) b.rect(x, hy, 5 * k, 1 * k).fill({ color: 0xffffff, alpha: 0.35 * alpha });
+      }
     if (q.flags & FLAG.RELOADING && q.reloadMs > 0) {
-      const f = 1 - q.reloadMs / RELOAD_MS;
-      b.rect(fx - 9, hy + 6, 18, 2).fill({ color: 0x1a1020, alpha: 0.8 });
-      b.rect(fx - 9, hy + 6, 18 * f, 2).fill({ color: 0xffffff, alpha: 0.9 });
+      const f = 1 - q.reloadMs / this.gunFor(q).reload;
+      b.rect(hx - 11 * k, hy + 8 * k, 22 * k, 3 * k).fill({ color: 0x1a1020, alpha: 0.85 });
+      b.rect(hx - 10 * k, hy + 8.5 * k, 20 * k * f, 2 * k).fill({ color: 0xffffff, alpha: 0.9 });
     }
     const pw = POWERS[this.powerOf(q)];
-    if (pw) b.circle(fx + 13, hy + 1, 3).fill({ color: pw.color, alpha: 0.7 + 0.3 * Math.sin(now / 120) });
+    if (pw) b.circle(hx + (big > 1 ? 31 : 15) * k, hy + 2 * k, 3.5 * k).fill({ color: pw.color, alpha: 0.7 + 0.3 * Math.sin(now / 120) });
     // The spawn shield and the Shield power-up: a bubble.
     if (q.flags & FLAG.SPAWN_SHIELD || this.powerOf(q) === POWER.SHIELD) {
       const col = q.flags & FLAG.SPAWN_SHIELD ? 0xffffff : 0x7af7ff;
-      b.ellipse(fx, feet - 16, 15, 20).stroke({ width: 1.5, color: col, alpha: 0.55 + 0.2 * Math.sin(now / 100) });
-      b.ellipse(fx, feet - 16, 15, 20).fill({ color: col, alpha: 0.08 });
+      const c = this.at(fx, feet, 16 * big);
+      b.ellipse(c.x, c.y, 15 * big * c.s, 20 * big * c.s).stroke({ width: 1.5, color: col, alpha: 0.55 + 0.2 * Math.sin(now / 100) });
+      b.ellipse(c.x, c.y, 15 * big * c.s, 20 * big * c.s).fill({ color: col, alpha: 0.08 });
     }
-    // On Fire: embers rising off them.
-    if (q.flags & FLAG.HOT && Math.random() < 0.5) this.particles.push({ x: pos.x + (Math.random() - 0.5) * 0.5, y: pos.y, z: 0.5 + Math.random() * 0.6, vx: 0, vy: 0, vz: 1.2 + Math.random(), born: now, life: 450, color: Math.random() < 0.5 ? 0xff9a3f : 0xffd23f, size: 2 });
   }
 
   /** A splat stuck on player `id` (until they're out). */
@@ -1322,12 +1824,13 @@ export class PaintballShow {
       .filter((p) => !(p.flags & (FLAG.OUT | FLAG.DASHING)))
       .map((p) => {
         const pos = p.id === me ? this.me : this.glide(p.id, at);
-        return { id: p.id, team: p.team, x: pos.x, y: pos.y };
+        return { id: p.id, team: p.team, x: pos.x, y: pos.y, r: (this.isGiant(p.id) ? GIANT_HIT_R : HIT_R) * 0.85 };
       });
     const keep: LiveBall[] = [];
+    const ffa = s.mode === MODE.FFA;
     for (const lb of this.balls) {
       const b = lb.ball;
-      const flight = b.advance(this.field, BALL_SPEED * dt, (x, y) => bodies.find((q) => q.team !== b.team && Math.hypot(q.x - x, q.y - y) < HIT_R * 0.85)?.id ?? null);
+      const flight = b.advance(this.field, b.speed * dt, (x, y) => bodies.find((q) => (ffa ? q.id !== b.by : q.team !== b.team) && Math.hypot(q.x - x, q.y - y) < q.r)?.id ?? null);
       lb.trail.push({ x: b.x, y: b.y });
       if (lb.trail.length > 5) lb.trail.shift();
       if (flight.k === "fly") {
@@ -1390,7 +1893,9 @@ export class PaintballShow {
     sprite.anchor.set(0.5, 1);
     sprite.scale.set(scale);
     this.top.addChild(sprite);
-    this.floaters.push({ sprite, x: this.wx(x), y: this.wy(y), at: performance.now(), life: 1000 });
+    sprite.zIndex = 1;
+    // (Words float up from over someone's head: their feet are a tile and a bit below.)
+    this.floaters.push({ sprite, x: this.wx(x), y: this.wy(y + 1.3), scale, at: performance.now(), life: 1000 });
   }
 
   private drawFx(wallNow: number, dt: number) {
@@ -1398,16 +1903,17 @@ export class PaintballShow {
     // The balls: a shadow on the turf, the ball up at chest height, its trail.
     for (const lb of this.balls) {
       const b = lb.ball;
-      const x = this.wx(b.x);
-      const y = this.wy(b.y);
-      g.ellipse(x, y, 3, 1.5).fill({ color: 0x000000, alpha: 0.25 });
+      const sh = this.at(this.wx(b.x), this.wy(b.y));
+      g.ellipse(sh.x, sh.y, 3 * sh.s, 1.5 * sh.s).fill({ color: 0x000000, alpha: 0.25 });
       lb.trail.forEach((t, i) => {
         const a = ((i + 1) / lb.trail.length) * 0.45;
-        g.circle(this.wx(t.x), this.wy(t.y) - 12, 1.5).fill({ color: lb.hot ? 0xff9a3f : lb.color, alpha: a });
+        const p = this.at(this.wx(t.x), this.wy(t.y), 12);
+        g.circle(p.x, p.y, 1.5 * p.s).fill({ color: lb.hot ? 0xff9a3f : lb.color, alpha: a });
       });
-      g.circle(x, y - 12, 3).fill({ color: 0x1a1020 });
-      g.circle(x, y - 12, 2.2).fill({ color: lb.color });
-      g.rect(Math.round(x - 1), Math.round(y - 14), 1, 1).fill({ color: 0xffffff });
+      const up = this.at(this.wx(b.x), this.wy(b.y), 12);
+      g.circle(up.x, up.y, 3 * up.s).fill({ color: 0x1a1020 });
+      g.circle(up.x, up.y, 2.2 * up.s).fill({ color: lb.color });
+      g.rect(Math.round(up.x - 1), Math.round(up.y - 2 * up.s), up.s, up.s).fill({ color: 0xffffff });
     }
     // Paint flying.
     const now = performance.now();
@@ -1424,13 +1930,15 @@ export class PaintballShow {
         p.vy *= 0.6;
       }
       const a = 1 - (now - p.born) / p.life;
-      g.rect(Math.round(this.wx(p.x)), Math.round(this.wy(p.y) - p.z * TILE), p.size, p.size).fill({ color: p.color, alpha: Math.max(0, a) });
+      const at = this.at(this.wx(p.x), this.wy(p.y), p.z * TILE);
+      g.rect(Math.round(at.x), Math.round(at.y), p.size * at.s, p.size * at.s).fill({ color: p.color, alpha: Math.max(0, a) });
     }
     // Rings: shields catching a ball, people coming back in.
     this.rings = this.rings.filter((r) => now - r.at < 500);
     for (const r of this.rings) {
       const t = (now - r.at) / 500;
-      g.ellipse(this.wx(r.x), this.wy(r.y) - 14, 8 + t * 18, 10 + t * 20).stroke({ width: 2, color: r.color, alpha: 1 - t });
+      const at = this.at(this.wx(r.x), this.wy(r.y), 14);
+      g.ellipse(at.x, at.y, (8 + t * 18) * at.s, (10 + t * 20) * at.s).stroke({ width: 2, color: r.color, alpha: 1 - t });
     }
     // Words floating up.
     this.floaters = this.floaters.filter((f) => {
@@ -1439,10 +1947,20 @@ export class PaintballShow {
         f.sprite.destroy();
         return false;
       }
-      f.sprite.position.set(Math.round(f.x), Math.round(f.y - t * 26));
+      const at = this.at(f.x, f.y, 1.3 * TILE + t * 26);
+      f.sprite.position.set(Math.round(at.x), Math.round(at.y));
+      f.sprite.scale.set(f.scale * at.s);
       f.sprite.alpha = t < 0.7 ? 1 : 1 - (t - 0.7) / 0.3;
       return true;
     });
+  }
+
+  /**
+   * Where world point (x, foot) is seen, `lift` px up off the ground: in 3D,
+   * over its spot in perspective (and `s` how big things are there); flat, as it is.
+   */
+  private at(x: number, foot: number, lift = 0): { x: number; y: number; s: number } {
+    return this.scene.drawnAt(x, foot - lift, foot);
   }
 
   /** The pads' power-ups, bobbing over them. */
@@ -1463,6 +1981,97 @@ export class PaintballShow {
     }
   }
 
+  /**
+   * The mode's objectives: Control Point's ring on the turf (in whoever
+   * has it's colour, filling as it's taken); Capture the Flag's flags, on
+   * their stands, carried on someone's back, or lying where they fell.
+   */
+  private drawObjectives(wallNow: number) {
+    const s = this.state;
+    const live = !!s && s.status !== LOBBY;
+    const g = this.pads;
+    for (const [k, pt] of (live && s.mode === MODE.POINT ? s.points : []).entries()) {
+      const x = this.wx(pt.x / 100);
+      const y = this.wy(pt.y / 100);
+      const r = (pt.r / 10) * TILE;
+      const owner = pt.owner;
+      const p = (pt.progress - 100) / 100;
+      const pulse = 0.5 + 0.5 * Math.sin(wallNow / 300 + k);
+      // (The middle's worth more: a second ring round it.)
+      if (pt.value > 10) g.circle(x, y, r + 12).stroke({ width: 2, color: 0xffd23f, alpha: 0.45 + 0.2 * pulse });
+      g.circle(x, y, r).fill({ color: owner < 2 ? TEAM_COLOR[owner] : 0xf2e8d4, alpha: 0.1 + 0.04 * pulse });
+      g.circle(x, y, r).stroke({ width: 3, color: 0x1a1020, alpha: 0.5 });
+      g.circle(x, y, r).stroke({ width: 2, color: owner < 2 ? TEAM_COLOR[owner] : 0xf2e8d4, alpha: 0.75 });
+      // How far it's taken, round the ring from the top, in the colour of whoever's taking it.
+      if (Math.abs(p) > 0.01) {
+        const a0 = -Math.PI / 2;
+        g.moveTo(x + Math.cos(a0) * (r - 4), y + Math.sin(a0) * (r - 4))
+          .arc(x, y, r - 4, a0, a0 + Math.abs(p) * Math.PI * 2)
+          .stroke({ width: 5, color: TEAM_COLOR[p < 0 ? 0 : 1], alpha: 0.9 });
+      }
+      // Dashes round it, like a painted line.
+      for (let d = 0; d < 24; d++) {
+        const a = (d / 24) * Math.PI * 2 + wallNow / 4000;
+        g.circle(x + Math.cos(a) * (r + 6), y + Math.sin(a) * (r + 6), 1.5).fill({ color: 0xf2e8d4, alpha: 0.5 });
+      }
+    }
+    for (let t = 0; t < 2; t++) {
+      const fg = this.flagG[t].clear();
+      const fl = s?.flags[t];
+      fg.visible = live && s.mode === MODE.FLAG && !!fl;
+      if (!fg.visible || !fl) continue;
+      const color = TEAM_COLOR[t];
+      const wave = Math.sin(wallNow / 140 + t * 2);
+      // Its stand, always where it lives.
+      const hx = this.wx(this.flagHome(t).x);
+      const hy = this.wy(this.flagHome(t).y);
+      const carried = fl.carrier !== 0 ? this.drawnAt.get(fl.carrier) : undefined;
+      let fx: number;
+      let fy: number;
+      let lift = 0;
+      if (carried) {
+        // On their back: the pole over their shoulder.
+        fx = this.wx(carried.x) - 6;
+        fy = this.wy(carried.y);
+        lift = 6;
+        fg.zIndex = carried.z + 0.3;
+      } else {
+        fx = this.wx(fl.x / 100);
+        fy = this.wy(fl.y / 100);
+        fg.zIndex = fy;
+      }
+      if (!fl.home) {
+        // The stand, empty (on the turf, with the pads).
+        g.ellipse(hx, hy, 12, 5).fill({ color: 0x1a1020, alpha: 0.35 });
+        g.ellipse(hx, hy, 12, 5).stroke({ width: 2, color, alpha: 0.6 });
+      }
+      if (fl.home) {
+        fg.ellipse(fx, fy, 14, 6).fill({ color: 0x1a1020, alpha: 0.4 });
+        fg.ellipse(fx, fy, 14, 6).stroke({ width: 2, color, alpha: 0.9 });
+        fg.ellipse(fx, fy - 2, 9, 4).fill({ color: 0x8a8f99 });
+      } else if (!carried) {
+        // Lying where it fell: a ring that pulses, so it's seen.
+        fg.ellipse(fx, fy, 16 + 3 * (0.5 + 0.5 * Math.sin(wallNow / 120)), 7).stroke({ width: 2, color, alpha: 0.8 });
+      }
+      // The pole and the cloth, waving.
+      const top = fy - 44 - lift;
+      fg.rect(fx - 1, top, 3, fy - top - (carried ? 18 : 0)).fill({ color: 0x2a2630 });
+      fg.rect(fx, top, 1, fy - top - (carried ? 18 : 0)).fill({ color: 0x8a8f99 });
+      fg.poly([fx + 2, top + 1, fx + 22 + wave * 2, top + 4 + wave, fx + 20 + wave * 3, top + 12 + wave, fx + 2, top + 15]).fill({ color });
+      fg.poly([fx + 2, top + 1, fx + 22 + wave * 2, top + 4 + wave, fx + 21 + wave * 2.5, top + 7 + wave, fx + 2, top + 6]).fill({ color: 0xffffff, alpha: 0.25 });
+      fg.circle(fx + 0.5, top - 1, 2).fill({ color: 0xe0b040 });
+      if (fl.carrier !== 0 && !carried) fg.visible = false;
+    }
+  }
+
+  /** Where team `t`'s flag stands (field tiles): where it is when it's home, else remembered. */
+  private flagHome(t: number): { x: number; y: number } {
+    const fl = this.state?.flags[t];
+    if (fl?.home) this.homes[t] = { x: fl.x / 100, y: fl.y / 100 };
+    return this.homes[t] ?? { x: fl ? fl.x / 100 : 0, y: fl ? fl.y / 100 : 0 };
+  }
+  private homes: ({ x: number; y: number } | undefined)[] = [];
+
   // ---- being hit ------------------------------------------------------------------
 
   private hurt(x: number, y: number, by: number) {
@@ -1477,7 +2086,7 @@ export class PaintballShow {
     const src = this.glide(by, this.serverNow() - RENDER_DELAY_MS);
     const ang = Math.atan2(src.y - y, src.x - x);
     this.dirEl.style.setProperty("--a", `${ang}rad`);
-    this.dirEl.style.setProperty("--c", TEAM_CSS[this.teamOf(by)]);
+    this.dirEl.style.setProperty("--c", this.cssOf(by));
     this.dirEl.classList.remove("show");
     void this.dirEl.offsetWidth;
     this.dirEl.classList.add("show");
@@ -1533,11 +2142,13 @@ export class PaintballShow {
     const row = el("div", "pb-feed-row");
     const name = (id: number) => {
       const s = el("span", "", this.who(id));
-      s.style.color = TEAM_CSS[this.teamOf(id)];
+      s.style.color = this.cssOf(id);
       if (id === this.selfId()) s.classList.add("me");
       return s;
     };
-    row.append(name(a), el("span", "pb-feed-icon", " 🎯 "), name(b));
+    const shooter = this.state?.players.find((p) => p.id === a);
+    const icon = shooter ? (this.isGiant(a) ? "👹" : (CLASSES[shooter.class]?.icon ?? "🎯")) : "🎯";
+    row.append(name(a), el("span", "pb-feed-icon", ` ${icon} `), name(b));
     this.feed.prepend(row);
     while (this.feed.children.length > 5) this.feed.lastElementChild?.remove();
     window.setTimeout(() => row.classList.add("old"), 5000);
@@ -1545,12 +2156,15 @@ export class PaintballShow {
   }
 
   private begin() {
+    this.killer = 0;
+    this.killCam = null;
+    this.hitLately.clear();
     this.decals.removeChildren().forEach((c) => c.destroy());
     this.feed.replaceChildren();
     this.center.replaceChildren();
     this.lastCount = -1;
     this.me.known = false;
-    this.me.ammo = HOPPER;
+    this.me.ammo = this.gunFor(this.mine()).hopper;
     this.me.reloadUntil = 0;
     this.me.dashReady = 0;
     this.results.hidden = true;
@@ -1566,25 +2180,42 @@ export class PaintballShow {
   private updateHud(serverNow: number, wallNow: number) {
     const s = this.state;
     const playing = this.capturing;
-    const watching = !!s && s.status !== LOBBY;
+    // (Out in the city, only on the field's grounds: not across town.)
+    const watching = !!s && s.status !== LOBBY && (playing || this.near());
     this.hud.hidden = !watching;
     this.cross.hidden = !playing;
     this.vignette.hidden = !playing;
     if (!s || !watching) return;
     // The score: each side's points as paint pips, and the clock.
-    const pips = (n: number, team: number) => {
+    const toWin = s.toWin || TO_WIN;
+    const pips = (n: number, team: number, target = toWin, css = TEAM_CSS[team]) => {
+      const segs = Math.min(target, 10);
+      const per = target / segs;
       let h = "";
-      for (let i = 0; i < TO_WIN; i++) h += `<i class="${i < n ? "on" : ""}" style="--c:${TEAM_CSS[team]}"></i>`;
+      for (let i = 0; i < segs; i++) {
+        const full = Math.max(0, Math.min(1, (n - i * per) / per));
+        h += `<i class="${full >= 1 ? "on" : ""}" style="--c:${css}${full > 0 && full < 1 ? `;background:color-mix(in srgb, ${css} ${Math.round(full * 100)}%, transparent)` : ""}"></i>`;
+      }
       return h;
     };
+    const matchPoint = (n: number) => (s.mode === MODE.POINT ? n >= toWin - 25 : n === toWin - 1);
+    const owners = s.mode === MODE.POINT ? s.points.map((p) => `<i style="--c:${p.owner < 2 ? TEAM_CSS[p.owner] : "#6a6470"}"${p.value > 10 ? ' class="mid"' : ""}></i>`).join("") : "";
     const left = s.status === COUNTDOWN ? 0 : Math.max(0, s.phaseMs - (serverNow - s.now));
     const clock = `${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, "0")}`;
-    const key = `${s.blue}|${s.red}|${clock}|${s.status}`;
+    // (Goliath: the hunters' the giant's hearts taken; Free-for-all: us and whoever leads.)
+    const ffa = s.mode === MODE.FFA;
+    const ranked = [...s.players].sort((a, b) => b.kills - a.kills);
+    const meP = s.players.find((q) => q.id === this.selfId());
+    const lead = ranked.find((q) => q.id !== meP?.id) ?? ranked[0];
+    const L = ffa ? { n: meP?.kills ?? 0, name: meP ? "YOU" : this.who(ranked[0]?.id ?? 0).toUpperCase(), css: this.cssOf(meP?.id ?? ranked[0]?.id ?? 0) } : { n: s.blue, name: s.mode === MODE.GOLIATH ? "HUNTERS" : "BLUE", css: TEAM_CSS[0] };
+    const Rt = ffa ? { n: lead?.kills ?? 0, name: lead ? this.who(lead.id).toUpperCase() : "", css: this.cssOf(lead?.id ?? 0) } : { n: s.red, name: s.mode === MODE.GOLIATH ? "GOLIATH" : "RED", css: TEAM_CSS[1] };
+    const leftTarget = s.mode === MODE.GOLIATH ? this.giantMax() : toWin;
+    const key = `${L.n}|${Rt.n}|${L.name}|${Rt.name}|${clock}|${s.status}|${s.mode}|${owners}`;
     if (this.scoreEl.dataset.key !== key) {
       this.scoreEl.dataset.key = key;
-      this.scoreEl.innerHTML = `<div class="pb-side blue"><b>${s.blue}</b><span>BLUE</span><div class="pb-pips">${pips(s.blue, 0)}</div></div><div class="pb-clock">${s.status === PLAYING ? clock : s.status === OVER ? "FINAL" : "GET READY"}</div><div class="pb-side red"><div class="pb-pips">${pips(s.red, 1)}</div><span>RED</span><b>${s.red}</b></div>`;
-      this.scoreEl.classList.toggle("mp-blue", s.blue === TO_WIN - 1);
-      this.scoreEl.classList.toggle("mp-red", s.red === TO_WIN - 1);
+      this.scoreEl.innerHTML = `<div class="pb-side blue" style="--tc:${L.css}"><b>${L.n}</b><span>${L.name}</span><div class="pb-pips">${pips(L.n, 0, leftTarget, L.css)}</div></div><div class="pb-clock">${s.status === PLAYING ? clock : s.status === OVER ? "FINAL" : "GET READY"}<small>${MODES[s.mode]?.icon ?? ""} ${(MODES[s.mode]?.name ?? "").toUpperCase()}</small>${owners ? `<span class="pb-owners">${owners}</span>` : ""}</div><div class="pb-side red" style="--tc:${Rt.css}"><div class="pb-pips">${pips(Rt.n, 1, toWin, Rt.css)}</div><span>${Rt.name}</span><b>${Rt.n}</b></div>`;
+      this.scoreEl.classList.toggle("mp-blue", !ffa && s.mode !== MODE.GOLIATH && matchPoint(s.blue));
+      this.scoreEl.classList.toggle("mp-red", !ffa && matchPoint(s.red));
     }
     // The countdown: 3, 2, 1.
     if (s.status === COUNTDOWN) {
@@ -1601,7 +2232,8 @@ export class PaintballShow {
     if (p) {
       // Paint left, as drops.
       let hp = "";
-      for (let i = 0; i < HP; i++) hp += `<i class="${i < this.me.hp ? "on" : ""}" style="--c:${TEAM_CSS[p.team]}"></i>`;
+      if (this.isGiant(p.id)) hp = `<b class="pb-giant-hp" style="--c:${this.cssOf(p.id)};--f:${Math.max(0, this.me.hp / this.giantMax())}">👹 ${this.me.hp}</b>`;
+      else for (let i = 0; i < HP; i++) hp += `<i class="${i < this.me.hp ? "on" : ""}" style="--c:${this.cssOf(p.id)}"></i>`;
       if (this.hpEl.dataset.v !== hp) {
         this.hpEl.dataset.v = hp;
         this.hpEl.innerHTML = hp;
@@ -1609,14 +2241,21 @@ export class PaintballShow {
       // The hopper.
       const rapid = this.powerOf(p) === POWER.RAPID;
       const reloading = serverNow < this.me.reloadUntil && !rapid;
+      const gun = this.gunFor(p);
+      // (Fifty don't fit as drops: a machine gun's in tens, each a drop filled as far as it's loaded.)
+      const per = gun.hopper > 12 ? 10 : 1;
       let am = "";
-      for (let i = 0; i < HOPPER; i++) am += `<i class="${rapid || i < this.me.ammo ? "on" : ""}"></i>`;
-      const rf = reloading ? 1 - (this.me.reloadUntil - serverNow) / RELOAD_MS : 1;
-      const amKey = `${am}|${reloading ? Math.round(rf * 20) : -1}|${rapid}`;
+      for (let i = 0; i < gun.hopper / per; i++) {
+        const full = rapid ? 1 : Math.max(0, Math.min(1, (this.me.ammo - i * per) / per));
+        am += per === 1 ? `<i class="${full ? "on" : ""}"></i>` : `<i class="${full > 0 ? "on" : ""}" style="opacity:${0.35 + 0.65 * full}"></i>`;
+      }
+      const rf = reloading ? 1 - (this.me.reloadUntil - serverNow) / gun.reload : 1;
+      const amKey = `${am}|${reloading ? Math.round(rf * 20) : -1}|${rapid}|${p.class}|${this.me.ammo}`;
       if (this.ammoEl.dataset.v !== amKey) {
         this.ammoEl.dataset.v = amKey;
-        this.ammoEl.innerHTML = `<div class="pb-balls">${am}</div><div class="pb-reload" style="--f:${rf}">${rapid ? "∞ RAPID" : reloading ? "RELOADING" : this.me.ammo === 0 ? "R TO RELOAD" : `${this.me.ammo}/${HOPPER}`}</div>`;
-        this.ammoEl.classList.toggle("low", this.me.ammo <= 3 && !rapid);
+        const c = this.isGiant(p.id) ? { icon: "👹", name: "Goliath" } : (CLASSES[p.class] ?? CLASSES[0]);
+        this.ammoEl.innerHTML = `<div class="pb-class">${c.icon} ${c.name.toUpperCase()}</div><div class="pb-balls">${am}</div><div class="pb-reload" style="--f:${rf}">${rapid ? "∞ RAPID" : reloading ? "RELOADING" : this.me.ammo === 0 ? "R TO RELOAD" : `${this.me.ammo}/${gun.hopper}`}</div>`;
+        this.ammoEl.classList.toggle("low", this.me.ammo <= Math.max(1, Math.round(gun.hopper / 4)) && !rapid);
       }
       // The roll.
       const df = Math.min(1, 1 - (this.me.dashReady - serverNow) / DASH_CD_MS);
@@ -1630,7 +2269,15 @@ export class PaintballShow {
       // Out: the count till we're back.
       const out = (p.flags & FLAG.OUT) !== 0;
       this.respawnEl.hidden = !out;
-      if (out) this.respawnEl.innerHTML = `<div>SPLATTED</div><b>${Math.max(1, Math.ceil((p.respawnMs - (serverNow - s.now)) / 1000))}</b>`;
+      if (out) {
+        const secs = Math.max(1, Math.ceil((p.respawnMs - (serverNow - s.now)) / 1000));
+        const next = this.myPick(s);
+        const key = `${secs}|${next}`;
+        if (this.respawnEl.dataset.v !== key) {
+          this.respawnEl.dataset.v = key;
+          this.respawnEl.replaceChildren(el("div", "", "SPLATTED"), el("b", "", String(secs)), this.classRow(next, "Back as"));
+        }
+      } else this.respawnEl.dataset.v = "";
       // Last paint: a heartbeat and a red edge.
       const low = this.me.hp === 1 && !out && s.status === PLAYING;
       this.vignette.classList.toggle("low", low);
@@ -1648,21 +2295,37 @@ export class PaintballShow {
 
   private showResults(s: State) {
     const me = this.mine();
-    const won = s.winner === 2 ? null : me ? me.team === s.winner : null;
+    const ffa = s.mode === MODE.FFA;
+    const sideName = (t: number) => (s.mode === MODE.GOLIATH ? (t === 0 ? "THE HUNTERS" : "THE GOLIATH") : TEAM_NAME[t]);
+    const won = ffa ? (s.winnerId ? (me ? me.id === s.winnerId : null) : null) : s.winner === 2 ? null : me ? me.team === s.winner : null;
     snd.fanfare(won !== false);
-    const title = s.winner === 2 ? "A DRAW!" : won === true ? "VICTORY!" : won === false ? "DEFEAT" : `${TEAM_NAME[s.winner]} WINS!`;
+    const title = ffa
+      ? !s.winnerId
+        ? "A DRAW!"
+        : won
+          ? "YOU WIN!"
+          : `${this.who(s.winnerId).toUpperCase()} WINS!`
+      : s.winner === 2
+        ? "A DRAW!"
+        : won === true
+          ? "VICTORY!"
+          : won === false
+            ? "DEFEAT"
+            : `${sideName(s.winner)} WIN${s.mode === MODE.GOLIATH && s.winner === 1 ? "S" : s.mode === MODE.GOLIATH ? "" : "S"}!`;
     const rows = [...s.players].sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
     const mvp = rows[0];
     this.results.replaceChildren();
     const card = el("div", "pb-results-card");
     const h = el("h2", "", title);
-    if (s.winner !== 2) h.style.color = TEAM_CSS[s.winner];
-    card.append(h, el("div", "pb-results-score", `BLUE ${s.blue} — ${s.red} RED`));
+    if (ffa && s.winnerId) h.style.color = this.cssOf(s.winnerId);
+    else if (!ffa && s.winner !== 2) h.style.color = TEAM_CSS[s.winner];
+    const line = ffa ? "Everyone for themselves" : s.mode === MODE.GOLIATH ? `Hearts taken ${s.blue} of ${this.giantMax()} · hunters splatted ${s.red}` : `BLUE ${s.blue} — ${s.red} RED`;
+    card.append(h, el("div", "pb-results-score", line));
     const table = el("div", "pb-results-table");
     for (const p of rows) {
       const r = el("div", `pb-results-row${p.id === this.selfId() ? " me" : ""}`);
       const n = el("span", "", `${p === mvp ? "⭐ " : ""}${this.who(p.id)}`);
-      n.style.color = TEAM_CSS[p.team];
+      n.style.color = this.cssOf(p.id);
       r.append(n, el("span", "", `${p.kills} 🎯`), el("span", "", `${p.deaths} 💦`));
       table.append(r);
     }
@@ -1679,52 +2342,94 @@ export class PaintballShow {
     if (!s) return;
     const me = this.selfId();
     const mySlot = s.slots.indexOf(me);
-    const show = !this.capturing && s.status !== OVER;
+    const show = !this.capturing && !this.spectating && !this.tv && s.status !== OVER && this.near();
     this.lobby.hidden = !show;
-    if (!show) return;
-    const key = `${s.status}|${s.slots.join(",")}|${s.blue}|${s.red}|${mySlot}|${s.level}`;
+    if (!show) {
+      this.lobbyKey = "";
+      return;
+    }
+    const key = `${s.status}|${s.slots.join(",")}|${s.blue}|${s.red}|${mySlot}|${s.level}|${s.exhibit}|${s.classes.join(",")}|${s.mode}`;
     if (key === this.lobbyKey) return;
     this.lobbyKey = key;
     this.lobby.replaceChildren();
     const head = el("div", "pb-lobby-head");
-    head.append(el("strong", "", "🎯 Splat Yard · Paintball"), el("span", "pb-lobby-status", s.status === LOBBY ? "3 v 3 · first to 10" : `Match on · ${s.blue} – ${s.red}`));
+    head.append(
+      el("strong", "", this.grounds ? "🎯 Splat Yard · Out in the open" : "🎯 Splat Yard · Paintball"),
+      el("span", "pb-lobby-status", s.status === LOBBY ? `${s.mode === MODE.GOLIATH ? "5 v 1" : s.mode === MODE.FFA ? "6 players" : "3 v 3"} · ${MODES[s.mode]?.name ?? ""} · ${MODES[s.mode]?.short ?? ""}` : s.exhibit ? `🤖 Bots' match · ${s.blue} – ${s.red}` : `Match on · ${s.blue} – ${s.red}`),
+    );
+    // The bots' match: watch (and bet), or step up and it's yours.
+    if (s.exhibit) {
+      const box = el("div", "pb-lobby-exhibit");
+      box.append(
+        el("p", "", `The bots are playing it out: Blue ${s.blue} – ${s.red} Red. Bet ${BET_STAKE} coins on a side while it starts, or step up and the field's yours.`),
+        button("🎯 Play: stop the bots' match", () => this.send({ t: "PbJoin", team: 2 }), "primary"),
+      );
+      this.lobby.append(head, box);
+      return;
+    }
     const isBot = (id: number) => id >= BOT_BASE && id < BOT_BASE + SLOTS;
     // In the lobby, those with a place choose who plays: each bot can be taken out, or put in an empty place.
     const canEdit = s.status === LOBBY && mySlot >= 0;
     const teams = el("div", "pb-lobby-teams");
-    for (const team of [0, 1]) {
-      const col = el("div", `pb-lobby-team ${team ? "red" : "blue"}`);
-      col.append(el("div", "pb-lobby-team-name", team ? "RED" : "BLUE"));
-      for (let k = team * 3; k < team * 3 + 3; k++) {
+    // The places, by mode: Blue's and Red's; the hunters and the giant; or everyone.
+    const groups =
+      s.mode === MODE.GOLIATH
+        ? [
+            { team: 0, name: "HUNTERS", cls: "blue", slots: [0, 1, 2, 4, 5], join: "Join the hunters", jump: "Jump in as a hunter" },
+            { team: 1, name: "👹 GOLIATH", cls: "red", slots: [3], join: "Be the Goliath", jump: "Take over the Goliath" },
+          ]
+        : s.mode === MODE.FFA
+          ? [{ team: 2, name: "EVERYONE FOR THEMSELVES", cls: "ffa", slots: [0, 1, 2, 3, 4, 5], join: "Join in", jump: "Jump in" }]
+          : [
+              { team: 0, name: "BLUE", cls: "blue", slots: [0, 1, 2], join: "Join Blue", jump: "Jump in for Blue" },
+              { team: 1, name: "RED", cls: "red", slots: [3, 4, 5], join: "Join Red", jump: "Jump in for Red" },
+            ];
+    teams.classList.toggle("one", groups.length === 1);
+    for (const grp of groups) {
+      const team = grp.team;
+      const col = el("div", `pb-lobby-team ${grp.cls}`);
+      col.append(el("div", "pb-lobby-team-name", grp.name));
+      for (const k of grp.slots) {
         const id = s.slots[k];
         const bot = isBot(id);
         const label = id === 0 ? "· empty ·" : bot ? `🤖 ${BOT_NAMES[k]}` : id === me ? `${this.nameOf(id)} (you)` : this.nameOf(id);
         const row = el("div", `pb-slot${id === 0 ? " open" : ""}${id === me ? " me" : ""}${bot ? " bot" : ""}`);
+        const cls = CLASSES[s.classes[k] ?? 0];
+        if (id !== 0 && cls) row.append(Object.assign(el("span", "pb-slot-class", cls.icon), { title: cls.name }));
+        if (s.mode === MODE.FFA && id !== 0) row.style.setProperty("--tc", FFA_CSS[k]);
         row.append(el("span", "pb-slot-name", label));
         if (canEdit && bot) row.append(Object.assign(button("✕", () => this.send({ t: "PbBot", slot: k, on: false }), "subtle pb-bot-btn"), { title: "Take this bot out" }));
         if (canEdit && id === 0) row.append(Object.assign(button("+ 🤖", () => this.send({ t: "PbBot", slot: k, on: true }), "subtle pb-bot-btn"), { title: "Put a bot in" }));
         col.append(row);
       }
-      const hasBot = s.slots.slice(team * 3, team * 3 + 3).some(isBot);
-      const hasRoom = s.slots.slice(team * 3, team * 3 + 3).some((id) => id === 0);
-      if (s.status === LOBBY && Math.floor(mySlot / 3) !== team && (hasRoom || hasBot)) col.append(button(mySlot >= 0 ? "Switch here" : `Join ${team ? "Red" : "Blue"}`, () => this.send({ t: "PbJoin", team }), team ? "pb-join red" : "pb-join blue"));
-      if (s.status !== LOBBY && mySlot < 0 && (hasBot || hasRoom)) col.append(button(`Jump in for ${team ? "Red" : "Blue"}`, () => this.send({ t: "PbJoin", team }), team ? "pb-join red" : "pb-join blue"));
+      const hasBot = grp.slots.some((k) => isBot(s.slots[k]));
+      const hasRoom = grp.slots.some((k) => s.slots[k] === 0);
+      if (s.status === LOBBY && !grp.slots.includes(mySlot) && (hasRoom || hasBot)) col.append(button(mySlot >= 0 ? "Switch here" : grp.join, () => this.send({ t: "PbJoin", team }), `pb-join ${grp.cls}`));
+      if (s.status !== LOBBY && mySlot < 0 && (hasBot || hasRoom)) col.append(button(grp.jump, () => this.send({ t: "PbJoin", team }), `pb-join ${grp.cls}`));
       teams.append(col);
     }
     // The match this makes: n v m, and who's who.
-    const side = (t: number) => s.slots.slice(t * 3, t * 3 + 3).filter((x) => x !== 0);
-    const [blue, red] = [side(0), side(1)];
+    const side = (t: number) => (groups[t]?.slots ?? []).map((k) => s.slots[k]).filter((x) => x !== 0);
+    const [blue, red] = groups.length === 1 ? [side(0), [] as number[]] : [side(0), side(1)];
     const bots = [...blue, ...red].filter(isBot).length;
     const people = blue.length + red.length - bots;
-    const ready = blue.length > 0 && red.length > 0;
+    const ready = groups.length === 1 ? blue.length >= 2 : blue.length > 0 && red.length > 0;
     const modeText =
       s.status !== LOBBY
         ? bots > 0
           ? `Bots: ${levelLabel(s.level)}`
           : ""
         : !ready
-          ? `${blue.length ? "Red" : "Blue"} needs someone: add a bot, or wait for a player`
-          : `🎯 ${blue.length} v ${red.length} · ${people} ${people === 1 ? "player" : "players"}, ${bots} ${bots === 1 ? "bot" : "bots"}`;
+          ? groups.length === 1
+            ? "Needs two at least: add a bot, or wait for a player"
+            : s.mode === MODE.GOLIATH
+              ? red.length
+                ? "The giant needs someone to hunt it: add a bot"
+                : "Someone has to be the Goliath: add a bot, or take it on"
+              : `${blue.length ? "Red" : "Blue"} needs someone: add a bot, or wait for a player`
+          : groups.length === 1
+            ? `🎨 ${blue.length} players · ${people} ${people === 1 ? "person" : "people"}, ${bots} ${bots === 1 ? "bot" : "bots"}`
+            : `🎯 ${blue.length} v ${red.length} · ${people} ${people === 1 ? "player" : "players"}, ${bots} ${bots === 1 ? "bot" : "bots"}`;
     const mode = el("p", `pb-mode${s.status === LOBBY && !ready ? " warn" : ""}`, modeText);
     const level = s.status === LOBBY ? levelPicker(s.level, canEdit ? (l) => this.send({ t: "PbLevel", level: l }) : null) : null;
     const actions = el("div", "pb-lobby-actions");
@@ -1735,12 +2440,74 @@ export class PaintballShow {
     } else if (s.status === LOBBY) {
       actions.append(button("🎯 Quick play", () => this.send({ t: "PbJoin", team: 2 }), "primary"));
     }
-    const help = el("p", "hint pb-help", "WASD move · mouse aim · click to shoot · Space roll · R reload. Three hits and you're out. Grab the power-ups on the pads; hide in hedges; steel drums bounce balls back.");
-    this.lobby.append(head, teams, ...(modeText ? [mode] : []), ...(level ? [level] : []), actions, help);
+    const help = el("p", "hint pb-help", "WASD move · mouse aim · click to shoot · Space roll · R reload · 1–4 class. Three hits and you're out. Grab the power-ups on the pads; hide in hedges; steel drums bounce balls back.");
+    const classes = mySlot >= 0 ? [this.classCards(this.myPick(s))] : [];
+    const modes = s.status === LOBBY ? [this.modePicker(s.mode, canEdit)] : [];
+    this.lobby.append(head, teams, ...modes, ...classes, ...(modeText ? [mode] : []), ...(level ? [level] : []), actions, help);
+  }
+
+  /** The modes, to pick from (those with a place, in the lobby). */
+  private modePicker(on: number, canEdit: boolean): HTMLElement {
+    const box = el("div", "pb-modes");
+    const row = el("div", "pb-mode-row");
+    MODES.forEach((m, k) => {
+      const b = button(`${m.icon} ${m.name}`, () => k !== on && this.send({ t: "PbMode", mode: k }), `pb-mode-btn${k === on ? " on" : ""}`);
+      b.disabled = !canEdit;
+      b.title = m.tip;
+      row.append(b);
+    });
+    box.append(row, el("div", "pb-mode-tip", MODES[on]?.tip ?? ""));
+    return box;
+  }
+
+  /** The class we've picked (what our place plays as). */
+  private myPick(s: State): number {
+    const k = s.slots.indexOf(this.selfId());
+    return k >= 0 ? (s.classes[k] ?? 0) : 0;
+  }
+
+  /** Picks a class: at once in the lobby, from the next life in a match. */
+  private pickClass(c: number) {
+    const s = this.state;
+    if (!s || c < 0 || c >= CLASS.COUNT || s.slots.indexOf(this.selfId()) < 0) return;
+    this.send({ t: "PbClass", class: c });
+    if (s.status === PLAYING) {
+      const p = this.mine();
+      const now = p && !(p.flags & FLAG.OUT) && p.class !== c;
+      if (now) this.announce(`${CLASSES[c].icon} ${CLASSES[c].name.toUpperCase()}`, "#f2e8d4", 0.6, "from your next life");
+    }
+  }
+
+  /** The class cards (the lobby's): each with what it's like; ours lit. */
+  private classCards(mine: number): HTMLElement {
+    const box = el("div", "pb-classes");
+    box.append(el("div", "pb-classes-head", "Your class"));
+    const grid = el("div", "pb-class-grid");
+    CLASSES.forEach((c, k) => {
+      const card = button("", () => this.pickClass(k), `pb-class-card${k === mine ? " on" : ""}`);
+      card.append(el("span", "pb-class-icon", c.icon), el("b", "", c.name), el("small", "", c.tip), el("kbd", "", String(k + 1)));
+      grid.append(card);
+    });
+    box.append(grid);
+    return box;
+  }
+
+  /** A compact row of the classes (on the splatted screen): pick what you come back as. */
+  private classRow(mine: number, label: string): HTMLElement {
+    const row = el("div", "pb-class-row");
+    row.append(el("span", "", label));
+    CLASSES.forEach((c, k) => {
+      const b = button(`${c.icon} ${c.name}`, () => this.pickClass(k), `pb-class-chip${k === mine ? " on" : ""}`);
+      b.title = `${c.tip} (${k + 1})`;
+      row.append(b);
+    });
+    return row;
   }
 
   destroy() {
     this.sight.remove();
+    this.specBar.remove();
+    this.glows.destroy();
     window.removeEventListener("keydown", this.onKey, true);
     window.removeEventListener("keyup", this.onKeyUp, true);
     window.removeEventListener("blur", this.onBlur);
@@ -1758,7 +2525,10 @@ export class PaintballShow {
     this.pads.destroy();
     this.top.destroy({ children: true });
     for (const e of [this.hud, this.cross, this.lobby, this.results, this.vignette]) e.remove();
+    this.bets?.destroy();
+    this.board?.sprite.destroy();
     document.body.classList.remove("pb-playing", "pb-touch-mode");
     ear = null;
+    reach = 1;
   }
 }

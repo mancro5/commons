@@ -4,28 +4,77 @@
 //! starts (their walking held: they move with the match), everyone in the
 //! hall gets a `PbState` every tick, a `PbShot` for each shot and a
 //! `PbEvent` for each splat, and when it's over they're back by the desk.
+//!
+//! Out in the city (the yard behind the Splat Yard) it's the same game in
+//! the open, fenced round: only those who can see the field are told, and
+//! when nobody's playing the bots put on a match of their own that anyone
+//! watching can bet on (as at the arena). Someone stepping up to play calls
+//! it off (bets handed back) and it's theirs.
 
 use super::Instance;
-use commons_protocol::{PbPickup, PbPlayer, ServerMsg, state};
+use crate::econ::CallError;
+use commons_protocol::{PbFlag, PbPickup, PbPlayer, PbPoint, ServerMsg, error_code, state};
 use commons_sim::TilePos;
 use commons_sim::map::MapObject;
 use commons_sim::paintball as pb;
 use rand::Rng;
 
+/// (The coin's item id.)
+const COIN: u32 = 1;
+/// A bet on the bots' match, and what a winning one pays (the teams are even).
+pub const BET_STAKE: i32 = 10;
+pub const BET_PAY: i32 = 20;
+/// Bets are open through the countdown and this long into the match.
+const BET_OPEN_MS: u32 = 30_000;
+/// The field stands empty this long before the bots start another match.
+const EXHIBIT_AFTER_MS: u32 = 6000;
+
+/// A spectator's bet: who, on which team, and whether the stake's been taken yet.
+#[derive(Debug, Clone)]
+struct Bet {
+    id: u32,
+    player: String,
+    pick: u8,
+    paid: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct Yard {
     m: pb::Match,
-    /// The field's top-left corner (map tiles).
+    /// The field's top-left corner (map tiles), and its size.
     origin: (u16, u16),
+    size: (u16, u16),
     /// Where the players stand when they come off the field (by place).
     desk: Vec<TilePos>,
     /// The lobby changed (sent at once, not every tick).
     dirty: bool,
+    /// Out in the city (the bots play when nobody else does; only those near are told).
+    outdoor: bool,
+    /// The bots' matches: which one this is, bets on it, and when betting closes.
+    round: u32,
+    bets: Vec<Bet>,
+    bet_close: u32,
+    /// Nobody's played since: the bots start a match once it's been a while.
+    quiet_until: u32,
 }
 
 impl Yard {
-    pub(super) fn new(objects: &[MapObject]) -> Option<Yard> {
+    /// Out in the city (not the hall).
+    pub(super) fn outdoor(&self) -> bool {
+        self.outdoor
+    }
+
+    /// The middle of the field (map tiles): where a TV watcher looks on from.
+    pub(super) fn middle(&self) -> TilePos {
+        (
+            self.origin.0 + self.size.0 / 2,
+            self.origin.1 + self.size.1 / 2,
+        )
+    }
+
+    pub(super) fn new(objects: &[MapObject], outdoor: bool) -> Option<Yard> {
         let (field, origin) = pb::Field::from_map(objects)?;
+        let size = (field.w as u16, field.h as u16);
         let desk = objects
             .iter()
             .find(|o| o.kind == "pb_desk")
@@ -38,9 +87,24 @@ impl Yard {
         Some(Yard {
             m: pb::Match::new(field),
             origin,
+            size,
             desk,
             dirty: true,
+            outdoor,
+            round: 0,
+            bets: Vec::new(),
+            bet_close: 0,
+            quiet_until: EXHIBIT_AFTER_MS,
         })
+    }
+
+    /// How long bets on the bots' match stay open (0: they're closed).
+    fn bet_ms(&self, now: u32) -> u32 {
+        if self.m.exhibition() && matches!(self.m.status, pb::COUNTDOWN | pb::PLAYING) {
+            self.bet_close.saturating_sub(now)
+        } else {
+            0
+        }
     }
 
     /// The map tile under field point (x, y).
@@ -83,6 +147,7 @@ impl Yard {
                     deaths: p.deaths,
                     streak: p.streak,
                     fix: p.fix,
+                    class: p.class,
                 })
                 .collect(),
             pickups: m
@@ -96,6 +161,43 @@ impl Yard {
                 })
                 .collect(),
             level: m.level,
+            round: self.round,
+            exhibit: m.exhibition(),
+            bet_ms: self.bet_ms(now).min(65_535) as u16,
+            bets: (0..2u8)
+                .map(|t| {
+                    (self.bets.iter().filter(|b| b.pick == t).count() as i32 * BET_STAKE)
+                        .min(65_535) as u16
+                })
+                .collect(),
+            bet_pay: BET_PAY as u16,
+            classes: m.slots.iter().map(|&s| m.class_of(s)).collect(),
+            mode: m.mode,
+            to_win: m.to_win(),
+            flags: m
+                .flags
+                .iter()
+                .map(|f| PbFlag {
+                    x: x100(f.x),
+                    y: x100(f.y),
+                    carrier: f.carrier,
+                    home: f.is_home(),
+                })
+                .collect(),
+            points: m
+                .points
+                .iter()
+                .map(|p| PbPoint {
+                    x: x100(p.x),
+                    y: x100(p.y),
+                    r: (p.r * 10.0).round() as u8,
+                    value: (p.value * 10.0).round() as u8,
+                    owner: p.owner,
+                    progress: (p.progress + 100.0).round().clamp(0.0, 200.0) as u8,
+                })
+                .collect(),
+            winner_id: m.winner_id,
+            giant: m.players.iter().find(|p| p.giant).map_or(0, |p| p.id),
         }
     }
 }
@@ -114,11 +216,42 @@ impl Instance {
         self.yard.as_ref().is_some_and(|y| y.m.playing(id))
     }
 
-    /// To everyone in the hall (it's all one room).
+    /// To everyone in the hall (it's all one room); out in the city, to
+    /// those who can see the field.
     fn pb_broadcast(&mut self, msg: &ServerMsg, except: Option<u32>) {
         let bytes = msg.to_bytes();
-        for (id, a) in self.avatars.iter_mut() {
-            if Some(*id) != except {
+        let Some(y) = &self.yard else { return };
+        if !y.outdoor {
+            for (id, a) in self.avatars.iter_mut() {
+                if Some(*id) != except {
+                    a.send(&bytes);
+                }
+            }
+            return;
+        }
+        let (x0, y0) = y.origin;
+        let (x1, y1) = (
+            x0 + y.size.0.saturating_sub(1),
+            y0 + y.size.1.saturating_sub(1),
+        );
+        let mut cells: Vec<u16> = Vec::new();
+        for ty in [y0, (y0 + y1) / 2, y1] {
+            for tx in [x0, (x0 + x1) / 2, x1] {
+                cells.push(self.cell_of((tx, ty)));
+            }
+        }
+        cells.sort_unstable();
+        cells.dedup();
+        let mut to: Vec<u32> = cells
+            .iter()
+            .flat_map(|&c| self.watchers[c as usize].iter().copied())
+            .collect();
+        to.sort_unstable();
+        to.dedup();
+        for id in to {
+            if Some(id) != except
+                && let Some(a) = self.avatars.get_mut(&id)
+            {
                 a.send(&bytes);
             }
         }
@@ -183,6 +316,18 @@ impl Instance {
 
     pub(super) fn pb_join(&mut self, id: u32, team: u8, now: u32) {
         let Some(y) = self.yard.as_mut() else { return };
+        // The bots' match: called off (bets handed back), the field's yours.
+        if y.m.exhibition() && !y.m.playing(id) {
+            y.m.call_off();
+            y.dirty = true;
+            self.pb_settle(None);
+        }
+        let Some(y) = self.yard.as_mut() else { return };
+        y.quiet_until = now + EXHIBIT_AFTER_MS;
+        // (A bot playing as a player: the server plays its seat.)
+        if self.avatars.get(&id).is_some_and(|a| a.bot) && !y.m.pilots.contains(&id) {
+            y.m.pilots.push(id);
+        }
         let was_playing = y.m.playing(id);
         if !y.m.join(id, team, now) {
             self.error(
@@ -267,6 +412,22 @@ impl Instance {
         }
     }
 
+    pub(super) fn pb_mode(&mut self, id: u32, mode: u8, now: u32) {
+        let Some(y) = self.yard.as_mut() else { return };
+        if y.m.set_mode(id, mode) {
+            y.dirty = true;
+            self.pb_send_state(now);
+        }
+    }
+
+    pub(super) fn pb_class(&mut self, id: u32, class: u8, now: u32) {
+        let Some(y) = self.yard.as_mut() else { return };
+        if y.m.pick_class(id, class) {
+            y.dirty = true;
+            self.pb_send_state(now);
+        }
+    }
+
     pub(super) fn pb_move(&mut self, id: u32, x: u16, y: u16, aim: u16, now: u32) {
         let Some(yd) = self.yard.as_mut() else { return };
         yd.m.claim_move(id, from100(x), from100(y), pb::aim_from_u16(aim), now);
@@ -302,13 +463,31 @@ impl Instance {
     pub(super) fn pb_tick(&mut self, now: u32) {
         let Some(y) = self.yard.as_mut() else { return };
         let before = y.m.status;
+        // Out in the city, nobody's played for a while: the bots put on a match.
+        if before == pb::LOBBY
+            && y.outdoor
+            && y.m.humans() == 0
+            && now >= y.quiet_until
+            && y.m.exhibit(now)
+        {
+            y.round += 1;
+            y.bets.clear();
+            y.bet_close = now + pb::COUNTDOWN_MS + BET_OPEN_MS;
+            self.pb_send_state(now);
+            return;
+        }
         if before == pb::LOBBY {
+            // (Someone's in the lobby: no bots' match for a while yet.)
+            if y.m.humans() > 0 {
+                y.quiet_until = now + EXHIBIT_AFTER_MS;
+            }
             if y.dirty {
                 y.dirty = false;
                 self.pb_send_state(now);
             }
             return;
         }
+        let exhibit = y.m.exhibition();
         let mut rng = rand::rng();
         let (evs, shots) = y.m.step(now, 100, &mut || rng.random::<f64>());
         let after = y.m.status;
@@ -333,12 +512,24 @@ impl Instance {
         for e in &evs {
             self.pb_broadcast(&event_msg(e), None);
         }
+        // The bots' match decided: the bets settled.
+        if exhibit && after == pb::OVER && before != pb::OVER {
+            let w = self.yard.as_ref().map_or(2, |y| y.m.winner);
+            self.pb_settle((w < 2).then_some(w));
+        }
         // The match won: a win for everyone on the winning side (people, not bots).
         if after == pb::OVER && before != pb::OVER {
             let won: Vec<u32> = self.yard.as_ref().map_or(vec![], |y| {
                 y.m.players
                     .iter()
-                    .filter(|p| !p.bot && p.team == y.m.winner)
+                    .filter(|p| {
+                        !p.bot
+                            && if y.m.mode == pb::mode::FFA {
+                                p.id == y.m.winner_id
+                            } else {
+                                p.team == y.m.winner
+                            }
+                    })
                     .map(|p| p.id)
                     .collect()
             });
@@ -348,8 +539,145 @@ impl Instance {
         }
         if before != pb::LOBBY && after == pb::LOBBY {
             self.pb_all_to_desk(now);
+            if let Some(y) = self.yard.as_mut() {
+                y.quiet_until = now + EXHIBIT_AFTER_MS;
+            }
         }
         self.pb_send_state(now);
+    }
+
+    /// A bet on the bots' match (`pick`: the team): the stake taken, or told why not.
+    pub(super) fn pb_bet(&mut self, id: u32, pick: u8, now: u32) {
+        let Some(a) = self.avatars.get_mut(&id) else {
+            return;
+        };
+        if !a.emote_rl.try_take(now as u64) {
+            return;
+        }
+        let (player, minor) = (a.player_id.clone(), a.minor);
+        let Some(y) = self.yard.as_ref() else { return };
+        // (Betting's kept from under-18s, as the casino is.)
+        if minor && !commons_common::config::env_or("COMMONS_CASINO_MINORS", false) {
+            return self.error(id, error_code::NOT_ALLOWED, "betting's for grown-ups");
+        }
+        if y.bet_ms(now) == 0 {
+            return self.error(
+                id,
+                error_code::NOT_ALLOWED,
+                "bets are closed for this match",
+            );
+        }
+        if pick > 1 || y.bets.iter().any(|b| b.id == id) {
+            return;
+        }
+        let Some(econ) = self.economy.clone() else {
+            return self.error(id, error_code::UNAVAILABLE, "the bookie's away just now");
+        };
+        if let Some(y) = self.yard.as_mut() {
+            y.bets.push(Bet {
+                id,
+                player: player.clone(),
+                pick,
+                paid: false,
+            });
+            y.dirty = true;
+        }
+        let key = self.next_key("pb_bet");
+        let who = player.clone();
+        self.spawn_call(
+            async move { econ.grant(&who, COIN, -BET_STAKE, "pb_bet", &key).await },
+            move |inst, result| {
+                let bet = inst
+                    .yard
+                    .as_mut()
+                    .and_then(|y| y.bets.iter_mut().find(|b| b.id == id));
+                match (result, bet) {
+                    (Ok(applied), Some(b)) => {
+                        b.paid = true;
+                        if inst.avatars.contains_key(&id) {
+                            inst.send_granted(id, &applied);
+                            inst.send_to(
+                                id,
+                                &ServerMsg::PbBetPlaced {
+                                    pick,
+                                    pays: BET_PAY as u16,
+                                },
+                            );
+                        }
+                    }
+                    // (The match was over before the till rang: it's handed straight back.)
+                    (Ok(applied), None) => {
+                        if inst.avatars.contains_key(&id) {
+                            inst.send_granted(id, &applied);
+                        }
+                        inst.pb_pay(id, player, BET_STAKE, true);
+                    }
+                    (Err(e), _) => {
+                        if let Some(y) = inst.yard.as_mut() {
+                            y.bets.retain(|b| b.id != id);
+                        }
+                        let (code, msg) = match e {
+                            CallError::Rejected(_) => {
+                                (error_code::NOT_ALLOWED, "not enough coins for a bet")
+                            }
+                            CallError::Unavailable => {
+                                (error_code::UNAVAILABLE, "the bookie's busy; try again")
+                            }
+                        };
+                        inst.error(id, code, msg);
+                    }
+                }
+            },
+        );
+    }
+
+    /// The bots' match decided (`team`: who won; none: a draw, or called
+    /// off): winning bets paid, stakes handed back, the rest told.
+    fn pb_settle(&mut self, team: Option<u8>) {
+        let Some(y) = self.yard.as_mut() else { return };
+        let bets = std::mem::take(&mut y.bets);
+        for b in bets {
+            if !b.paid {
+                continue;
+            }
+            match team {
+                None => self.pb_pay(b.id, b.player, BET_STAKE, true),
+                Some(t) if t == b.pick => self.pb_pay(b.id, b.player, BET_PAY, false),
+                Some(_) => self.send_to(
+                    b.id,
+                    &ServerMsg::PbBetSettled {
+                        coins: 0,
+                        refund: false,
+                    },
+                ),
+            }
+        }
+    }
+
+    /// Coins to a spectator (wherever they've got to: it's theirs).
+    fn pb_pay(&mut self, id: u32, player: String, coins: i32, refund: bool) {
+        let Some(econ) = self.economy.clone() else {
+            return;
+        };
+        let reason = if refund { "pb_bet_back" } else { "pb_bet_won" };
+        let key = self.next_key("pb_bet_pay");
+        self.spawn_call(
+            async move { econ.grant(&player, COIN, coins, reason, &key).await },
+            move |inst, result| match result {
+                Ok(applied) if inst.avatars.contains_key(&id) => {
+                    inst.send_granted(id, &applied);
+                    inst.send_to(
+                        id,
+                        &ServerMsg::PbBetSettled {
+                            coins: coins as u16,
+                            refund,
+                        },
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(?e, coins, "paintball bet: couldn't pay out"),
+            },
+        );
     }
 }
 
@@ -386,6 +714,10 @@ mod tests {
     use std::sync::Arc;
 
     fn yard() -> crate::instance::Instance {
+        yard_in("paintball")
+    }
+
+    fn yard_in(zone: &str) -> crate::instance::Instance {
         let mut m = map(30, 30);
         let o = |kind: &str, x, y, w, h, label: Option<&str>| MapObject {
             kind: kind.into(),
@@ -403,7 +735,7 @@ mod tests {
             o("pb_pad", 11, 3, 1, 1, None),
             o("pb_desk", 10, 20, 6, 1, None),
         ];
-        instance_for(Arc::new(ZoneDef::new("paintball".into(), m, None)))
+        instance_for(Arc::new(ZoneDef::new(zone.into(), m, None)))
     }
 
     fn send(inst: &mut crate::instance::Instance, conn: u64, msg: ClientMsg) {
@@ -415,6 +747,85 @@ mod tests {
             ServerMsg::PbState { status, slots, .. } => Some((*status, slots.clone())),
             _ => None,
         })
+    }
+
+    #[test]
+    fn a_tv_on_the_paintball_channel_watches_the_yard_unseen() {
+        let mut inst = yard_in("city");
+        let mut a = connect(&mut inst, 1, "a", (12, 18));
+        let mut tv = claims("tv");
+        tv.watch = true;
+        tv.channel = 1;
+        let mut w = connect_with(&mut inst, 2, tv, (12, 18));
+        // Over the middle of the field, not walking, not talking.
+        assert_eq!(inst.avatars[&2].tile, (12, 8));
+        send(
+            &mut inst,
+            2,
+            ClientMsg::MoveTo {
+                x: 3,
+                y: 3,
+                sprint: false,
+            },
+        );
+        send(&mut inst, 2, ClientMsg::PbJoin { team: 0 });
+        // The bots' match comes on: they see it, and can bet on it; nobody sees them.
+        let now = inst.clock.now_ms();
+        inst.pb_tick(now + 7000);
+        inst.flush();
+        a.pump();
+        w.pump();
+        assert!(last_state(&w).is_some_and(|(s, _)| s == pb::COUNTDOWN));
+        assert!(inst.avatars[&2].motion.is_none());
+        assert!(!a.known.contains(&2));
+        assert!(
+            inst.yard.as_ref().unwrap().m.slot_of(2).is_none(),
+            "watching, not playing"
+        );
+        // A bet from the sofa is taken to the bookie (not ignored, as a TV watcher's
+        // other messages are; there's no bank in a test, so the bookie's away).
+        send(&mut inst, 2, ClientMsg::PbBet { pick: 1 });
+        inst.flush();
+        w.pump();
+        assert!(
+            w.log
+                .iter()
+                .any(|m| matches!(m, ServerMsg::PbBetPlaced { .. } | ServerMsg::Error { .. }))
+        );
+    }
+
+    #[test]
+    fn outdoors_the_bots_play_when_nobody_does_till_someone_steps_up() {
+        let mut inst = yard_in("city");
+        let mut a = connect(&mut inst, 1, "a", (12, 18));
+        let now = inst.clock.now_ms();
+        // A while with nobody playing: the bots put on a match, open for bets.
+        inst.pb_tick(now + 7000);
+        inst.flush();
+        a.pump();
+        let (status, slots) = last_state(&a).unwrap();
+        assert_eq!(status, pb::COUNTDOWN);
+        assert!(slots.iter().all(|&s| pb::is_bot(s)));
+        assert!(
+            a.log.iter().any(
+                |m| matches!(m, ServerMsg::PbState { exhibit: true, bet_ms, .. } if *bet_ms > 0)
+            )
+        );
+        // Someone steps up: it's called off, and the field's theirs (bots to take on, in the lobby).
+        send(&mut inst, 1, ClientMsg::PbJoin { team: 0 });
+        inst.flush();
+        a.pump();
+        let (status, slots) = last_state(&a).unwrap();
+        assert_eq!(status, pb::LOBBY);
+        assert_eq!(slots[0], 1);
+        // In the hall, the bots never start one on their own.
+        let mut hall = yard();
+        let mut b = connect(&mut hall, 1, "b", (12, 25));
+        let now = hall.clock.now_ms();
+        hall.pb_tick(now + 60_000);
+        hall.flush();
+        b.pump();
+        assert_eq!(last_state(&b).map(|s| s.0), Some(pb::LOBBY));
     }
 
     #[test]

@@ -16,6 +16,7 @@ mod boats;
 mod bowling;
 mod fishing;
 mod garden;
+mod golf;
 mod hangout;
 mod home;
 mod labyrinth;
@@ -39,7 +40,8 @@ use commons_common::filter::clean_chat;
 use commons_common::ratelimit::Bucket;
 use commons_common::token::JoinClaims;
 use commons_protocol::{
-    CELL_TILES, ClientMsg, EntityInfo, ServerMsg, Tile, emote, error_code, push_framed, state,
+    CELL_TILES, ClientMsg, EntityInfo, MapDot, ServerMsg, Tile, emote, error_code, push_framed,
+    state,
 };
 use commons_sim::{
     Grid, Motion, SPRINT_SPEED_X10, TURN_EARLY, TilePos, WALK_SPEED_X10, compress, route, vehicles,
@@ -72,6 +74,9 @@ const MAX_VIEW_W: u8 = 255;
 const MAX_VIEW_H: u8 = 160;
 /// Entities per CellEnter message, keeping each well under the u16 frame limit.
 const CELL_ENTER_CHUNK: usize = 200;
+/// How often everyone's told where everyone is, for the map, and at most how many.
+const MAP_DOTS_EVERY_MS: u32 = 2000;
+const MAP_DOTS_MAX: usize = 400;
 /// A client whose unsent output grows past this is disconnected.
 const MAX_PENDING_OUT: usize = 256 * 1024;
 const INBOX: usize = 16_384;
@@ -199,6 +204,8 @@ struct Avatar {
     /// Watching the arena from a home TV: nobody sees them, they don't walk
     /// or talk; they only watch (and may bet and vote, as the crowd does).
     watching: bool,
+    /// A bot playing as a player (`JoinClaims::bot`).
+    pub(crate) bot: bool,
     fish: Option<fishing::FishSession>,
 }
 
@@ -249,6 +256,7 @@ impl Avatar {
             away: self.away,
             reading: self.reading,
             calling: self.calling,
+            bot: self.bot,
         }
     }
 }
@@ -309,6 +317,8 @@ pub struct Instance {
     yard: Option<paintball::Yard>,
     /// The skatepark, if the map has one.
     skate: Option<skate::Park>,
+    /// The mini golf course, if the map has one.
+    golf: Option<golf::Course>,
     /// The arcade's cabinets, in map order.
     cabinets: Vec<arcade::Cabinet>,
     /// The pitch's ball, if the zone has a pitch.
@@ -316,6 +326,8 @@ pub struct Instance {
     /// Activity of players who left since the last report.
     activity_left: Vec<crate::econ::ActivityRow>,
     next_activity_report: u32,
+    /// When everyone's next told where everyone is, for the map (`MapDots`).
+    next_map_dots: u32,
     /// Index of the programme last announced on the big screen.
     screen_index: Option<usize>,
     /// Collision grid; a copy so placed furniture can block tiles.
@@ -378,8 +390,10 @@ impl Instance {
             .map(|o| pool::Table::new((o.x, o.y)));
         let lab = labyrinth::Lab::for_zone(&zone);
         let arena_obj = arena::Arena::new(&zone.map.objects);
-        let yard = paintball::Yard::new(&zone.map.objects);
+        // (Out in the city it's the yard behind the Splat Yard: the bots play when nobody else is.)
+        let yard = paintball::Yard::new(&zone.map.objects, zone.id != "paintball");
         let skate = skate::Park::new(&zone.map.objects);
+        let golf = golf::Course::new(&zone.map.objects);
         let lanes = zone
             .map
             .objects
@@ -440,10 +454,12 @@ impl Instance {
             arena: arena_obj,
             yard,
             skate,
+            golf,
             cabinets,
             ball,
             activity_left: Vec::new(),
             next_activity_report: ACTIVITY_EVERY_MS,
+            next_map_dots: 0,
             screen_index: None,
             owner,
             economy,
@@ -574,6 +590,7 @@ impl Instance {
             }
             let now = self.clock.now_ms();
             self.step(now);
+            self.map_dots_tick(now);
             self.elder_tick(now);
             self.ball_tick(now);
             if now >= self.next_activity_report {
@@ -680,6 +697,35 @@ impl Instance {
         }
     }
 
+    /// The city's map: every couple of seconds, everyone where they stand (so
+    /// those out of view, across town, still show), to each player there.
+    fn map_dots_tick(&mut self, now: u32) {
+        if now < self.next_map_dots || self.zone.map.streets.is_none() {
+            return;
+        }
+        self.next_map_dots = now + MAP_DOTS_EVERY_MS;
+        let dots: Vec<MapDot> = self
+            .avatars
+            .values()
+            .filter(|a| !a.watching)
+            .take(MAP_DOTS_MAX)
+            .map(|a| MapDot {
+                id: a.id,
+                x: a.tile.0,
+                y: a.tile.1,
+                name: a.name.clone(),
+                bot: a.bot,
+            })
+            .collect();
+        if dots.len() < 2 {
+            return;
+        }
+        let bytes = ServerMsg::MapDots { dots }.to_bytes();
+        for a in self.avatars.values_mut().filter(|a| !a.bot && !a.watching) {
+            a.send(&bytes);
+        }
+    }
+
     fn send_to(&mut self, id: u32, msg: &ServerMsg) {
         if let Some(a) = self.avatars.get_mut(&id) {
             a.send(&msg.to_bytes());
@@ -733,25 +779,44 @@ impl Instance {
             (spawn.x as i32 + rng.random_range(-3..=3)).clamp(0, self.grid.w as i32 - 1) as u16,
             (spawn.y as i32 + rng.random_range(-2..=2)).clamp(0, self.grid.h as i32 - 1) as u16,
         );
+        // Back just where you were (`at:x,y`: a bot's own token, reconnecting
+        // in place; players' tokens only ever carry a door, from the orchestrator).
+        let here = claims
+            .arrive
+            .as_deref()
+            .and_then(|a| a.strip_prefix("at:"))
+            .and_then(|xy| xy.split_once(','))
+            .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)))
+            .and_then(|t| self.grid.nearest_walkable(t, 3));
         // Leaving your home, you step out of your own front door.
-        let door = claims.arrive.as_ref().and_then(|lot| {
-            let key = format!("door:{lot}");
-            let objects = &self.zone.map.objects;
-            objects
-                .iter()
-                .find(|o| o.kind == "spot" && o.label.as_deref() == Some(key.as_str()))
-                // Up from the labyrinth: out by the sundial at the heart of the hedge maze.
-                .or_else(|| {
-                    objects
-                        .iter()
-                        .find(|o| lot == "maze" && o.kind == "maze_heart")
-                })
-                .and_then(|o| self.grid.nearest_walkable((o.x, o.y), 2))
+        let door = here.or_else(|| {
+            claims.arrive.as_ref().and_then(|lot| {
+                let key = format!("door:{lot}");
+                let objects = &self.zone.map.objects;
+                objects
+                    .iter()
+                    .find(|o| o.kind == "spot" && o.label.as_deref() == Some(key.as_str()))
+                    // Up from the labyrinth: out by the sundial at the heart of the hedge maze.
+                    .or_else(|| {
+                        objects
+                            .iter()
+                            .find(|o| lot == "maze" && o.kind == "maze_heart")
+                    })
+                    .and_then(|o| self.grid.nearest_walkable((o.x, o.y), 2))
+            })
         });
-        // Watching on a TV: right over the middle of the arena (unseen, so anywhere will do).
-        let watching = claims.watch && self.arena.is_some();
-        let ring = self.arena.as_ref().map(|a| a.ring_middle());
-        let tile = ring
+        // Watching on a TV: right over the middle of what's on, the arena or
+        // the paintball yard's field (unseen, so anywhere will do).
+        let on_tv = if claims.channel == 1 {
+            self.yard
+                .as_ref()
+                .filter(|y| y.outdoor())
+                .map(|y| y.middle())
+        } else {
+            self.arena.as_ref().map(|a| a.ring_middle())
+        };
+        let watching = claims.watch && on_tv.is_some();
+        let tile = on_tv
             .filter(|_| watching)
             .or(door)
             .or_else(|| self.grid.nearest_walkable(jitter, 8))
@@ -800,6 +865,7 @@ impl Instance {
             calling: false,
             next_lantern: 0,
             watching,
+            bot: claims.bot,
         };
         avatar.send(
             &ServerMsg::Welcome {
@@ -894,7 +960,10 @@ impl Instance {
         if self.avatars.get(&id).is_some_and(|a| a.watching)
             && !matches!(
                 msg,
-                ClientMsg::Ping { .. } | ClientMsg::ArenaBet { .. } | ClientMsg::ArenaVote { .. }
+                ClientMsg::Ping { .. }
+                    | ClientMsg::ArenaBet { .. }
+                    | ClientMsg::ArenaVote { .. }
+                    | ClientMsg::PbBet { .. }
             )
         {
             return;
@@ -939,8 +1008,9 @@ impl Instance {
             }
             ClientMsg::ChatSay { text } => self.chat(id, &text, now),
             ClientMsg::Going { zone, arrive } => {
-                // Nobody follows you home (homes are private), and names stay short.
-                if zone == "home" || zone.len() > 32 || arrive.len() > 32 {
+                // Names stay short. (Into a home, `arrive` is whose: a follower
+                // only gets in as a visitor would, as the orchestrator decides.)
+                if zone.len() > 32 || arrive.len() > 40 {
                     return;
                 }
                 let cell = self.avatars[&id].cell;
@@ -1012,6 +1082,9 @@ impl Instance {
             ClientMsg::ArenaSwitch { slot } => self.arena_switch(id, slot, now),
             ClientMsg::PbBot { slot, on } => self.pb_bot(id, slot, on, now),
             ClientMsg::PbLevel { level } => self.pb_level(id, level, now),
+            ClientMsg::PbClass { class } => self.pb_class(id, class, now),
+            ClientMsg::PbMode { mode } => self.pb_mode(id, mode, now),
+            ClientMsg::PbBet { pick } => self.pb_bet(id, pick, now),
             ClientMsg::ArenaMove { x, y, aim, reach } => self.arena_move(id, x, y, aim, reach, now),
             ClientMsg::ArenaAct { act, aim, reach } => self.arena_act(id, act, aim, reach, now),
             ClientMsg::PbJoin { team } => self.pb_join(id, team, now),
@@ -1036,6 +1109,15 @@ impl Instance {
                 label,
             } => self.skate_score(id, kind, points, label, now),
             ClientMsg::SkateQuest { day, slot } => self.skate_quest(id, day, slot, now),
+            ClientMsg::GolfBall {
+                hole,
+                x,
+                y,
+                strokes,
+                state,
+            } => self.golf_ball(id, hole, x, y, strokes, state, now),
+            ClientMsg::GolfCard { strokes } => self.golf_card(id, strokes),
+            ClientMsg::GolfBoardAsk {} => self.golf_board(id),
             ClientMsg::SkateDuel { join, bot, grinds } => {
                 self.skate_duel(id, join, bot, grinds, now)
             }
@@ -1167,7 +1249,8 @@ impl Instance {
             turned_early = true;
             found = Some(back);
         }
-        let Some(mut full) = found.or_else(|| route(grid, start, target, MAX_PATH_EXPANSIONS)) else {
+        let Some(mut full) = found.or_else(|| route(grid, start, target, MAX_PATH_EXPANSIONS))
+        else {
             self.error(id, error_code::NO_PATH, "can't get there");
             return;
         };
@@ -1621,6 +1704,8 @@ pub(crate) mod tests {
             muted_until: 0,
             arrive: None,
             watch: false,
+            channel: 0,
+            bot: false,
         }
     }
 

@@ -182,6 +182,15 @@ pub fn paintball() -> MapFile {
     }
     // The field (solid: nobody wanders on while a match is on).
     b.object("pb_field", fx, fy, fw, fh, Some("Splat Yard"), true);
+    // Netting round it on steel posts, as out in the city's yard.
+    for x in fx - 1..=fx + fw {
+        b.decor(x, fy - 1, "netfence");
+        b.decor(x, fy + fh, "netfence");
+    }
+    for y in fy..fy + fh {
+        b.decor(fx - 1, y, "netfence");
+        b.decor(fx + fw, y, "netfence");
+    }
     // The left half, mirrored onto the right: (kind, x, y, w, h) in field tiles.
     let half: &[(&str, u16, u16, u16, u16)] = &[
         ("pb_snake", 4, 5, 1, 4),

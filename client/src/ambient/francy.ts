@@ -55,7 +55,7 @@ export class Francy {
     const at = { x: spot.x, y: spot.y };
     this.tile = at;
     this.bobber = { x: spot.x - 2, y: spot.y };
-    const info: EntityInfo = { id: FRANCY_ID, name: "Fisherman Franci 🎣", look: LOOK, x: at.x, y: at.y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, reading: 0, calling: false, style: 0, pet: 0, vehicle: 0, tool: 0 };
+    const info: EntityInfo = { id: FRANCY_ID, name: "Fisherman Franci 🎣", look: LOOK, x: at.x, y: at.y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, reading: 0, calling: false, bot: false, style: 0, pet: 0, vehicle: 0, tool: 0 };
     this.avatar = new Avatar(info, scene, labels, false, Date.now());
     this.avatar.markNpc();
     this.avatar.setState(SITTING, at);

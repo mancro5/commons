@@ -86,7 +86,8 @@ export function drawBoard3d(ctx: CanvasRenderingContext2D, kit: Kit, t: number) 
     ctx.scale(1, 0.32);
     ctx.translate(-cx, -cy);
     ctx.fillStyle = g;
-    ctx.globalAlpha = 0.9 + 0.1 * Math.sin(t * 3);
+    // (The fire deck flickers, as flames do.)
+    ctx.globalAlpha = deck.fire ? 0.8 + 0.12 * Math.sin(t * 21) + 0.08 * Math.sin(t * 7.7) : 0.9 + 0.1 * Math.sin(t * 3);
     ctx.fillRect(cx - 110, cy - 110, 220, 220);
     ctx.restore();
     ctx.globalAlpha = 1;
@@ -181,7 +182,8 @@ export function drawBoard3d(ctx: CanvasRenderingContext2D, kit: Kit, t: number) 
     if (deck.glow) {
       // The whole deck lit up from within (bright), its edge a neon line.
       fill(ctx, pts, hex(deck.glow), false);
-      fill(ctx, pts, `rgba(235,255,245,${0.35 + 0.08 * Math.sin(t * 3)})`, false);
+      if (deck.fire) fireFace(ctx, pts, t);
+      else fill(ctx, pts, `rgba(235,255,245,${0.35 + 0.08 * Math.sin(t * 3)})`, false);
       neonEdge(ctx, pts, hex(deck.glow));
     }
   };
@@ -194,7 +196,8 @@ export function drawBoard3d(ctx: CanvasRenderingContext2D, kit: Kit, t: number) 
     if (deck.glow) {
       // The grip side glows too: the whole deck, not a line round it.
       fill(ctx, top, hex(deck.glow), false);
-      fill(ctx, top, `rgba(235,255,245,${0.3 + 0.08 * Math.sin(t * 3)})`, false);
+      if (deck.fire) fireFace(ctx, top, t);
+      else fill(ctx, top, `rgba(235,255,245,${0.3 + 0.08 * Math.sin(t * 3)})`, false);
       neonEdge(ctx, top, hex(deck.glow));
     }
   } else {
@@ -206,6 +209,26 @@ export function drawBoard3d(ctx: CanvasRenderingContext2D, kit: Kit, t: number) 
 }
 
 /** A polygon, with a pixel's dark outline round it (`outlined`), crisp. */
+/** The fire deck's face: deep red at its rim, orange, a flickering yellow-hot core. */
+function fireFace(ctx: CanvasRenderingContext2D, pts: P2[], t: number) {
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const r = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 2;
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  const k = 0.85 + 0.15 * Math.sin(t * 19) * Math.sin(t * 7.3);
+  g.addColorStop(0, `rgba(255,236,120,${0.9 * k})`);
+  g.addColorStop(0.35, "rgba(255,150,30,0.75)");
+  g.addColorStop(0.75, "rgba(232,56,26,0.6)");
+  g.addColorStop(1, "rgba(150,20,10,0.7)");
+  ctx.save();
+  clipTo(ctx, pts);
+  ctx.fillStyle = g;
+  ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+  ctx.restore();
+}
+
 function fill(ctx: CanvasRenderingContext2D, pts: P2[], color: string, outlined = true) {
   if (outlined) for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) polygon(ctx, O, pts.map(([x, y]) => [x + dx, y + dy] as P2));
   polygon(ctx, color, pts);

@@ -1431,13 +1431,27 @@ impl Instance {
                 self.arcade_end(cab, status);
                 continue;
             }
+            // A bot playing as a player (botswarm's, `JoinClaims::bot`): its side
+            // played by the cabinet's bot, as the pool table does.
+            let (pa, pb) = {
+                let c = &self.cabinets[cab as usize];
+                (c.a, c.b)
+            };
+            let piloted =
+                |p: u32| p != 0 && p != arcade::BOT && self.avatars.get(&p).is_some_and(|a| a.bot);
+            let sides = [
+                pa == arcade::BOT || piloted(pa),
+                pb == arcade::BOT || piloted(pb),
+            ];
             let c = &mut self.cabinets[cab as usize];
             if c.status != arcade::PLAYING {
                 continue;
             }
+            // (The real-time games run one bot: the cabinet's own, else the pilot's.)
             let bot = [c.a, c.b]
                 .iter()
                 .position(|&p| p == arcade::BOT)
+                .or_else(|| sides.iter().position(|&s| s))
                 .map(|s| s as u8);
             let mut step = c.game.tick(now, bot);
             if step.changed {
@@ -1446,7 +1460,7 @@ impl Instance {
             }
             if step.over.is_none()
                 && !c.game.realtime()
-                && bot == Some(c.game.turn())
+                && sides[c.game.turn() as usize]
                 && now >= c.bot_at
                 && let Some(mv) = c.game.bot_move()
             {
@@ -1694,6 +1708,48 @@ mod tests {
             last,
             Some(arcade::B_WON),
             "the bot wins against a column-zero spammer"
+        );
+    }
+
+    /// A bot playing as a player (Davidd) never sends a move: the cabinet's
+    /// bot plays his side too, so the game is played out.
+    #[test]
+    fn a_bot_player_s_side_is_played_for_it() {
+        let mut m = map(22, 14);
+        m.objects = vec![MapObject {
+            kind: "arcade_cabinet".into(),
+            x: 2,
+            y: 1,
+            w: 2,
+            h: 2,
+            label: Some("Connect Four".into()),
+        }];
+        let mut inst = instance_for(Arc::new(ZoneDef::new("arcade".into(), m, None)));
+        let mut a = connect(&mut inst, 1, "davidd", (20, 12));
+        for av in inst.avatars.values_mut() {
+            av.bot = true;
+        }
+        inst.handle(Cmd::Msg {
+            conn: 1,
+            msg: ClientMsg::ArcadeJoin {
+                cab: 0,
+                vs_bot: true,
+            },
+        });
+        let mut now = inst.clock.now_ms();
+        for _ in 0..80 {
+            now += 2000;
+            inst.arcade_tick(now);
+        }
+        inst.flush();
+        a.pump();
+        let last = a.log.iter().rev().find_map(|m| match m {
+            ServerMsg::ArcadeState { status, .. } => Some(*status),
+            _ => None,
+        });
+        assert!(
+            matches!(last, Some(arcade::A_WON | arcade::B_WON | arcade::DRAW)),
+            "the game's played out, both sides by bots: {last:?}"
         );
     }
 }

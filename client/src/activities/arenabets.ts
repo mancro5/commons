@@ -27,6 +27,8 @@ export const BET_STAKE = 10;
 const STAKE = BET_STAKE;
 const GOLIATH = 1;
 const TEAMS = 2;
+/** The outdoor paintball's bots' match: Blue (places 0–2) or Red (3–5). */
+const PAINTBALL = 3;
 
 let allowed = true;
 
@@ -57,6 +59,12 @@ export class BetPanel {
       return [
         { pick: 0, name: "⚔️ Gladiators", sub: men.join(", "), css: "#ffd23f" },
         { pick: 1, name: "👹 The Goliath", sub: host.name(s.goliath), css: "#ff5a2a" },
+      ];
+    }
+    if (s.mode === PAINTBALL) {
+      return [
+        { pick: 0, name: "🔵 Blue", sub: "3 bots", css: "#5aa8ff" },
+        { pick: 1, name: "🔴 Red", sub: "3 bots", css: "#ff6a5a" },
       ];
     }
     if (s.mode === TEAMS) {
