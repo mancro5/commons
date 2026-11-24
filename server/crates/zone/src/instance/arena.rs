@@ -10,7 +10,7 @@
 use super::Instance;
 use crate::econ::CallError;
 use commons_protocol::{
-    ArenaCloud, ArenaFighter, ArenaGift, ArenaLion, ServerMsg, error_code, state,
+    ArenaCloud, ArenaFighter, ArenaGift, ArenaLion, ArenaStat, ServerMsg, error_code, state,
 };
 use commons_sim::TilePos;
 use commons_sim::arena as sim;
@@ -46,6 +46,100 @@ pub(super) struct Arena {
     /// Nobody's played since then (or someone's just looked at the sign):
     /// the bots put on a match of their own once it's been a while.
     quiet_until: u32,
+    /// How each fighter's doing, this round and this match (`ArenaStats`).
+    tally: std::collections::HashMap<u32, Tally>,
+}
+
+/// A fighter's tally, from the round's events: this round, and the match so far.
+#[derive(Debug, Default, Clone, Copy)]
+struct Tally {
+    kills: u32,
+    damage: u32,
+    hits: u32,
+    taken: u32,
+    downs: u32,
+    match_kills: u32,
+    match_damage: u32,
+}
+
+impl Arena {
+    /// A round's events, counted up: blows landed and taken, slams into the
+    /// walls, knockdowns (a fighter's doing, not a hazard's).
+    fn count(&mut self, e: &sim::Event) {
+        let mut add = |id: u32, f: &dyn Fn(&mut Tally)| {
+            if id != 0 {
+                f(self.tally.entry(id).or_default());
+            }
+        };
+        match e.kind {
+            sim::ev::HIT | sim::ev::WALL_SLAM if e.n > 0 => {
+                let n = e.n as u32;
+                if e.a != e.b {
+                    add(e.a, &|t| {
+                        t.damage += n;
+                        t.match_damage += n;
+                        t.hits += 1;
+                    });
+                }
+                add(e.b, &|t| t.taken += n);
+            }
+            sim::ev::DOWN => {
+                if e.a != e.b {
+                    add(e.a, &|t| {
+                        t.kills += 1;
+                        t.match_kills += 1;
+                    });
+                }
+                add(e.b, &|t| t.downs += 1);
+            }
+            // A new round: this round's counts start again (a new match: all of them).
+            sim::ev::ROUND_START => {
+                let fresh = e.n <= 1;
+                for t in self.tally.values_mut() {
+                    *t = Tally {
+                        match_kills: if fresh { 0 } else { t.match_kills },
+                        match_damage: if fresh { 0 } else { t.match_damage },
+                        ..Tally::default()
+                    };
+                }
+                if fresh {
+                    self.tally.clear();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The round's tally, everyone who fought in it (most knockdowns, then most damage, first).
+    fn stats_msg(&self, winner: u32, over: bool) -> ServerMsg {
+        let c16 = |v: u32| v.min(u16::MAX as u32) as u16;
+        let c8 = |v: u32| v.min(u8::MAX as u32) as u8;
+        let mut rows: Vec<ArenaStat> = self
+            .m
+            .fighters
+            .iter()
+            .map(|f| {
+                let t = self.tally.get(&f.id).copied().unwrap_or_default();
+                ArenaStat {
+                    id: f.id,
+                    kills: c8(t.kills),
+                    damage: c16(t.damage),
+                    hits: c16(t.hits),
+                    taken: c16(t.taken),
+                    downs: c8(t.downs),
+                    match_kills: c16(t.match_kills),
+                    match_damage: t.match_damage,
+                }
+            })
+            .collect();
+        rows.sort_by_key(|r| (std::cmp::Reverse(r.kills), std::cmp::Reverse(r.damage)));
+        ServerMsg::ArenaStats {
+            round: self.m.round,
+            winner,
+            over,
+            rows,
+        }
+    }
 }
 
 /// How long the arena stands empty before the bots put on a match; and
@@ -79,6 +173,7 @@ impl Arena {
             bets: Vec::new(),
             lobby_at: 0,
             quiet_until: EXHIBIT_AFTER_MS,
+            tally: Default::default(),
         })
     }
 
@@ -814,16 +909,35 @@ impl Instance {
         }
         for e in &evs {
             self.arena_broadcast(&event_msg(e));
+            if let Some(ar) = self.arena.as_mut() {
+                ar.count(e);
+            }
         }
         if let Some(e) = evs.iter().find(|e| e.kind == sim::ev::ROUND_WON) {
             let side = self.arena.as_ref().and_then(|ar| ar.m.won_by(e.a));
             self.arena_settle(side);
+            // How everyone did, the round's over (and the match, if that was it).
+            if let Some(msg) = self
+                .arena
+                .as_ref()
+                .map(|ar| ar.stats_msg(e.a, after == sim::OVER))
+            {
+                self.arena_broadcast(&msg);
+            }
         }
         // The match won: a gladiator's win, on the leaderboard (not a bot's).
         if after == sim::OVER && before != sim::OVER {
             let w = self.arena.as_ref().map_or(0, |ar| ar.m.winner);
             if w != 0 && !sim::is_bot(w) {
                 self.count_stat(w, "arena_wins");
+                // The day's mission: won as the day's class?
+                let kit = self
+                    .arena
+                    .as_ref()
+                    .and_then(|ar| ar.m.fighters.iter().find(|f| f.id == w).map(|f| f.kit));
+                if let Some(kit) = kit {
+                    self.arena_daily(w, kit);
+                }
             }
         }
         // A new round: everyone back to their gates (and the ring cleared).
@@ -845,6 +959,32 @@ impl Instance {
             }
         }
         self.arena_send(now);
+    }
+}
+
+impl Instance {
+    /// `id` won a match as class `kit`: the API pays the day's mission if
+    /// that's the day's class (the coins come with it).
+    fn arena_daily(&mut self, id: u32, kit: u8) {
+        let (Some(econ), Some(a)) = (self.economy.clone(), self.avatars.get(&id)) else {
+            return;
+        };
+        let player = a.player_id.clone();
+        self.spawn_call(
+            async move { econ.daily_arena(&player, kit).await },
+            move |inst, r| match r {
+                Ok(v) if v["paid"] == true => {
+                    if let Ok(applied) =
+                        serde_json::from_value::<crate::econ::Applied>(v["applied"].clone())
+                        && inst.avatars.contains_key(&id)
+                    {
+                        inst.send_granted(id, &applied);
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(?e, "couldn't check the gladiator mission"),
+            },
+        );
     }
 }
 
@@ -886,6 +1026,53 @@ mod tests {
             ServerMsg::ArenaState { status, slots, .. } => Some((*status, slots.clone())),
             _ => None,
         })
+    }
+
+    #[test]
+    fn a_round_is_tallied_from_its_blows_and_knockdowns_and_the_match_kept_across_rounds() {
+        let mut inst = park();
+        let ar = inst.arena.as_mut().unwrap();
+        let ev = |kind: u8, a: u32, b: u32, n: u16| sim::Event {
+            kind,
+            a,
+            b,
+            x: 0.0,
+            y: 0.0,
+            n,
+            m: 0,
+            vx: 0.0,
+            vy: 0.0,
+        };
+        ar.count(&ev(sim::ev::ROUND_START, 0, 0, 1));
+        ar.count(&ev(sim::ev::HIT, 1, 2, 30));
+        ar.count(&ev(sim::ev::HIT, 1, 2, 25));
+        ar.count(&ev(sim::ev::WALL_SLAM, 1, 2, 10));
+        ar.count(&ev(sim::ev::HIT, 2, 1, 5));
+        // A hazard's blow (a meteor's: nobody's) and a blocked one (0) aren't anyone's doing.
+        ar.count(&ev(sim::ev::HIT, 0, 1, 40));
+        ar.count(&ev(sim::ev::HIT, 2, 1, 0));
+        ar.count(&ev(sim::ev::DOWN, 1, 2, 0));
+        let t1 = ar.tally[&1];
+        let t2 = ar.tally[&2];
+        assert_eq!(
+            (t1.kills, t1.damage, t1.hits, t1.taken, t1.downs),
+            (1, 65, 3, 45, 0)
+        );
+        assert_eq!(
+            (t2.kills, t2.damage, t2.hits, t2.taken, t2.downs),
+            (0, 5, 1, 65, 1)
+        );
+        // Round two: the round's counts start again, the match's carry on.
+        ar.count(&ev(sim::ev::ROUND_START, 0, 0, 2));
+        ar.count(&ev(sim::ev::HIT, 1, 2, 20));
+        let t1 = ar.tally[&1];
+        assert_eq!(
+            (t1.kills, t1.damage, t1.match_kills, t1.match_damage),
+            (0, 20, 1, 85)
+        );
+        // A new match: all of it from nothing.
+        ar.count(&ev(sim::ev::ROUND_START, 0, 0, 1));
+        assert!(ar.tally.is_empty());
     }
 
     #[test]

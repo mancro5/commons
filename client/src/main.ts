@@ -34,7 +34,12 @@ import { Rent } from "./rent";
 import { ApiError, Auth, type Destination } from "./net/api";
 import type { CloseReason } from "./net/socket";
 import { Shop } from "./shop";
-import { Pets } from "./pets";
+import { MAX_LEVEL, Pets, SKILL_LEVELS, TRICKS, levelTitle } from "./pets";
+import { levelFanfare, voice as petVoice, welcome as petWelcome } from "./ambient/petsfx";
+import { speciesOfCode } from "./world/petlook";
+import { PetGamePanel } from "./activities/petgames";
+import { PetMakerPanel } from "./ui/petmaker";
+import { PetPanel } from "./ui/petpanel";
 import { Rides } from "./rides";
 import { Goods } from "./goods";
 import { DecoratePanel } from "./ui/exterior";
@@ -44,7 +49,7 @@ import { Gov } from "./gov";
 import { CityMapPanel, type LitHome } from "./ui/citymap";
 import { ReportPanel, StoryPanel, TownHallPanel } from "./ui/gov";
 import { ApartmentsPanel, PostOfficePanel, StallPanel, YardPanel } from "./ui/homes";
-import { DirectoryPanel, ShopPanel } from "./ui/mall";
+import { DirectoryPanel, type PetHome, ShopPanel } from "./ui/mall";
 import { Minimap } from "./ui/minimap";
 import { FoundersPanel, WelcomePanel } from "./ui/welcome";
 import { BottlesPanel, WishPanel } from "./ui/dream";
@@ -268,6 +273,7 @@ async function main() {
     onRidePick: () => game?.ridePicker(),
     onLeave: () => game?.leaveBuilding(),
     onToys: () => game?.pickToy(),
+    onPet: () => game?.openPet(),
     onBag: () => ui.bag.toggle(),
     onAlbum: () => ui.album.toggle(),
     onFriends: () => (ui.friends.open ? ui.friends.hide() : ui.friends.showList()),
@@ -361,17 +367,51 @@ async function main() {
   const apartments = new ApartmentsPanel(homes, rent, rentHost);
   const stall = new StallPanel(rent, eco, rentHost);
   const shop = new Shop(auth, eco);
-  const pets = new Pets(auth);
+  const pets = new Pets(auth, eco);
+  const petHome = (): PetHome => (pets.mine ? "have_pet" : !rent.home ? "no_house" : rent.home.kind === "apartment" ? "apartment" : "ok");
+  const petGame = new PetGamePanel(pets);
+  petGame.onPlayed = () => (game as Game | null)?.cheerPet(2);
+  const petPanel = new PetPanel(pets, eco, {
+    walk: (out) => (game as Game | null)?.walkPet(out),
+    play: () => (game as Game | null)?.playWithPet(),
+    cheer: (n) => (game as Game | null)?.cheerPet(n),
+    rehomed: () => (game as Game | null)?.refreshLook(),
+    outdoors: () => (game as Game | null)?.outdoors ?? false,
+    trick: (key) => void (game as Game | null)?.petTrick(key),
+    care: (kind) => (game as Game | null)?.petCare(kind) ?? false,
+    toast: (t, ms) => hud.toast(t, ms),
+    lead: (k) => (game as Game | null)?.petLead(k),
+    refreshLook: () => (game as Game | null)?.refreshLook(),
+  });
+  // What it did for your pet, over its head (or, with it nowhere to be seen, a note).
+  pets.onGain = (g) => {
+    if ((game as Game | null)?.showPetGain(g)) return;
+    const bits = [g.joy >= 1 ? `+${g.joy} ♥ Fun` : "", g.food >= 1 ? `+${g.food} 🍖 Food` : "", g.xp >= 1 ? `+${g.xp} ✦ XP` : ""].filter(Boolean);
+    if (bits.length) hud.toast(`🐾 ${pets.mine?.name ?? "Your pet"}: ${bits.join(", ")}`, 3000);
+  };
+  // A level up: a fanfare, hearts and hops, and any trick it's just learnt (or a skill point to spend).
+  pets.onLevelUp = (name, level) => {
+    const learnt = TRICKS.find((t) => t.level === level);
+    const title = levelTitle(level);
+    const was = levelTitle(level - 1);
+    hud.toast(`🎉 ${name} reached level ${level}!${title !== was ? ` Now a ${title}!` : ""}${learnt ? ` New trick: ${learnt.emoji} ${learnt.name}!` : ""}${SKILL_LEVELS.includes(level) ? " ⭐ A new skill point: pick a skill in the pet menu!" : ""}${level >= MAX_LEVEL ? " The very top: a legend! 👑" : ""}`, 6500);
+    levelFanfare(level >= MAX_LEVEL);
+    const mine = pets.mine;
+    if (mine) petVoice(speciesOfCode(mine.code), "excited", 1, 650);
+    (game as Game | null)?.cheerPet(4);
+  };
+  const petMaker = new PetMakerPanel(pets, eco, petHome, (text) => (hud.toast(text, 6500), petWelcome()));
   const rides = new Rides(auth, eco);
   const goods = new Goods(auth, eco);
   const shopPanel = new ShopPanel(
     shop,
     eco,
     (dept, item) => ui.wardrobe.openFitting(dept, dept === "skins" ? "The mirror" : "Fitting room", item),
-    () => (pets.mine ? "have_pet" : !rent.home ? "no_house" : rent.home.kind === "apartment" ? "apartment" : "ok"),
+    petHome,
     (name) => {
       void pets.load().catch(() => {});
-      hud.toast(`🐾 Welcome to the family, ${name}! They've gone ahead to wait in your yard. Walk home and take them out.`, 6500);
+      hud.toast(`🐾 Welcome to the family, ${name}! They've gone home ahead of you: find them inside your house, and feed and play with them every day.`, 6500);
+      petWelcome();
     },
     (item) => void (game as Game | null)?.testRide(item),
   );
@@ -502,6 +542,9 @@ async function main() {
     homes,
     rent,
     pets,
+    petPanel,
+    petMaker,
+    petGame,
     rides,
     goods,
     decorate: new DecoratePanel(goods, homes),

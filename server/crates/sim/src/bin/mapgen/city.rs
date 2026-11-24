@@ -2848,10 +2848,10 @@ fn fairground(k: &mut Blk) {
     for (x, y) in [(21, 34), (26, 34)] {
         k.decor(x, y, "lamp");
     }
-    // The pitch, south-west: smaller, five-a-side.
-    k.rect(4, 37, 16, 8, "pitch");
-    k.object("goal", 4, 39, 1, 3, "");
-    k.object("goal", 19, 39, 1, 3, "");
+    // The pitch, south-west: smaller, five-a-side (clear of the block's rounded corner).
+    k.rect(5, 37, 14, 6, "pitch");
+    k.object("goal", 5, 38, 1, 3, "");
+    k.object("goal", 18, 38, 1, 3, "");
     k.spot("pitch", 12, 36);
     // The bandstand, south-east, on its own little square with benches.
     k.rect(28, 36, 15, 9, "plaza");

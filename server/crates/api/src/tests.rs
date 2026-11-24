@@ -2313,6 +2313,70 @@ mod mall_shop {
     }
 
     #[tokio::test]
+    async fn two_pets_playing_treat_catch_grow_fond_of_each_other_a_few_games_a_day() {
+        let Some(db) = db().await else { return };
+        let s = state(db, 1000).await;
+        let app = Router::new()
+            .nest("/api", crate::pets::routes())
+            .nest("/internal", crate::internal::routes())
+            .with_state(s.clone());
+        let svc = format!(
+            "Bearer {}",
+            token::sign(&s.secret, &ServiceClaims { svc: "zone".into() }, 60)
+        );
+        let (a, b) = (player(&s).await, player(&s).await);
+        for (p, name) in [(a, "Rex"), (b, "Mittens")] {
+            sqlx::query("INSERT INTO pets (owner, item_id, name) VALUES ($1, 600, $2)")
+                .bind(p)
+                .bind(name)
+                .execute(&s.db)
+                .await
+                .unwrap();
+        }
+        let play = |score: i32| json!({ "a": a.to_string(), "b": b.to_string(), "score": score });
+        let (st, r) = call(&app, &svc, "POST", "/internal/pets/duo", play(24)).await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+        assert_eq!(
+            (
+                r["counted"].as_bool(),
+                r["friendship"].as_i64(),
+                r["level"].as_i64()
+            ),
+            (Some(true), Some(4), Some(1))
+        );
+        assert_eq!(r["xp"].as_i64(), Some(18));
+        let xp: i32 = sqlx::query_scalar("SELECT xp FROM pets WHERE owner = $1")
+            .bind(b)
+            .fetch_one(&s.db)
+            .await
+            .unwrap();
+        assert_eq!(xp, 18);
+        // Up to the day's few: then just for fun.
+        for _ in 0..4 {
+            call(&app, &svc, "POST", "/internal/pets/duo", play(40)).await;
+        }
+        let (_, r) = call(&app, &svc, "POST", "/internal/pets/duo", play(40)).await;
+        assert_eq!(
+            (r["counted"].as_bool(), r["xp"].as_i64()),
+            (Some(false), Some(0))
+        );
+        let level = r["level"].as_i64().unwrap();
+        assert!(level >= 3, "{r}");
+        // Each sees the other's pet among its friends.
+        let auth = bearer_for(&s, a, "A");
+        let (_, r) = call(&app, &auth, "GET", "/api/me/pet/friends", json!({})).await;
+        assert_eq!(r["friends"][0]["pet"], "Mittens", "{r}");
+        for q in [
+            "DELETE FROM pet_friends WHERE a = $1 OR b = $1",
+            "DELETE FROM pets WHERE owner = $1",
+        ] {
+            for p in [a, b] {
+                sqlx::query(q).bind(p).execute(&s.db).await.unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn a_pet_needs_a_house_and_a_daily_walk() {
         let Some(db) = db().await else { return };
         let s = state(db, 1000).await;
@@ -2456,6 +2520,50 @@ mod mall_shop {
             .unwrap();
         let (_, r) = call(&app, &svc, "GET", &format!("/internal/look/{p}"), json!({})).await;
         assert_eq!(r["pet"].as_u64(), Some(0));
+
+        // The skill tree: one point at level 1, spent on a skill at the root
+        // (not one that grows from another not learnt yet); more as it grows.
+        let skill = |k: &str| json!({ "skill": k });
+        let learn = |k: &'static str| call(&app, &auth, "POST", "/api/me/pet/skill", skill(k));
+        let (st, r) = learn("magnet").await;
+        assert_eq!(
+            (st, r["error"].as_str()),
+            (StatusCode::CONFLICT, Some("not_yet"))
+        );
+        let (st, r) = learn("fish").await;
+        assert_eq!(
+            (st, r["pet"]["skills"].as_i64()),
+            (StatusCode::OK, Some(1)),
+            "{r}"
+        );
+        let (st, r) = learn("treasure").await;
+        assert_eq!(
+            (st, r["error"].as_str()),
+            (StatusCode::CONFLICT, Some("no_points"))
+        );
+        sqlx::query("UPDATE pets SET xp = $2 WHERE owner = $1")
+            .bind(p)
+            .bind(crate::pets::xp_for(8))
+            .execute(&s.db)
+            .await
+            .unwrap();
+        let (st, r) = learn("magnet").await;
+        assert_eq!(
+            (st, r["pet"]["skills"].as_i64()),
+            (StatusCode::OK, Some(3)),
+            "{r}"
+        );
+        let (st, r) = learn("fish").await;
+        assert_eq!(
+            (st, r["error"].as_str()),
+            (StatusCode::CONFLICT, Some("learnt"))
+        );
+        let (st, _) = learn("flying").await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        // Out walking, the zone knows what it can do.
+        call(&app, &auth, "POST", "/api/me/pet/walk", walk(true)).await;
+        let (_, r) = call(&app, &svc, "GET", &format!("/internal/look/{p}"), json!({})).await;
+        assert_eq!(r["pet_skills"].as_u64(), Some(3));
         for q in [
             "DELETE FROM pets WHERE owner = $1",
             "DELETE FROM leases WHERE player_id = $1",
@@ -3383,8 +3491,8 @@ mod fish_quest {
             .unwrap();
         assert_eq!(
             coins,
-            100 + sell * 3 * need as i64,
-            "triple, for as many as he asked"
+            100 + sell * crate::fishquest::PAY_TIMES * need as i64,
+            "five times over, for as many as he asked"
         );
         assert_eq!(r["quest"]["items"][0]["given"], need);
         let (st, _) = call(
@@ -3875,18 +3983,23 @@ mod home_life {
         let s = state(db.clone(), 1000).await;
         let app = Router::new()
             .nest("/api", crate::daily::routes())
+            .nest("/internal", crate::daily::internal_routes())
             .with_state(s.clone());
         let p = player(&s).await;
         let auth = bearer_for(&s, p, "Daily");
+        let svc = format!(
+            "Bearer {}",
+            token::sign(&s.secret, &ServiceClaims { svc: "zone".into() }, 60)
+        );
         // Nothing done: no bonus.
         let (st, r) = api(&app, &auth, "POST", "/api/daily/bonus", json!({})).await;
         assert_eq!(
             (st, r["error"].as_str()),
             (StatusCode::CONFLICT, Some("not_done"))
         );
-        // The skate quests paid (as the zone pays them), both orders filled.
+        // One skate quest paid (as the zone pays them: any one will do), both orders filled.
         let day = chrono::Utc::now().timestamp().div_euclid(86_400);
-        for slot in 0..3 {
+        for slot in [1] {
             apply_tx(
                 &s.db,
                 &s.catalog,
@@ -3920,10 +4033,39 @@ mod home_life {
                     .unwrap();
             }
         }
+        // The gladiator mission: a win as another class doesn't count; as the
+        // day's class, it pays (by the class), once.
+        let (_, r) = api(&app, &auth, "GET", "/api/daily", json!({})).await;
+        assert_eq!(r["all_done"], json!(false), "{r}");
+        let class = r["arena"]["class"].as_u64().unwrap() as u8;
+        let reward = r["arena"]["reward"].as_i64().unwrap() as i32;
+        assert!((30..=50).contains(&reward));
+        let won = |kit: u8| json!({ "player": p.to_string(), "kit": kit });
+        let (_, r) = api(
+            &app,
+            &svc,
+            "POST",
+            "/internal/daily/arena",
+            won((class + 1) % 5),
+        )
+        .await;
+        assert_eq!(r["paid"], false, "{r}");
+        let (_, r) = api(&app, &svc, "POST", "/internal/daily/arena", won(class)).await;
+        assert_eq!(
+            (r["paid"].clone(), r["reward"].as_i64()),
+            (json!(true), Some(reward as i64)),
+            "{r}"
+        );
+        let (_, r) = api(&app, &svc, "POST", "/internal/daily/arena", won(class)).await;
+        assert_eq!(r["paid"], false, "once a day");
         let (_, r) = api(&app, &auth, "GET", "/api/daily", json!({})).await;
         assert_eq!(
-            (r["all_done"].clone(), r["claimed"].clone()),
-            (json!(true), json!(false)),
+            (
+                r["all_done"].clone(),
+                r["claimed"].clone(),
+                r["arena"]["done"].clone()
+            ),
+            (json!(true), json!(false), json!(true)),
             "{r}"
         );
         let coins = || async {

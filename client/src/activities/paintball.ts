@@ -22,6 +22,7 @@ import { Container, Graphics, Sprite, type Texture } from "pixi.js";
 import * as sfx from "../ambient/sfx";
 import type { EntityInfo, ServerMsg } from "../net/protocol.gen";
 import { button, el, isTyping } from "../ui/panels";
+import { CORNER, inCorner } from "../ui/corner";
 import { TILE, toTexture } from "../world/art";
 import { Avatar } from "../world/avatars";
 import { decodeLook, encodeLook } from "../world/look";
@@ -608,6 +609,16 @@ export class PaintballShow {
   private dirEl = el("div", "pb-dir");
   private cross = el("div", "pb-cross");
   private lobby = el("div", "pb-lobby");
+  /** Out in the city: up in the corner by the grounds (as the golf course's), and the lobby opened from it. */
+  private enterBtn = Object.assign(
+    button("🎯 Paintball", () => {
+      this.lobbyOpen = true;
+      this.lobbyKey = "";
+      this.renderLobby();
+    }, "golf-enter pb-enter"),
+    { hidden: true },
+  );
+  private lobbyOpen = false;
   private results = el("div", "pb-results");
   private touchPad = el("div", "pb-touch");
   private lobbyKey = "";
@@ -1359,8 +1370,16 @@ export class PaintballShow {
     this.lastFrame = wallNow;
     const s = this.state;
     this.drawBoard();
-    // (Out in the city, the lobby shows as you walk onto the grounds, not only when the match changes.)
-    if (this.grounds) this.renderLobby();
+    // (Out in the city: the button as you walk onto the grounds, the lobby once it's tapped;
+    // walk off and both go.)
+    if (this.grounds) {
+      const near = this.near();
+      if (!near) this.lobbyOpen = false;
+      const showBtn = near && !this.lobbyOpen && !this.capturing && !this.spectating && !this.tv;
+      if (this.enterBtn.hidden === showBtn) this.enterBtn.hidden = !showBtn;
+      if (!this.enterBtn.isConnected) inCorner(this.enterBtn, CORNER.PLAY);
+      this.renderLobby();
+    }
     // Out in the city: bets on the bots' match, for those watching from the grounds.
     if (this.bets) this.bets.update(s && s.exhibit ? this.betState(s) : null, this.near() && !this.capturing);
     const live = !!s && s.status !== LOBBY;
@@ -2342,7 +2361,7 @@ export class PaintballShow {
     if (!s) return;
     const me = this.selfId();
     const mySlot = s.slots.indexOf(me);
-    const show = !this.capturing && !this.spectating && !this.tv && s.status !== OVER && this.near();
+    const show = !this.capturing && !this.spectating && !this.tv && s.status !== OVER && this.near() && (!this.grounds || this.lobbyOpen);
     this.lobby.hidden = !show;
     if (!show) {
       this.lobbyKey = "";
@@ -2357,6 +2376,8 @@ export class PaintballShow {
       el("strong", "", this.grounds ? "🎯 Splat Yard · Out in the open" : "🎯 Splat Yard · Paintball"),
       el("span", "pb-lobby-status", s.status === LOBBY ? `${s.mode === MODE.GOLIATH ? "5 v 1" : s.mode === MODE.FFA ? "6 players" : "3 v 3"} · ${MODES[s.mode]?.name ?? ""} · ${MODES[s.mode]?.short ?? ""}` : s.exhibit ? `🤖 Bots' match · ${s.blue} – ${s.red}` : `Match on · ${s.blue} – ${s.red}`),
     );
+    // (Out in the city, opened from the corner button: closed again here, unless you've a place in it.)
+    if (this.grounds && mySlot < 0) head.append(button("✕", () => ((this.lobbyOpen = false), this.renderLobby()), "small subtle pb-lobby-close"));
     // The bots' match: watch (and bet), or step up and it's yours.
     if (s.exhibit) {
       const box = el("div", "pb-lobby-exhibit");
@@ -2505,6 +2526,7 @@ export class PaintballShow {
   }
 
   destroy() {
+    this.enterBtn.remove();
     this.sight.remove();
     this.specBar.remove();
     this.glows.destroy();

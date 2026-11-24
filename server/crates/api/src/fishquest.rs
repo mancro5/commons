@@ -1,13 +1,13 @@
 //! The fisherman's daily order: every `PERIOD_SECS` (20 hours) he asks each
-//! angler for three particular fish, some of them more than once (a couple
-//! of an uncommon one, one or more of something rarer, one of the very rare).
-//! Bring them to him and he pays three times what he'd give for them
-//! otherwise; the order fills as you do. Which fish is drawn from the angler
+//! angler for three particular fish, one each, one of each rarity (an
+//! uncommon one, a rare one, an epic one). Bring them to him and he pays five
+//! times what he'd give for them otherwise; the order fills as you do. Which fish is drawn from the angler
 //! and the period (the same all period, different for everyone); what's been
 //! handed in is kept in `fish_quests`.
 //!
 //! He has a second order, apart from the first, for what the magnet brings
-//! up: its own three things, its own progress, paid the same.
+//! up: its own three things (a common, an uncommon and a rare find, one
+//! each), its own progress, paid the same.
 //!
 //! `GET /api/fisherman/quest`, `POST /api/fisherman/quest/deliver`;
 //! `GET /api/fisherman/magnet-quest`, `POST /api/fisherman/magnet-quest/deliver`.
@@ -30,7 +30,7 @@ type S = State<Arc<AppState>>;
 /// How long an order lasts.
 pub const PERIOD_SECS: i64 = 20 * 3600;
 /// What he pays for an ordered fish, over its usual price.
-pub const PAY_TIMES: i64 = 3;
+pub const PAY_TIMES: i64 = 5;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -58,14 +58,13 @@ impl Board {
         }
     }
 
-    /// An uncommon fish (two to four of it), a rare or epic one (one to
-    /// three), an epic or legendary one (just the one). The magnet's slower,
-    /// so it asks for a little less: a few common things, a couple of
-    /// uncommon ones, and one rare or epic.
+    /// One of each of three rarities: an uncommon fish, a rare one and an
+    /// epic one. The magnet's slower, so a rung lower: a common find, an
+    /// uncommon one and a rare one.
     fn slots(self) -> [Slot; 3] {
         match self {
-            Board::Fish => [(&[1], (2, 4)), (&[2, 3], (1, 3)), (&[3, 4], (1, 1))],
-            Board::Magnet => [(&[0], (3, 5)), (&[1], (1, 3)), (&[2, 3], (1, 1))],
+            Board::Fish => [(&[1], (1, 1)), (&[2], (1, 1)), (&[3], (1, 1))],
+            Board::Magnet => [(&[0], (1, 1)), (&[1], (1, 1)), (&[2], (1, 1))],
         }
     }
 
@@ -215,7 +214,7 @@ async fn magnet_deliver(
     hand_in(&state, Board::Magnet, &headers, req).await
 }
 
-/// Hands things in for an order (no more than it still wants), paid triple.
+/// Hands things in for an order (no more than it still wants), paid five times over.
 async fn hand_in(
     state: &AppState,
     board: Board,

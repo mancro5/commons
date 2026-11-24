@@ -185,7 +185,7 @@ pub fn mall() -> MapFile {
 
 /// Where a shop's goods stand. Showrooms (furniture) are four carpeted
 /// model rooms with up to four pieces each; racks are mannequins; pens hold the
-/// Pets shop's animals; shelves stand in rows. Each display is
+/// Pets shop's animals; the Breeder has its studio; shelves stand in rows. Each display is
 /// labelled `<dept>:<slot>`; what's on it comes from the stock.
 fn displays(b: &mut Builder, d: &Department, counter_y: u16) {
     let [x0, y0, x1, y1] = d.unit;
@@ -267,7 +267,7 @@ fn displays(b: &mut Builder, d: &Department, counter_y: u16) {
                 }
             }
             b.object("spot", tx1, cy, 1, 1, Some("track"), false);
-            for y in [iy0 + 3, iy1 - 10, iy1 - 4] {
+            for y in [iy0 + 1, iy1 - 5, iy1 - 2] {
                 for x in [tx1 + 3, tx1 + 6] {
                     for dy in 0..2 {
                         for dx in 0..2 {
@@ -293,6 +293,23 @@ fn displays(b: &mut Builder, d: &Department, counter_y: u16) {
                 for x in ix0..=ix1 {
                     b.ground(x, y, "carpet");
                 }
+            }
+            "display"
+        }
+        "breeder" => {
+            // The Breeder: the pet-maker studio along the back wall (a
+            // grooming table, a big mirror, coat swatches), a play mat where
+            // a few of the Breeder's pets romp, and beds, trees and bowls on
+            // show by the door.
+            b.object("pet_studio", ix0 + 1, iy0, 5, 2, Some(&d.key), true);
+            for y in iy1 - 3..=iy1 {
+                for x in ix0 + 1..ix0 + 9 {
+                    b.ground(x, y, "carpet");
+                }
+            }
+            b.object("pet_mat", ix0 + 1, iy1 - 3, 8, 4, Some(&d.key), false);
+            for x in [ix1 - 6, ix1 - 4, ix1 - 2] {
+                spots.push((x, iy1 - 1));
             }
             "display"
         }

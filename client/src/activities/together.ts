@@ -15,7 +15,17 @@ export const TOGETHER: Record<number, { icon: string; offer: string; verb: strin
   3: { icon: "💃", offer: "Dance together", verb: "a dance", done: "dance together" },
   // Rock paper scissors (see rps.ts): played out by the Rps messages.
   6: { icon: "✊", offer: "Rock paper scissors", verb: "a game of rock paper scissors", done: "play" },
+  // A 1v1 round of mini golf (minigolf.ts): only offered at the course.
+  8: { icon: "⛳", offer: "Golf 1v1", verb: "a 1v1 round of mini golf", done: "play" },
+  // Treat Catch (petduo.ts): only with both your pets out on a walk.
+  9: { icon: "🐾", offer: "Pet game: Treat Catch", verb: "a game of Treat Catch with your pets", done: "play" },
 };
+
+/** `together::PET_DUO`: Treat Catch, the two of you and your pets. */
+export const PET_DUO = 9;
+
+/** `together::GOLF`: a mini golf 1v1. */
+export const GOLF = 8;
 
 /** `together::FOLLOW` / `STOP_FOLLOW`: walking after someone. */
 export const FOLLOW = 4;
@@ -46,7 +56,7 @@ export class OfferCard {
     const yes = document.createElement("button");
     yes.type = "button";
     yes.className = "primary-sm";
-    yes.textContent = kind === FOLLOW ? "Sure, come along" : kind === BOAT ? "Climb aboard 🚣" : kind === 1 ? "Hug back" : kind === 2 ? "Slap it ✋" : kind === 6 ? "Let's play ✊" : "Dance!";
+    yes.textContent = kind === FOLLOW ? "Sure, come along" : kind === BOAT ? "Climb aboard 🚣" : kind === 1 ? "Hug back" : kind === 2 ? "Slap it ✋" : kind === 6 ? "Let's play ✊" : kind === 8 ? "You're on ⛳" : "Dance!";
     yes.onclick = () => {
       accept();
       this.hide();

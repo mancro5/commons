@@ -14,6 +14,7 @@ import { MUG_TOP, mugArt, mugLights } from "./mugart";
 import { drawSkateGround, drawSkateRoad, skateObject, type Relief } from "./skateart";
 import { SHOP_TOP, skateShopLights, skateShopObject } from "./skateshopart";
 import { poolRelief, poolTableCanvas } from "./poolart";
+import { basinRelief } from "./relief";
 import { yardDecor } from "./yardart";
 import { canPixel, drawPixelText, pixelWidth } from "./pixelfont";
 import { decodeLook, encodeLook } from "./look";
@@ -1304,6 +1305,7 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
   const h = o.h * TILE;
   let overhang = 0;
   let left = 0;
+  let relief: Relief | undefined;
   let c: HTMLCanvasElement;
   let ctx: CanvasRenderingContext2D;
   switch (o.kind) {
@@ -1395,6 +1397,9 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
           px(ctx, "#c99a2a", gx, gy, 2, 1);
           px(ctx, "#f6c343", gx, gy - 1, 2, 1);
         }
+        // In the tilted views it's built up: its bricked wall stands, its rim
+        // on it, the water sunk a little inside.
+        if (!pedestal) relief = basinRelief(c, cx, cy, rx, ry, rx - 10, ry - 8, wall, top);
       }
       if (pedestal) {
         // The pedestal: a stone column with a wide bowl, a narrow one above
@@ -1505,6 +1510,77 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       px(ctx, P.outline, w - 13, h - 18, 10, 8);
       px(ctx, "#fff9ec", w - 12, h - 17, 8, 6);
       px(ctx, "#e8566b", w - 10, h - 15, 4, 2);
+      break;
+    }
+    case "pet_studio": {
+      // The Breeder's studio: a big gold mirror, a wall of coat swatches, a
+      // grooming table with a fluffy towel, and a dryer on its stand.
+      const top = 40;
+      [c, ctx] = makeCanvas(w, h + top);
+      overhang = top;
+      const H2 = h + top;
+      // The swatch board: chips of every coat colour, a sign over it.
+      px(ctx, P.outline, 4, 6, 62, 44);
+      px(ctx, "#f6ecd9", 5, 7, 60, 42);
+      const chips = ["#f1e2c2", "#f8f5ee", "#e2ad55", "#e7883a", "#b45a30", "#76492c", "#c99a6a", "#9b9aa3", "#c3cad3", "#56545f", "#2e2c35", "#eeb48a", "#f7d74a", "#d9c08c", "#7f8ca3", "#3d7d52"];
+      chips.forEach((col, i) => {
+        const cx = 9 + (i % 6) * 9;
+        const cy = 20 + Math.floor(i / 6) * 9;
+        px(ctx, P.outline, cx - 1, cy - 1, 8, 8);
+        px(ctx, col, cx, cy, 6, 6);
+      });
+      px(ctx, "#e8566b", 8, 9, 54, 8);
+      label(ctx, "Pet Maker", 35, 13, "#fff9ec", 8);
+      // The mirror, oval in a gold frame.
+      const mx = 96;
+      const my = 26;
+      for (let dy = -22; dy <= 22; dy++) {
+        const half = Math.round(15 * Math.sqrt(Math.max(0, 1 - (dy / 22) ** 2)));
+        px(ctx, P.outline, mx - half - 3, my + dy, half * 2 + 6, 1);
+      }
+      for (let dy = -20; dy <= 20; dy++) {
+        const half = Math.round(13 * Math.sqrt(Math.max(0, 1 - (dy / 20) ** 2)));
+        px(ctx, "#f2c53a", mx - half - 2, my + dy, half * 2 + 4, 1);
+      }
+      for (let dy = -17; dy <= 17; dy++) {
+        const half = Math.round(11 * Math.sqrt(Math.max(0, 1 - (dy / 17) ** 2)));
+        px(ctx, "#bfe3f2", mx - half, my + dy, half * 2, 1);
+      }
+      px(ctx, "#e6f6fc", mx - 6, my - 12, 3, 10);
+      px(ctx, "#e6f6fc", mx - 2, my - 14, 2, 5);
+      px(ctx, "#fff3a0", mx - 1, my - 24, 2, 3);
+      // The grooming table, a towel and a brush on it.
+      const ty = H2 - 26;
+      px(ctx, P.outline, 70, ty, 60, 8);
+      px(ctx, "#d59a5e", 71, ty + 1, 58, 5);
+      px(ctx, "#e9b57c", 71, ty + 1, 58, 1);
+      px(ctx, P.outline, 74, ty + 8, 4, 18);
+      px(ctx, "#a7764a", 75, ty + 8, 2, 17);
+      px(ctx, P.outline, 122, ty + 8, 4, 18);
+      px(ctx, "#a7764a", 123, ty + 8, 2, 17);
+      px(ctx, P.outline, 80, ty - 4, 26, 5);
+      px(ctx, "#9fd3f0", 81, ty - 3, 24, 3);
+      px(ctx, "#ffffff", 83, ty - 3, 2, 3);
+      px(ctx, "#ffffff", 89, ty - 3, 2, 3);
+      px(ctx, "#ffffff", 95, ty - 3, 2, 3);
+      px(ctx, P.outline, 110, ty - 3, 12, 4);
+      px(ctx, "#e8566b", 111, ty - 2, 5, 2);
+      px(ctx, "#f6ecd9", 116, ty - 2, 5, 2);
+      // The dryer on its stand.
+      px(ctx, P.outline, 141, 18, 3, H2 - 20);
+      px(ctx, "#c3cad3", 142, 19, 1, H2 - 22);
+      px(ctx, P.outline, 134, 10, 18, 12);
+      px(ctx, "#f27aac", 135, 11, 16, 10);
+      px(ctx, "#ffb3d1", 136, 12, 6, 2);
+      px(ctx, P.outline, 136, H2 - 4, 14, 3);
+      px(ctx, "#c3cad3", 137, H2 - 3, 12, 1);
+      // A paw-print rug in front.
+      for (const [rx, ry] of [[22, H2 - 14], [34, H2 - 9], [46, H2 - 15]]) {
+        px(ctx, "#c9bfa6", rx, ry, 6, 5);
+        px(ctx, "#c9bfa6", rx - 1, ry - 3, 2, 2);
+        px(ctx, "#c9bfa6", rx + 2, ry - 4, 2, 2);
+        px(ctx, "#c9bfa6", rx + 5, ry - 3, 2, 2);
+      }
       break;
     }
     case "pet_pen": {
@@ -2799,7 +2875,7 @@ export function objectTexture(o: MapObject): { texture: Texture; overhang: numbe
       px(ctx, "rgba(0,0,0,0.2)", 0, 0, w, h);
     }
   }
-  return { texture: toTexture(c), overhang, left };
+  return { texture: toTexture(c), overhang, left, relief };
 }
 
 // ---- avatars ------------------------------------------------------------------
@@ -2832,8 +2908,8 @@ export function lookParts(look: number) {
   };
 }
 
-/** 0, 1 walking; 2 sitting; 4 riding a skateboard; 3, 5, 6 pushing one; 7–12 the robot; 13–15 dozing; 16, 17 sprinting. */
-export type AvatarFrame = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26;
+/** 0, 1 walking; 2 sitting; 4 riding a skateboard; 3, 5, 6 pushing one; 7–12 the robot; 13–15 dozing; 16, 17 sprinting; 27 crouched by a pet. */
+export type AvatarFrame = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27;
 /** The arena: 22 the sword arm raised to strike (knees bent), 23 on guard to parry (arms up in front). The sword itself is drawn over them. */
 export const SWORD_RAISE: AvatarFrame = 22;
 export const SWORD_GUARD: AvatarFrame = 23;
@@ -2846,6 +2922,8 @@ export const BOWL_HOLD: AvatarFrame = 18;
 export const BOWL_BACK: AvatarFrame = 19;
 export const BOWL_RELEASE: AvatarFrame = 20;
 export const BOWL_PICKUP: AvatarFrame = 21;
+/** Crouched low beside a pet, a hand down to it (world/petcare.ts). */
+export const PET_CROUCH: AvatarFrame = 27;
 const BOWL_BALL = "#3f5fd0";
 /** Sprinting: a stride, legs passing, the other stride, passing again. */
 export const SPRINT_FRAMES: AvatarFrame[] = [16, 0, 17, 0];
@@ -2869,6 +2947,8 @@ export const ROBOT_ARMS: Record<number, [ArmPose, ArmPose]> = {
   10: ["up", "up"],
   11: ["out", "down"],
   12: ["down", "out"],
+  // Crouched by a pet: a hand reaching down to it (brushing, scrubbing, a bowl set down).
+  27: ["down", "bent"],
 };
 
 /** For the pushing frames: how many pixels the standing knee bends. */
@@ -3004,9 +3084,9 @@ export function avatarCanvas(look: number, frame: AvatarFrame, style = 0, mask =
     px(ctx, o, 13, 25 + c, 4, 7 - c);
     px(ctx, "#4a4a5a", 14, 25 + c, 2, 6 - c);
     ctx.translate(0, c);
-  } else if (frame === BOWL_BACK || frame === BOWL_PICKUP || frame === SWORD_RAISE) {
+  } else if (frame === BOWL_BACK || frame === BOWL_PICKUP || frame === SWORD_RAISE || frame === PET_CROUCH) {
     // Knees bent: both legs shorter, the body lower.
-    const c = frame === BOWL_PICKUP ? 3 : frame === SWORD_RAISE ? 1 : 2;
+    const c = frame === PET_CROUCH ? 4 : frame === BOWL_PICKUP ? 3 : frame === SWORD_RAISE ? 1 : 2;
     px(ctx, o, 7, 25 + c, 4, 7 - c);
     px(ctx, o, 13, 25 + c, 4, 7 - c);
     px(ctx, "#4a4a5a", 8, 25 + c, 2, 6 - c);

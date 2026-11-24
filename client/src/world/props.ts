@@ -15,7 +15,6 @@ import { groundAt } from "./map";
 import { pondTexture } from "./roomskin";
 import { poolRelief } from "./poolart";
 import { bobberTexture, furnitureTexture, itemTexture, magnetBobberTexture, plantTexture, wetSoilTexture } from "./items";
-import { petTexture } from "./pets";
 import type { ZoneMap } from "./map";
 import type { TileXY } from "./motion";
 import type { Scene } from "./scene";
@@ -63,8 +62,6 @@ interface Placed {
   /** A display shelf's things, and the light it's giving. */
   shelf: Container | null;
   glow: Sprite | null;
-  pet: Sprite | null;
-  zzz: Graphics | null;
   over: Container | null;
 }
 
@@ -73,8 +70,6 @@ export class Props {
   readonly objects = new Map<string, Placed>();
   /** What stands on the tables (lifted onto their tops). */
   readonly tops = new Map<string, Placed>();
-  /** Your pet (its code), curled up on its bed or tree at home (0: none, or not your home). */
-  petCode = 0;
   /** How lights reach the room (the day and night's light layer). */
   lightUp: { add: (x: number, y: number, color: number, scale: number, key: string) => Sprite; lit: (n: number) => void } | null = null;
   /** Outdoors: where a piece may go (your own front yard). */
@@ -254,7 +249,6 @@ export class Props {
       const at = oy * this.map.width + ox;
       if (at < this.map.collision.length) this.map.collision[at] = 1;
     }
-    this.dressPet(this.objects.get(key)!);
     this.seatPlant(x, y);
     this.shine(x, y, this.objects.get(key)!);
     // Furniture blocks walking, as on the server (rugs are walked over).
@@ -346,7 +340,7 @@ export class Props {
       this.scene.sorted.addChild(s);
       // In the 3D view, a table: its top lying flat at its height, its front and side standing.
       this.scene.setRelief(s, poolShape, s.position.y);
-      return { sprite: s, item, rot, key: itemKey, on: false, live: null, tank: null, shelf: null, glow: null, pet: null, zzz: null, over: null };
+      return { sprite: s, item, rot, key: itemKey, on: false, live: null, tank: null, shelf: null, glow: null, over: null };
     }
     if (WIDE.has(itemKey)) {
       // Two tiles long, standing on both: across them facing you or away, back over them turned.
@@ -358,13 +352,13 @@ export class Props {
       s.zIndex = (across ? y * TILE + TILE : (y + 2) * TILE) - 2 + oy;
       this.scene.sorted.addChild(s);
       this.buildUp(s, itemKey, f);
-      return { sprite: s, item, rot, key: itemKey, on: false, live: null, tank: null, shelf: null, glow: null, pet: null, zzz: null, over: null };
+      return { sprite: s, item, rot, key: itemKey, on: false, live: null, tank: null, shelf: null, glow: null, over: null };
     }
     if (isPond) {
       // (It's in the ground itself: nothing stands there.)
       s.visible = false;
       this.scene.sorted.addChild(s);
-      return { sprite: s, item, rot, key: itemKey, on: false, live: null, tank: null, shelf: null, glow: null, pet: null, zzz: null, over: null };
+      return { sprite: s, item, rot, key: itemKey, on: false, live: null, tank: null, shelf: null, glow: null, over: null };
     }
     const flat = FLAT.has(itemKey);
     const wall = WALLS.has(itemKey) && this.baseCollision[y * this.map.width + x] !== 0;
@@ -398,7 +392,7 @@ export class Props {
       if (live) over.addChild(live.view);
       this.scene.sorted.addChild(over);
     }
-    return { sprite: s, item, rot, key: itemKey, on: false, live, tank, shelf, glow: null, pet: null, zzz: null, over };
+    return { sprite: s, item, rot, key: itemKey, on: false, live, tank, shelf, glow: null, over };
   }
 
   // ---- placing: a see-through preview under the pointer ----
@@ -589,49 +583,24 @@ export class Props {
 
   private tankFish = new Map<string, number[]>();
 
-  /** Your pet, at home: curled up asleep on its bed / tree (zzz rising), or by its bowl. */
-  setPet(code: number) {
-    this.petCode = code;
-    for (const o of this.objects.values()) this.dressPet(o);
+  /** Where a pet's things stand at home (beds, trees, bowls): its favourite spots. */
+  petSpots(): { key: string; x: number; y: number }[] {
+    const out: { key: string; x: number; y: number }[] = [];
+    for (const [at, o] of this.objects) {
+      if (!PET_SPOTS.has(o.key)) continue;
+      const [x, y] = at.split(",").map(Number);
+      out.push({ key: o.key, x, y });
+    }
+    return out;
   }
 
-  private dressPet(o: Placed) {
-    o.pet?.destroy();
-    o.zzz?.destroy();
-    o.pet = null;
-    o.zzz = null;
-    if (!o.over || !PET_SPOTS.has(o.key) || !this.petCode) return;
-    // (One spot for it: the first bed or tree; the bowl only if there's neither.)
-    const spots = [...this.objects.values()].filter((p) => PET_SPOTS.has(p.key));
-    const pick = spots.find((p) => p.key !== "pet_bowl") ?? spots[0];
-    if (pick !== o) return;
-    const pet = new Sprite(petTexture(this.petCode, 0));
-    pet.anchor.set(0.5, 1);
-    const tree = o.key === "cat_tree";
-    pet.position.set(tree ? 19 : 16, tree ? 6 : 26);
-    pet.scale.set(tree ? 0.6 : 0.75);
-    o.over.addChild(pet);
-    o.pet = pet;
-    const zzz = new Graphics();
-    o.over.addChild(zzz);
-    o.zzz = zzz;
-  }
-
-  /** The live pieces: glows and flames, fish swimming, the pet breathing. */
+  /** The live pieces: glows and flames, fish swimming. */
   private furnitureFx(now: number) {
     const dt = this.lastFx ? Math.min(50, now - this.lastFx) / 16.7 : 1;
     this.lastFx = now;
     for (const o of [...this.objects.values(), ...this.tops.values()]) {
       o.live?.update(now, o.on);
       o.tank?.update(now, dt);
-      if (o.pet && o.zzz) {
-        o.pet.scale.y = Math.abs(o.pet.scale.x) * (1 + Math.sin(now / 700) * 0.04);
-        const t = (now / 2200) % 1;
-        o.zzz.clear();
-        const zx = o.pet.x + 6 + t * 6;
-        const zy = o.pet.y - 18 - t * 12;
-        o.zzz.moveTo(zx, zy).lineTo(zx + 3, zy).lineTo(zx, zy + 3).lineTo(zx + 3, zy + 3).stroke({ color: 0xffffff, width: 1, alpha: 1 - t });
-      }
     }
   }
 

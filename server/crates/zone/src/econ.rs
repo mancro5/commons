@@ -76,7 +76,7 @@ pub struct SavedLook {
     pub look: u32,
     pub style: u32,
     #[serde(default)]
-    pub pet: u16,
+    pub pet: u32,
     /// What they're riding (`commons_sim::vehicles`), 0 on foot.
     #[serde(default)]
     pub vehicle: u8,
@@ -86,6 +86,9 @@ pub struct SavedLook {
     /// The instruments and toys they own: bit `code` for each.
     #[serde(default)]
     pub kit: u32,
+    /// The skills of the pet out with them (`commons_protocol::pet_skill`).
+    #[serde(default)]
+    pub pet_skills: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -443,6 +446,25 @@ impl EconomyClient {
             None,
         )
         .await
+    }
+
+    /// A game of Treat Catch between `a`'s pet and `b`'s, `score` caught: their friendship and their reward.
+    pub async fn pet_duo(
+        &self,
+        a: &str,
+        b: &str,
+        score: u16,
+    ) -> Result<serde_json::Value, CallError> {
+        let body = serde_json::json!({ "a": a, "b": b, "score": score });
+        self.call(reqwest::Method::POST, "/internal/pets/duo", Some(&body))
+            .await
+    }
+
+    /// A gladiator match won as class `kit`: the day's mission paid, if it's the day's class.
+    pub async fn daily_arena(&self, player: &str, kit: u8) -> Result<serde_json::Value, CallError> {
+        let body = serde_json::json!({ "player": player, "kit": kit });
+        self.call(reqwest::Method::POST, "/internal/daily/arena", Some(&body))
+            .await
     }
 
     /// Adds to a player's tally for the leaderboards (`arena_wins`, `paintball_wins`).

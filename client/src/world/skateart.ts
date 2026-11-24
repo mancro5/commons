@@ -39,6 +39,29 @@ export interface Relief {
    * toward the camera is drawn in, so it's a box, not a front and a lid.
    */
   side?: { x0: number; x1: number; h: number; d: number; color: number };
+  /**
+   * A piece with walls down its west and east sides (a ramp, a box): how high
+   * they stand, by ground px from its north edge, and how wide it is.
+   */
+  walls?: { west: Float32Array; east: Float32Array; w: number };
+  /** Posts holding it up (px from its north-west corner, and how high): a rail's, hidden under it in its picture. */
+  posts?: { x: number; y: number; z: number }[];
+  /** Vertices of its mesh: one every this many px (a small piece: finer). */
+  step?: number;
+  /** How high it stands at its highest (worked out when first needed). */
+  tall?: number;
+}
+
+/** A piece's side walls (`w`×`d` px), by its height field. */
+function wallsOf(w: number, d: number, z: (x: number, y: number) => number): NonNullable<Relief["walls"]> {
+  const west = new Float32Array(d + 1);
+  const east = new Float32Array(d + 1);
+  for (let y = 0; y <= d; y++) {
+    const at = Math.min(d - 1, y);
+    west[y] = z(0, at);
+    east[y] = z(w - 1, at);
+  }
+  return { west, east, w };
 }
 
 function relief(w: number, h: number): Relief {
@@ -52,7 +75,7 @@ function mark(r: Relief | null, x: number, row: number, gy: number, z: number) {
 }
 
 /** Fills in the pixels nothing was drawn on, from the nearest drawn in the same column (so the 3D mesh doesn't stretch). */
-function settle(r: Relief, top: number) {
+export function settle(r: Relief, top: number) {
   for (let x = 0; x < r.w; x++) {
     let last = -1;
     for (let y = 0; y < r.h; y++) {
@@ -276,6 +299,7 @@ function ramp(o: MapObject, kind: Ramp["kind"], dir: Dir, h: number): { c: HTMLC
     }
   };
   const zAt = (x: number, y: number) => rampHeight(r, up(x + 0.5, y + 0.5));
+  if (drawing) drawing.walls = wallsOf(w, d, zAt);
   castShadow(ctx, w, d, top, zAt);
   heightField(ctx, w, d, top, zAt, o.x * 7 + o.y, h, kind !== "stairs");
   if (kind === "quarter") {
@@ -338,6 +362,7 @@ function box(o: MapObject, h: number): { c: HTMLCanvasElement; top: number } {
   const top = h + 4;
   const [sx, sy] = shadowRoom(h);
   const [c, ctx] = canvas(w + sx, d + top + sy);
+  if (drawing) drawing.walls = wallsOf(w, d, () => h);
   castShadow(ctx, w, d, top, () => h);
   heightField(ctx, w, d, top, () => h, o.x * 5 + o.y * 3, h);
   // Coping round the top: along the front and back, down the sides.
@@ -440,6 +465,19 @@ function rail(o: MapObject, axis: string, za: number, zb: number): { c: HTMLCanv
     }
     // (The bar's marked last, over the posts' tops, row by row down the stairs.)
     for (let y = y0; y <= y1; y++) stand(x - 2, top + y - zAt(y) - 1, 5, 4, y);
+    // (All the way across its picture alike, nothing drawn there: so the bar isn't pulled down to the ground at its sides.)
+    if (drawing) {
+      drawing.posts = [y0 + 2, y1 - 2].map((y) => ({ x, y, z: zAt(y) }));
+      for (let row = 0; row < drawing.h; row++) {
+        // (Above the bar's top end and below its foot: straight on from them.)
+        const inside = Math.max(Math.round(top + y0 - zAt(y0) - 1), Math.min(Math.round(top + y1 - zAt(y1) + 2), row));
+        const from = inside * drawing.w + x;
+        for (let xx = 0; xx < drawing.w; xx++) {
+          drawing.gy[row * drawing.w + xx] = drawing.gy[from] + (row - inside);
+          drawing.z[row * drawing.w + xx] = drawing.z[from];
+        }
+      }
+    }
   } else {
     const y = d / 2;
     const x0 = 4;

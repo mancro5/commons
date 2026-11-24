@@ -2,6 +2,7 @@
 // targets, nothing persistent beyond what's needed.
 
 import { EMOTES, FREE_EMOTES } from "../world/avatars";
+import { petArt } from "../world/petart";
 import { onSettings, setSettings, settings } from "../settings";
 import { EMOTE_ICONS, iconUrl, pxIcon } from "./icons";
 import { isTyping } from "./panels";
@@ -53,6 +54,8 @@ export interface HudHandlers {
   onRidePick(): void;
   /** The toys button: pick a toy to play with. */
   onToys(): void;
+  /** The pet button: your pet's panel. */
+  onPet(): void;
   onBag(): void;
   onAlbum(): void;
   onFriends(): void;
@@ -99,6 +102,46 @@ function doorIcon(): string {
   return c.toDataURL();
 }
 
+const uiHidden = () => document.body.classList.contains("ui-hidden");
+let backBtn: HTMLButtonElement | null = null;
+let backTimer = 0;
+
+/** Hides everything over the world (for the view, or a picture of it), or brings it back. */
+export function showUi(on: boolean) {
+  document.body.classList.toggle("ui-hidden", !on);
+  if (!backBtn) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pill btn show-ui";
+    b.title = "Show the buttons and panels (H)";
+    b.setAttribute("aria-label", b.title);
+    const img = document.createElement("img");
+    img.className = "px-icon";
+    img.alt = "";
+    img.width = img.height = 24;
+    img.src = iconUrl("eye");
+    b.append(img);
+    b.onclick = () => showUi(true);
+    document.body.append(b);
+    backBtn = b;
+    // (There when the pointer moves or the screen's touched, gone when it rests: nothing in the picture.)
+    const wake = () => {
+      if (!uiHidden()) return;
+      b.classList.add("awake");
+      window.clearTimeout(backTimer);
+      backTimer = window.setTimeout(() => b.classList.remove("awake"), 2200);
+    };
+    window.addEventListener("pointermove", wake, { passive: true });
+    window.addEventListener("pointerdown", wake, { passive: true });
+  }
+  if (!on) {
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    backBtn.classList.add("awake");
+    window.clearTimeout(backTimer);
+    backTimer = window.setTimeout(() => backBtn?.classList.remove("awake"), 2600);
+  }
+}
+
 export class Hud {
   private place: HTMLDivElement;
   private nearby: HTMLDivElement;
@@ -108,6 +151,9 @@ export class Hud {
   private sitBtn: HTMLButtonElement;
   private rideBtn: HTMLButtonElement;
   private toysEl: HTMLButtonElement;
+  private petBtn: HTMLButtonElement;
+  private petDot: HTMLSpanElement;
+  private petLook = -1;
   private coinsEl: HTMLDivElement;
   private badgeEl!: HTMLSpanElement;
   private toastTimer = 0;
@@ -138,6 +184,8 @@ export class Hud {
           <button type="button" class="pill btn books-btn" title="Your library books" aria-label="Your library books" hidden><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("books")}" /><span class="badge-count"></span></button>
           <button type="button" class="pill btn sound-btn extra" title="Sound" aria-label="Sound"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("sound")}" /></button>
           <button type="button" class="pill btn view-btn" title="Switch to 3D view" aria-label="Switch to 3D view"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("view3d")}" /></button>
+          <button type="button" class="pill btn cine-btn" title="Cinematic view" aria-label="Cinematic view" aria-pressed="false" hidden><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("viewcine")}" /></button>
+          <button type="button" class="pill btn hideui-btn extra" title="Hide the buttons and panels (H)" aria-label="Hide the buttons and panels"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("eye")}" /></button>
           <button type="button" class="pill btn settings-btn" title="Settings" aria-label="Settings"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("gear")}" /></button>
           <button type="button" class="pill btn more-btn" title="More" aria-label="More" aria-expanded="false"><img class="px-icon" alt="" width="24" height="24" src="${iconUrl("more")}" /></button>
           <div class="pill nearby" title="People in view"></div>
@@ -199,17 +247,31 @@ export class Hud {
     const sound = () => this.setMuted(h.onSound());
     soundBtn.onclick = sound;
     root.querySelector<HTMLButtonElement>(".settings-btn")!.onclick = () => h.onSettings();
-    // 2D or 3D, at a press: it shows the view it'll switch to.
+    // 2D or 3D, at a press: it shows the view it'll switch to. (Out of the cinematic view too, which has its own.)
     const viewBtn = root.querySelector<HTMLButtonElement>(".view-btn")!;
-    viewBtn.onclick = () => setSettings({ view3d: !settings.view3d });
+    viewBtn.onclick = () => setSettings({ view3d: !settings.view3d, cinema: false });
+    const cineBtn = root.querySelector<HTMLButtonElement>(".cine-btn")!;
+    cineBtn.onclick = () => setSettings({ cinema: !settings.cinema });
+    root.querySelector<HTMLButtonElement>(".hideui-btn")!.onclick = () => showUi(false);
     onSettings((s) => {
       const next = s.view3d ? "2D" : "3D";
       viewBtn.title = `Switch to ${next} view`;
       viewBtn.setAttribute("aria-label", viewBtn.title);
       viewBtn.querySelector("img")!.src = iconUrl(s.view3d ? "view2d" : "view3d");
+      // The cinematic view's own button, if it's turned on (⚙️).
+      cineBtn.hidden = !s.cineOn;
+      // (Turned off while it's on: out of it, and not straight back in when it's turned on again.)
+      if (!s.cineOn && s.cinema) return setSettings({ cinema: false });
+      const on = s.cineOn && s.cinema;
+      cineBtn.classList.toggle("on", on);
+      cineBtn.setAttribute("aria-pressed", String(on));
+      cineBtn.title = on ? "Leave the cinematic view" : "Cinematic view";
     });
     window.addEventListener("keydown", (e) => {
       if (isTyping(e)) return;
+      // H hides everything but the world, and brings it back (so do Esc and Enter).
+      if ((e.key === "h" || e.key === "H") && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) showUi(uiHidden());
+      else if (uiHidden() && (e.key === "Escape" || e.key === "Enter")) showUi(true);
       // M for the map (C too, as it was).
       if (e.key === "c" || e.key === "C") h.onMap();
       if (e.key === "b" || e.key === "B") h.onBag();
@@ -301,6 +363,19 @@ export class Hud {
       h.onRide();
     };
     bar.appendChild(this.rideBtn);
+    // Your pet: its panel (a dot when it wants something).
+    this.petBtn = document.createElement("button");
+    this.petBtn.type = "button";
+    this.petBtn.className = "pet-btn";
+    this.petBtn.hidden = true;
+    this.petBtn.onclick = () => {
+      this.closeTray();
+      h.onPet();
+    };
+    this.petDot = document.createElement("span");
+    this.petDot.className = "pet-dot";
+    this.petDot.hidden = true;
+    bar.appendChild(this.petBtn);
     this.rideGear = this.gear("Change your ride", () => (this.openTray === this.rideTray ? this.closeTray() : h.onRidePick()));
     this.rideTray = tray("Your rides", "", "ride-tray");
     bar.appendChild(this.rideTray);
@@ -486,6 +561,26 @@ export class Hud {
     img.height = 24;
     img.src = icon;
     this.toysEl.replaceChildren(img, label("Toys"));
+  }
+
+  /** The pet button: your pet (its look and name, and whether it wants something); null hides it. */
+  setPet(pet: { code: number; name: string; wants: boolean } | null) {
+    this.petBtn.hidden = pet === null;
+    if (!pet) return;
+    if (this.petLook !== pet.code) {
+      this.petLook = pet.code;
+      const c = document.createElement("canvas");
+      c.width = 28;
+      c.height = 24;
+      const ctx = c.getContext("2d")!;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(petArt(pet.code, "sit", 0, "open"), 6, 4, 28, 24, 0, 0, 28, 24);
+      c.className = "px-icon pet-face";
+      this.petBtn.replaceChildren(c, this.petDot);
+    }
+    this.petDot.hidden = !pet.wants;
+    this.petBtn.title = pet.wants ? `${pet.name} wants something!` : `${pet.name}`;
+    this.petBtn.setAttribute("aria-label", this.petBtn.title);
   }
 
   /** The ride button: what you'd ride (its icon), and whether you're on it; null hides it. */

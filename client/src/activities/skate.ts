@@ -21,6 +21,7 @@ import { standingLight } from "../ambient/daynight";
 import * as sfx from "../ambient/skatesfx";
 import type { ServerMsg } from "../net/protocol.gen";
 import { Panel, button, el, isTyping } from "../ui/panels";
+import { CORNER, inCorner } from "../ui/corner";
 import { TILE, legColor, skateCrouch, type AvatarFrame } from "../world/art";
 import { type Avatar, PUSH_POSES, drawPushLeg, pushPose } from "../world/avatars";
 import { type ZoneMap, nearestWalkable, walkable } from "../world/map";
@@ -43,7 +44,7 @@ export type SkateSend =
   | { t: "SkateDuelScore"; points: number; done: boolean };
 
 /** `SkateMove.pose` / `SkateScore.kind` (commons_protocol::skate). */
-const POSE = { ROLL: 0, CROUCH: 1, AIR: 2, GRIND: 3, MANUAL: 4, BAIL: 5 };
+const POSE = { ROLL: 0, CROUCH: 1, AIR: 2, GRIND: 3, MANUAL: 4, BAIL: 5, SLIDE: 6 };
 const SCORE = { COMBO: 0, BAIL: 1, RUN: 2 };
 /** As `skate::duel`: `SkateDuelState.phase` and `SkateDuelEnd.result`. */
 const DUEL = { WAITING: 1, STARTING: 2, LOST: 0, WON: 1, DRAW: 2, WALKOVER: 3 };
@@ -102,6 +103,9 @@ const PUSH_CODE = 32;
 /** Combos worth sending to the board (and telling everyone about). */
 const TELL_PTS = 400;
 
+/** How long a powerslide's skid marks stay on the concrete (ms). */
+const SKID_MS = 2600;
+
 /** Arriving where you clicked: how hard the board brakes to stop there (px/s²). */
 const SETTLE_BRAKE = 420;
 
@@ -125,8 +129,9 @@ interface Pose {
   balance?: number;
   crouch?: number;
   bailT?: number;
-  /** Your own: powersliding round. */
+  /** Your own: powersliding round (and held, Shift: `power`). */
   slide?: boolean;
+  power?: boolean;
 }
 
 /**
@@ -182,7 +187,7 @@ class Rig {
   private glowG = new Graphics();
   private trailG = new Graphics();
   private facing: 1 | -1 = 1;
-  private sparks: { x: number; y: number; vx: number; vy: number; life: number; dust?: boolean }[] = [];
+  private sparks: { x: number; y: number; vx: number; vy: number; life: number; dust?: boolean; grit?: boolean }[] = [];
   private lastSparks = 0;
   private bailFrom: { x: number; y: number } | null = null;
   private kit: Kit = { ...STOCK };
@@ -234,6 +239,10 @@ class Rig {
     return DECKS[this.kit.deck]?.glow ?? 0x161616;
   }
 
+  /** A powerslide's skid marks (world px), and when the last went down. */
+  private skids: { x: number; y: number; t: number; wheel: number }[] = [];
+  private skidAt = 0;
+
   draw(avatar: Avatar, p: Pose, ground: number, wallNow: number) {
     const g = this.g.clear();
     this.deckAt = null;
@@ -260,6 +269,16 @@ class Rig {
     }
     this.was = { heading: p.heading, x: p.x, y: p.y, at: wallNow };
     const surfing = this.kit.trucks === SURF_TRUCKS && p.pose === POSE.ROLL;
+    // Skid marks left on the concrete by a powerslide, fading away.
+    // (Each wheel's mark a line, point to point: joined up, not dotted.)
+    this.skids = this.skids.filter((k) => wallNow - k.t < SKID_MS);
+    for (let i = 0; i < this.skids.length; i++) {
+      const k = this.skids[i];
+      const a = 0.62 * (1 - (wallNow - k.t) / SKID_MS);
+      const prev = this.skids[i - 2];
+      if (prev && k.wheel === prev.wheel && wallNow - prev.t - (wallNow - k.t) < 80) g.moveTo(prev.x, prev.y + 0.5).lineTo(k.x, k.y + 0.5).stroke({ color: 0x232328, width: 2, alpha: a });
+      else g.rect(Math.round(k.x) - 1, Math.round(k.y), 2, 2).fill({ color: 0x232328, alpha: a });
+    }
     // The shadow on whatever's under them, smaller and fainter the higher they are.
     const sw = Math.max(6, 20 - air * 0.12);
     g.ellipse(x, gy, sw / 2, Math.max(1.5, 3 - air * 0.02)).fill({ color: 0x000000, alpha: Math.max(0.1, 0.3 - air * 0.002) });
@@ -275,13 +294,23 @@ class Rig {
     const grabbing = p.trick === TRICK.GRAB;
     if (p.pose === POSE.CROUCH) {
       frame = skateCrouch((p.crouch ?? 0) > 0.25 ? 3 : 2);
-    } else if (p.pose === POSE.ROLL && p.slide) {
-      // Powersliding round: low, leaning back against it, dust kicking up off the wheels.
-      frame = skateCrouch(2);
-      lean = -0.3 * facing;
-      if (Math.random() < 0.7) {
+    } else if ((p.pose === POSE.ROLL && p.slide) || p.pose === POSE.SLIDE) {
+      // Powersliding: right down low, leaning back out over it against the
+      // slide, the wheels throwing up a spray of grit (now and then a spark)
+      // and leaving black marks behind on the concrete.
+      const held = p.power || p.pose === POSE.SLIDE;
+      frame = skateCrouch(held ? 3 : 2);
+      lean = (held ? -0.42 : -0.3) * facing;
+      lift -= held ? 1 : 0;
+      for (let k = 0; k < (held ? 3 : 1); k++) {
+        if (Math.random() > 0.75) continue;
         const back = Math.random() < 0.5 ? -1 : 1;
-        this.sparks.push({ x: x + back * 8, y: gy - 1, vx: (Math.random() - 0.5) * 60, vy: -15 - Math.random() * 25, life: 0.3, dust: true });
+        this.sparks.push({ x: x + back * (6 + Math.random() * 5), y: gy - 1, vx: -Math.cos(p.heading) * (40 + Math.random() * 70) + (Math.random() - 0.5) * 40, vy: -20 - Math.random() * 45, life: 0.25 + Math.random() * 0.25, dust: true, grit: held && Math.random() < 0.6 });
+      }
+      if (held && Math.random() < 0.18) this.sparks.push({ x: x - facing * 6, y: gy - 1, vx: -Math.cos(p.heading) * 90, vy: -60 - Math.random() * 50, life: 0.3 });
+      if (held && wallNow - this.skidAt > 25) {
+        this.skidAt = wallNow;
+        for (const w of [-5, 5]) this.skids.push({ x: x + w * Math.cos(p.spin), y: gy - 1 + w * 0.3 * Math.sin(p.spin), t: wallNow, wheel: w });
       }
     } else if (surfing && Math.abs(this.carve) > 0.4 && !(p.push && p.push > 0)) {
       // Surf trucks: leaning right over into each carve, one way then the
@@ -380,7 +409,7 @@ class Rig {
       s.y += s.vy / 60;
       s.vy += 400 / 60;
       if (s.life <= 0) continue;
-      if (s.dust) g.rect(Math.round(s.x), Math.round(s.y), 2, 2).fill({ color: 0xd8d2c4, alpha: Math.min(1, s.life * 3) * 0.8 });
+      if (s.dust) g.rect(Math.round(s.x), Math.round(s.y), s.grit ? 3 : 2, s.grit ? 2 : 2).fill({ color: s.grit ? 0x8e8576 : 0xd8d2c4, alpha: Math.min(1, s.life * 3) * 0.85 });
       else g.rect(Math.round(s.x), Math.round(s.y), 1, 1).fill(s.life > 0.2 ? 0xfff3a0 : 0xff9a3a);
     }
     this.sparks = this.sparks.filter((s) => s.life > 0);
@@ -699,6 +728,7 @@ class SkateBoardPanel extends Panel {
     keys.append(el("summary", "", "How to skate"));
     for (const [k, what] of [
       ["Arrows / WASD", "Ride: turn your way and push off. Press back the way you came: a powerslide round."],
+      ["Shift (hold)", "Powerslide: the board kicks out sideways and you swing round tight. Let go to snap straight and shoot out of it (a trick)."],
       ["Space", "Hold to crouch, let go to ollie (the longer, the higher)."],
       ["Space (on a ramp)", "Going up a ramp: pop out off it, forward (with a direction held, that way: ramp to ramp, or right over one)."],
       ["Out of a quarter", "Up out of a quarter pipe, hold the way out over its lip: you fly on out of it instead of back in."],
@@ -771,7 +801,7 @@ export class SkatePark {
   private flipPressed = false;
   private manualPressed = false;
   private stick: { id: number; x0: number; y0: number; x: number; y: number } | null = null;
-  private held = { pop: false, grab: false, spinL: false, spinR: false };
+  private held = { pop: false, grab: false, spinL: false, spinR: false, slide: false };
   readonly boardPanel: SkateBoardPanel;
 
   // The HUD.
@@ -797,7 +827,7 @@ export class SkatePark {
   /** Dusty's daily quests: what you've done toward them. */
   readonly quests = new Quests((q) => {
     sfx.special();
-    this.toast(`🎯 Mission done: ${q.text}! Claim ${q.coins} 🪙 under 🎯 Missions.`, 5000);
+    this.toast(`🎯 Mission done: ${q.text}! Claim ${q.coins} 🪙 under ⭐ Missions.`, 5000);
     this.refreshMissions?.();
   });
   /** For the quests: in the air (since when, how high), on a manual or a grind (how long), today's distance and speed not yet told, combos landed since the last bail. */
@@ -872,9 +902,9 @@ export class SkatePark {
     this.balanceEl.append(el("div", "skate-needle"));
     this.offBtn = button("Get off ✕", () => this.getOff(), "skate-off");
     this.hud.append(top, this.comboEl, this.balanceEl, this.popEl, this.bigEl, this.feedEl, this.touchEl, this.stickEl, this.resultsEl, this.duelEl);
-    // (Get off: on its own, under the "Skate!" button in the corner; shown with the HUD.)
+    // (Get off: on its own, in the corner under the "Skate!" button; shown with the HUD.)
     this.offBtn.hidden = true;
-    document.body.append(this.offBtn);
+    inCorner(this.offBtn, CORNER.OFF);
     this.duelEl.hidden = true;
     this.resultsEl.hidden = true;
     this.stickEl.append(el("div", "pb-stick-knob"));
@@ -883,11 +913,11 @@ export class SkatePark {
     document.body.append(this.hud);
     this.enterBtn = button("🛹 Skate!", () => this.boardPanel.show(), "skate-enter");
     this.enterBtn.hidden = true;
-    document.body.append(this.enterBtn);
-    this.missionsBtn = button("🎯 Missions", () => (this.missions.open ? this.missions.hide() : this.missions.show()), "skate-missions-btn");
+    inCorner(this.enterBtn, CORNER.PLAY);
+    this.missionsBtn = button("⭐ Missions", () => (this.missions.open ? this.missions.hide() : this.missions.show()), "skate-missions-btn");
     this.missionsBtn.append(this.missionsBadge);
     this.missionsBtn.hidden = true;
-    document.body.append(this.missionsBtn);
+    inCorner(this.missionsBtn, CORNER.MISSIONS);
     this.refreshMissions();
     this.buildTouch();
     window.addEventListener("keydown", this.onKey, true);
@@ -1071,7 +1101,7 @@ export class SkatePark {
     }
     this.hud.hidden = this.offBtn.hidden = true;
     this.keys.clear();
-    this.held = { pop: false, grab: false, spinL: false, spinR: false };
+    this.held = { pop: false, grab: false, spinL: false, spinR: false, slide: false };
     this.stick = null;
     this.aim = null;
     this.aimHeld = false;
@@ -1225,7 +1255,6 @@ export class SkatePark {
     // Missions: in the park, or anywhere you're riding (they count on the streets too).
     const showMissions = inPark || !!this.me;
     if (this.missionsBtn.hidden === showMissions) this.missionsBtn.hidden = !showMissions;
-    this.missionsBtn.classList.toggle("beside", inPark);
     // Back after the connection dropped, where you were: back on your board, carrying on.
     if (carried && self && !this.me) this.resume(self, wallNow);
     if (this.me && self) this.play(wallNow, self);
@@ -1308,7 +1337,7 @@ export class SkatePark {
     // Sounds of the wheels and grinds.
     const grinding = me.mode === "grind" && me.grind ? me.grind.line.kind : "";
     if (grinding !== this.wasGrinding) this.wasGrinding = grinding;
-    sfx.rolling(me.mode === "ground" || me.mode === "manual" ? me.speed : 0, grinding || (me.mode === "ground" && me.slideDir ? "ledge" : ""), this.travelled);
+    sfx.rolling(me.mode === "ground" || me.mode === "manual" ? me.speed : 0, grinding || (me.mode === "ground" && me.slideDir ? "ledge" : ""), this.travelled, me.mode === "ground" && me.power ? Math.min(1, me.speed / 320) : 0);
     // Drawn: between the last two steps, as far as the time since the last
     // has gone (so it glides at any refresh rate, not jumps a step some frames
     // and none others).
@@ -1339,7 +1368,9 @@ export class SkatePark {
               ? POSE.MANUAL
               : me.crouch > 0
                 ? POSE.CROUCH
-                : POSE.ROLL;
+                : me.mode === "ground" && me.power
+                  ? POSE.SLIDE
+                  : POSE.ROLL;
     return {
       x: me.x,
       y: me.y,
@@ -1347,14 +1378,16 @@ export class SkatePark {
       heading: me.heading,
       pose,
       trick: me.trickCode,
-      spin: me.mode === "air" ? me.air.spin : 0,
+      // (On the ground: the board kicked out sideways in a powerslide, swinging straight after.)
+      spin: me.mode === "air" ? me.air.spin : me.mode === "ground" ? me.slideYaw : 0,
       flipT: me.flip ? (me.flip.t / me.flip.dur) % 1 : undefined,
       bodyT: me.body ? Math.min(1, me.body.t / me.body.dur) : undefined,
       push: me.pushing ? me.push : 0,
       balance: me.balance,
       crouch: me.crouch,
       bailT: me.bailT,
-      slide: me.mode === "ground" && me.slideDir !== 0,
+      slide: me.mode === "ground" && (me.slideDir !== 0 || !!me.power),
+      power: me.mode === "ground" && !!me.power,
     };
   }
 
@@ -1479,6 +1512,10 @@ export class SkatePark {
       }
       case "pump":
         sfx.pump(e.power);
+        break;
+      case "powerslide":
+        if (e.on) sfx.slideKick(Math.min(1, me.speed / 320));
+        else sfx.slideOut(e.boost, e.held);
         break;
       case "pop":
         sfx.pop(e.power);
@@ -2035,7 +2072,7 @@ export class SkatePark {
         return false;
       }
       const left = (f.until - wallNow) / 1600;
-      const s = this.scene.tileToScreen(a.shown.x + 0.5, a.shown.y - 1.2 - (1 - left) * 0.8);
+      const s = this.scene.headToScreen(a.shown.x + 0.5, a.shown.y + 1, 2.2 + (1 - left) * 0.8);
       f.el.style.transform = `translate(${Math.round(s.x)}px, ${Math.round(s.y)}px) translate(-50%, -100%)`;
       f.el.style.opacity = String(Math.min(1, left * 2));
       return true;
@@ -2114,6 +2151,7 @@ export class SkatePark {
       manual: this.manualPressed,
       grab: k.has("KeyK") || this.held.grab,
       spin,
+      slide: k.has("ShiftLeft") || k.has("ShiftRight") || this.held.slide,
     };
   }
 
@@ -2133,7 +2171,7 @@ export class SkatePark {
       }
       return;
     }
-    const used = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "KeyJ", "KeyK", "KeyL", "KeyQ", "KeyE", "Escape"];
+    const used = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "KeyJ", "KeyK", "KeyL", "KeyQ", "KeyE", "ShiftLeft", "ShiftRight", "Escape"];
     if (!used.includes(code)) return;
     e.preventDefault();
     e.stopPropagation();
@@ -2156,7 +2194,7 @@ export class SkatePark {
   private onBlur = () => {
     this.keys.clear();
     this.stick = null;
-    this.held = { pop: false, grab: false, spinL: false, spinR: false };
+    this.held = { pop: false, grab: false, spinL: false, spinR: false, slide: false };
   };
 
   /**
@@ -2278,7 +2316,7 @@ export class SkatePark {
       return b;
     };
     const row1 = el("div", "skate-touch-row");
-    row1.append(hold("↺", "spin", "spinL"), hold("↻", "spin", "spinR"));
+    row1.append(hold("↺", "spin", "spinL"), hold("Slide", "slide", "slide"), hold("↻", "spin", "spinR"));
     const row2 = el("div", "skate-touch-row");
     row2.append(
       tap("Flip", "flip", () => (this.flipPressed = true)),

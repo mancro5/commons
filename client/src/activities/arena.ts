@@ -25,6 +25,7 @@ import * as arenafx from "../ambient/arenafx";
 import * as sfx from "../ambient/sfx";
 import type { EntityInfo, ServerMsg } from "../net/protocol.gen";
 import { button, confirmButton, el, isTyping } from "../ui/panels";
+import { CORNER, inCorner } from "../ui/corner";
 import { type AvatarFrame, BOWL_RELEASE, dozeFrame, SWORD_GUARD, SWORD_RAISE, TILE, toTexture } from "../world/art";
 import { Avatar } from "../world/avatars";
 import { encodeLook } from "../world/look";
@@ -797,7 +798,8 @@ export class ArenaShow {
       sorted: this.scene.sorted,
       canVote: () => {
         const p = this.mine();
-        return (!p || (p.flags & FLAG.DOWN) !== 0) && (this.watching || this.capturing || this.hearing() > 0.5);
+        // (Those in the match, once they're down, and those watching it: from the stands, or on a TV. Not passers-by.)
+        return (!p || (p.flags & FLAG.DOWN) !== 0) && (this.watching || this.capturing || this.tv || this.seated());
       },
       inSight: () => this.watching || this.capturing || this.hearing() > 0,
       lavaClose: (lava) => {
@@ -1613,6 +1615,8 @@ export class ArenaShow {
 
   /** An event from the ring: shown, and heard as loud as we're near it. */
   onEvent(e: ArenaEv) {
+    // (A new round: the last one's scoreboard goes.)
+    if (e.kind === EV.ROUND_START) this.hideStats();
     sfx.withScale(this.hearing(), () => this.handleEvent(e));
   }
 
@@ -2196,6 +2200,10 @@ export class ArenaShow {
   }
 
   private updateNow(serverNow: number, wallNow: number) {
+    // The corner button: by the arena, not fighting and its sign not up already.
+    const showBtn = !this.capturing && !this.lobbyOpen && this.nearArena();
+    if (this.enterBtn.hidden === showBtn) this.enterBtn.hidden = !showBtn;
+    if (!this.enterBtn.isConnected) inCorner(this.enterBtn, CORNER.PLAY);
     const dt = Math.min(0.05, (wallNow - this.lastFrame) / 1000);
     this.lastFrame = wallNow;
     this.fx.clear();
@@ -4553,7 +4561,71 @@ export class ArenaShow {
     window.setTimeout(() => (this.results.hidden = true), champ ? 11_000 : 8500);
   }
 
+  /** Up in the corner when you're by the arena (as the golf course's and the skatepark's): Caesar's games. */
+  private enterBtn = Object.assign(button("⚔️ Arena", () => this.openSign(), "golf-enter arena-enter"), { hidden: true });
+
+  /** Whether you're by the arena: round the ring, or near Caesar's dais (tiles). */
+  private nearArena(): boolean {
+    const self = this.avatarOf(this.selfId());
+    if (!self) return false;
+    const a = this.arenaObj;
+    const p = self.pos;
+    const round = p.x >= a.x - 3 && p.x < a.x + a.w + 3 && p.y >= a.y - 3 && p.y < a.y + a.h + 3;
+    const c = this.caesarAt;
+    return round || (!!c && Math.hypot(p.x - c.tx, p.y - c.ty) < 10);
+  }
+
+  /** The round's scoreboard (`ArenaStats`): up after each round, away when the next begins. */
+  private statsCard = el("div", "arena-stats");
+  private statsHide = 0;
+
+  /**
+   * A round's over (shown to its fighters and its spectators): how everyone did (knockdowns, damage dealt and taken,
+   * blows landed, times downed), and over the match so far; the winner
+   * crowned, your own row picked out.
+   */
+  onStats(m: Extract<ServerMsg, { t: "ArenaStats" }>) {
+    if (!m.rows.length) return;
+    const me = this.selfId();
+    // Only for those in it, or watching it (from the stands, or on a TV): not passers-by.
+    const fought = m.rows.some((r) => r.id === me);
+    if (!fought && !this.watching && !this.tv && !this.seated()) return;
+    const card = this.statsCard;
+    if (!card.isConnected) document.body.append(card);
+    const head = el("div", "arena-stats-head");
+    const title = m.over ? "🏆 Match over" : `⚔️ Round ${m.round}`;
+    const won = m.winner ? `${m.winner === me ? "You win" : `${this.who(m.winner)} wins`}${m.over ? " the match!" : " the round!"}` : "Nobody left standing!";
+    head.append(el("b", "", title), el("span", "", won));
+    const close = button("✕", () => this.hideStats(), "small subtle");
+    head.append(close);
+    const table = el("table", "arena-stats-table");
+    const tr = (cells: (string | number)[], cls = "", tag: "td" | "th" = "td") => {
+      const r = el("tr", cls);
+      for (const c of cells) r.append(el(tag, "", String(c)));
+      return r;
+    };
+    table.append(tr(["Fighter", "Class", "KOs", "Damage", "Hits", "Taken", "Downed", "Match KOs", "Match dmg"], "", "th"));
+    for (const r of m.rows) {
+      const f = this.state?.fighters.find((x) => x.id === r.id);
+      const kit = f && this.state?.kits ? KITS[f.kit] : null;
+      const name = `${r.id === m.winner ? "👑 " : ""}${this.who(r.id)}`;
+      table.append(tr([name, kit ? `${kit.icon} ${kit.name}` : "Knight", r.kills, r.damage, r.hits, r.taken, r.downs, r.matchKills, r.matchDamage], r.id === me ? "me" : ""));
+    }
+    card.replaceChildren(head, table);
+    card.hidden = false;
+    window.clearTimeout(this.statsHide);
+    this.statsHide = window.setTimeout(() => this.hideStats(), m.over ? 15_000 : 9_000);
+  }
+
+  private hideStats() {
+    window.clearTimeout(this.statsHide);
+    this.statsCard.hidden = true;
+  }
+
   destroy() {
+    this.enterBtn.remove();
+    this.statsCard.remove();
+    window.clearTimeout(this.statsHide);
     this.kitPicker.destroy();
     this.classWheel.destroy();
     this.disaster.destroy();

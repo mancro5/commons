@@ -165,7 +165,8 @@ export class Weather {
 
   /** Big soft cloud shadows drifting with the wind. */
   private drawShadows(now: number) {
-    const count = this.indoors ? 0 : this.kind === "clear" ? 2 : this.kind === "mist" || this.kind === "snow" ? 0 : 7;
+    // (The cinematic view looks along the ground: they'd hang in its sky.)
+    const count = this.indoors || this.scene.cinematic ? 0 : this.kind === "clear" ? 2 : this.kind === "mist" || this.kind === "snow" ? 0 : 7;
     const mw = this.map.width * TILE;
     const mh = this.map.height * TILE;
     const drift = (now / 1000) * (8 + this.wind * 22);

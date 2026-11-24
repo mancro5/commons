@@ -81,6 +81,10 @@ impl Instance {
                 if let Ok(l) = saved
                     && inst.avatars.get(&id).is_some_and(|a| a.player_id == player)
                 {
+                    // (The pet's skills go with it: none without one out.)
+                    if let Some(a) = inst.avatars.get_mut(&id) {
+                        a.pet_skills = if l.pet != 0 { l.pet_skills } else { 0 };
+                    }
                     inst.equip(id, l.tool, l.kit);
                     inst.wear(id, l.look, l.style, l.pet, l.vehicle);
                 }
@@ -91,7 +95,7 @@ impl Instance {
     /// Shows avatar `id` in a look (if it's new), to everyone nearby. `ride`
     /// is what it rides, as saved: seen outdoors in the city, or a test ride
     /// in the mall; anywhere else you've got off at the door.
-    pub(super) fn wear(&mut self, id: u32, look: u32, style: u32, pet: u16, ride: u8) {
+    pub(super) fn wear(&mut self, id: u32, look: u32, style: u32, pet: u32, ride: u8) {
         let outdoors = self.zone.id == super::OUTDOORS;
         let Some(a) = self.avatars.get_mut(&id) else {
             return;
@@ -234,6 +238,12 @@ impl Instance {
         }
         if kind == together::RPS {
             return self.rps_start(from, id, now);
+        }
+        if kind == together::GOLF {
+            return self.golf_duel_start(from, id);
+        }
+        if kind == together::PET_DUO {
+            return self.pet_duo_start(from, id, now);
         }
         // `from`'s boat: climb aboard.
         if kind == together::BOAT {

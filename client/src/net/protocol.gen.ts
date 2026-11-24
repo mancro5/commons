@@ -2,7 +2,7 @@
 // Do not edit by hand.
 /* eslint-disable */
 
-export const PROTOCOL_VERSION = 59;
+export const PROTOCOL_VERSION = 66;
 export const CELL_TILES = 16;
 
 export class Writer {
@@ -248,6 +248,41 @@ export function decArenaGift(r: Reader): ArenaGift {
   };
 }
 
+export interface ArenaStat {
+  id: number;
+  kills: number;
+  damage: number;
+  hits: number;
+  taken: number;
+  downs: number;
+  matchKills: number;
+  matchDamage: number;
+}
+
+export function encArenaStat(w: Writer, v: ArenaStat) {
+  w.u32(v.id);
+  w.u8(v.kills);
+  w.u16(v.damage);
+  w.u16(v.hits);
+  w.u16(v.taken);
+  w.u8(v.downs);
+  w.u16(v.matchKills);
+  w.u32(v.matchDamage);
+}
+
+export function decArenaStat(r: Reader): ArenaStat {
+  return {
+    id: r.u32(),
+    kills: r.u8(),
+    damage: r.u16(),
+    hits: r.u16(),
+    taken: r.u16(),
+    downs: r.u8(),
+    matchKills: r.u16(),
+    matchDamage: r.u32(),
+  };
+}
+
 export interface PbPlayer {
   id: number;
   team: number;
@@ -402,6 +437,26 @@ export function decSkateEntry(r: Reader): SkateEntry {
   };
 }
 
+export interface GolfDuelBall {
+  x: number;
+  y: number;
+  state: number;
+}
+
+export function encGolfDuelBall(w: Writer, v: GolfDuelBall) {
+  w.u16(v.x);
+  w.u16(v.y);
+  w.u8(v.state);
+}
+
+export function decGolfDuelBall(r: Reader): GolfDuelBall {
+  return {
+    x: r.u16(),
+    y: r.u16(),
+    state: r.u8(),
+  };
+}
+
 export interface MapDot {
   id: number;
   x: number;
@@ -455,7 +510,7 @@ export function encEntityInfo(w: Writer, v: EntityInfo) {
   w.str(v.name);
   w.u32(v.look);
   w.u32(v.style);
-  w.u16(v.pet);
+  w.u32(v.pet);
   w.u8(v.vehicle);
   w.u8(v.tool);
   w.u16(v.x);
@@ -478,7 +533,7 @@ export function decEntityInfo(r: Reader): EntityInfo {
     name: r.str(),
     look: r.u32(),
     style: r.u32(),
-    pet: r.u16(),
+    pet: r.u32(),
     vehicle: r.u8(),
     tool: r.u8(),
     x: r.u16(),
@@ -579,6 +634,14 @@ export type ClientMsg =
   | { t: "GolfBall"; hole: number; x: number; y: number; strokes: number; state: number }
   | { t: "GolfCard"; strokes: number[] }
   | { t: "GolfBoardAsk" }
+  | { t: "GolfDuelShot"; balls: GolfDuelBall[]; done: boolean; penalty: number }
+  | { t: "GolfDuelLeave" }
+  | { t: "GolfDuelBot" }
+  | { t: "GolfDuelSeek"; on: boolean }
+  | { t: "PetFishHit" }
+  | { t: "PetGoal"; x: number; y: number; kind: number }
+  | { t: "PetDuoMove"; x: number }
+  | { t: "PetDuoCatch"; treat: number }
   ;
 
 export function encodeClientMsg(m: ClientMsg): Uint8Array {
@@ -972,6 +1035,39 @@ export function encodeClientMsg(m: ClientMsg): Uint8Array {
     case "GolfBoardAsk":
       w.u8(83);
       break;
+    case "GolfDuelShot":
+      w.u8(84);
+      w.vec(m.balls, (x) => encGolfDuelBall(w, x));
+      w.bool(m.done);
+      w.u8(m.penalty);
+      break;
+    case "GolfDuelLeave":
+      w.u8(85);
+      break;
+    case "GolfDuelBot":
+      w.u8(86);
+      break;
+    case "GolfDuelSeek":
+      w.u8(87);
+      w.bool(m.on);
+      break;
+    case "PetFishHit":
+      w.u8(88);
+      break;
+    case "PetGoal":
+      w.u8(89);
+      w.u16(m.x);
+      w.u16(m.y);
+      w.u8(m.kind);
+      break;
+    case "PetDuoMove":
+      w.u8(90);
+      w.u16(m.x);
+      break;
+    case "PetDuoCatch":
+      w.u8(91);
+      w.u16(m.treat);
+      break;
   }
   return w.finish();
 }
@@ -1227,6 +1323,30 @@ export function decodeClientMsg(b: Uint8Array): ClientMsg {
     case 83:
       m = { t: "GolfBoardAsk" };
       break;
+    case 84:
+      m = { t: "GolfDuelShot", balls: r.vec(() => decGolfDuelBall(r)), done: r.bool(), penalty: r.u8() };
+      break;
+    case 85:
+      m = { t: "GolfDuelLeave" };
+      break;
+    case 86:
+      m = { t: "GolfDuelBot" };
+      break;
+    case 87:
+      m = { t: "GolfDuelSeek", on: r.bool() };
+      break;
+    case 88:
+      m = { t: "PetFishHit" };
+      break;
+    case 89:
+      m = { t: "PetGoal", x: r.u16(), y: r.u16(), kind: r.u8() };
+      break;
+    case 90:
+      m = { t: "PetDuoMove", x: r.u16() };
+      break;
+    case 91:
+      m = { t: "PetDuoCatch", treat: r.u16() };
+      break;
     default:
       throw new Error(`protocol: unknown ClientMsg tag ${tag}`);
   }
@@ -1306,6 +1426,16 @@ export type ServerMsg =
   | { t: "MapDots"; dots: MapDot[] }
   | { t: "GolfBall"; id: number; hole: number; x: number; y: number; strokes: number; state: number }
   | { t: "GolfBoard"; rounds: SkateEntry[] }
+  | { t: "GolfDuel"; a: number; b: number; hole: number; turn: number; balls: GolfDuelBall[]; strokes: number[]; over: boolean; winner: number }
+  | { t: "GolfDuelRoll"; balls: GolfDuelBall[] }
+  | { t: "GolfSeeking"; id: number }
+  | { t: "PetDug"; id: number; x: number; y: number; coins: number }
+  | { t: "ArenaStats"; round: number; winner: number; over: boolean; rows: ArenaStat[] }
+  | { t: "PetGoal"; id: number; x: number; y: number; kind: number }
+  | { t: "PetDuo"; a: number; b: number; seed: number; start: number; ms: number }
+  | { t: "PetDuoMove"; id: number; x: number }
+  | { t: "PetDuoCatch"; id: number; treat: number }
+  | { t: "PetDuoOver"; score: number; friendship: number; level: number; counted: boolean; xp: number }
   ;
 
 export function encodeServerMsg(m: ServerMsg): Uint8Array {
@@ -1479,7 +1609,7 @@ export function encodeServerMsg(m: ServerMsg): Uint8Array {
       w.u32(m.id);
       w.u32(m.look);
       w.u32(m.style);
-      w.u16(m.pet);
+      w.u32(m.pet);
       w.u8(m.vehicle);
       w.u8(m.tool);
       break;
@@ -1832,6 +1962,72 @@ export function encodeServerMsg(m: ServerMsg): Uint8Array {
       w.u8(72);
       w.vec(m.rounds, (x) => encSkateEntry(w, x));
       break;
+    case "GolfDuel":
+      w.u8(73);
+      w.u32(m.a);
+      w.u32(m.b);
+      w.u8(m.hole);
+      w.u32(m.turn);
+      w.vec(m.balls, (x) => encGolfDuelBall(w, x));
+      w.vec(m.strokes, (x) => w.u8(x));
+      w.bool(m.over);
+      w.u32(m.winner);
+      break;
+    case "GolfDuelRoll":
+      w.u8(74);
+      w.vec(m.balls, (x) => encGolfDuelBall(w, x));
+      break;
+    case "GolfSeeking":
+      w.u8(75);
+      w.u32(m.id);
+      break;
+    case "PetDug":
+      w.u8(76);
+      w.u32(m.id);
+      w.u16(m.x);
+      w.u16(m.y);
+      w.u16(m.coins);
+      break;
+    case "ArenaStats":
+      w.u8(77);
+      w.u8(m.round);
+      w.u32(m.winner);
+      w.bool(m.over);
+      w.vec(m.rows, (x) => encArenaStat(w, x));
+      break;
+    case "PetGoal":
+      w.u8(78);
+      w.u32(m.id);
+      w.u16(m.x);
+      w.u16(m.y);
+      w.u8(m.kind);
+      break;
+    case "PetDuo":
+      w.u8(79);
+      w.u32(m.a);
+      w.u32(m.b);
+      w.u32(m.seed);
+      w.u32(m.start);
+      w.u32(m.ms);
+      break;
+    case "PetDuoMove":
+      w.u8(80);
+      w.u32(m.id);
+      w.u16(m.x);
+      break;
+    case "PetDuoCatch":
+      w.u8(81);
+      w.u32(m.id);
+      w.u16(m.treat);
+      break;
+    case "PetDuoOver":
+      w.u8(82);
+      w.u16(m.score);
+      w.u16(m.friendship);
+      w.u8(m.level);
+      w.bool(m.counted);
+      w.u16(m.xp);
+      break;
   }
   return w.finish();
 }
@@ -1917,7 +2113,7 @@ export function decodeServerMsg(b: Uint8Array): ServerMsg {
       m = { t: "LanternRise", id: r.u32(), x: r.u16(), y: r.u16(), text: r.str() };
       break;
     case 26:
-      m = { t: "LookChanged", id: r.u32(), look: r.u32(), style: r.u32(), pet: r.u16(), vehicle: r.u8(), tool: r.u8() };
+      m = { t: "LookChanged", id: r.u32(), look: r.u32(), style: r.u32(), pet: r.u32(), vehicle: r.u8(), tool: r.u8() };
       break;
     case 27:
       m = { t: "Rps", a: r.u32(), b: r.u32(), phase: r.u8(), aPick: r.u8(), bPick: r.u8(), endsT: r.u32() };
@@ -2053,6 +2249,36 @@ export function decodeServerMsg(b: Uint8Array): ServerMsg {
       break;
     case 72:
       m = { t: "GolfBoard", rounds: r.vec(() => decSkateEntry(r)) };
+      break;
+    case 73:
+      m = { t: "GolfDuel", a: r.u32(), b: r.u32(), hole: r.u8(), turn: r.u32(), balls: r.vec(() => decGolfDuelBall(r)), strokes: r.vec(() => r.u8()), over: r.bool(), winner: r.u32() };
+      break;
+    case 74:
+      m = { t: "GolfDuelRoll", balls: r.vec(() => decGolfDuelBall(r)) };
+      break;
+    case 75:
+      m = { t: "GolfSeeking", id: r.u32() };
+      break;
+    case 76:
+      m = { t: "PetDug", id: r.u32(), x: r.u16(), y: r.u16(), coins: r.u16() };
+      break;
+    case 77:
+      m = { t: "ArenaStats", round: r.u8(), winner: r.u32(), over: r.bool(), rows: r.vec(() => decArenaStat(r)) };
+      break;
+    case 78:
+      m = { t: "PetGoal", id: r.u32(), x: r.u16(), y: r.u16(), kind: r.u8() };
+      break;
+    case 79:
+      m = { t: "PetDuo", a: r.u32(), b: r.u32(), seed: r.u32(), start: r.u32(), ms: r.u32() };
+      break;
+    case 80:
+      m = { t: "PetDuoMove", id: r.u32(), x: r.u16() };
+      break;
+    case 81:
+      m = { t: "PetDuoCatch", id: r.u32(), treat: r.u16() };
+      break;
+    case 82:
+      m = { t: "PetDuoOver", score: r.u16(), friendship: r.u16(), level: r.u8(), counted: r.bool(), xp: r.u16() };
       break;
     default:
       throw new Error(`protocol: unknown ServerMsg tag ${tag}`);

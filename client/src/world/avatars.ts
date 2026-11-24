@@ -3,9 +3,10 @@
 
 import { Graphics, Sprite } from "pixi.js";
 import type { EntityInfo } from "../net/protocol.gen";
-import { type AvatarFrame, BOWL_BACK, BOWL_HOLD, BOWL_PICKUP, BOWL_RELEASE, PUSH_CROUCH, SPRINT_FRAMES, dozeFrame, SKIN_COLORS, TILE, avatarTexture, legColor } from "./art";
+import { type AvatarFrame, BOWL_BACK, BOWL_HOLD, BOWL_PICKUP, BOWL_RELEASE, PET_CROUCH, PUSH_CROUCH, SPRINT_FRAMES, dozeFrame, SKIN_COLORS, TILE, avatarTexture, legColor } from "./art";
 import { decodeLook } from "./look";
 import { type Motion, type TileXY, headingAt, posAt, sprintingAt } from "./motion";
+import { Trail } from "./pettrail";
 import type { Scene } from "./scene";
 import { moodIcon } from "../activities/together";
 import { Follower, type PetSprite } from "./pets";
@@ -180,8 +181,12 @@ export class Avatar {
   readonly sprite: Sprite;
   private label: HTMLDivElement;
   private stack: HTMLDivElement;
-  /** Hugging or high-fiving someone: where they are (each frame), and since when. */
-  private act: { kind: "hug" | "five"; partner: () => TileXY | null; start: number } | null = null;
+  /**
+   * Hugging or high-fiving someone (where they are, each frame), or looking
+   * after a pet: holding it close in a hug, or crouched beside it (brushing,
+   * bathing, feeding); since when, and (for a pet) for how long.
+   */
+  private act: { kind: "hug" | "five" | "hold" | "crouch"; partner: () => TileXY | null; start: number; ms?: number } | null = null;
   /** Away from the keyboard, and since when (they doze off); in a game, and where. */
   private away = false;
   private dozeAt = 0;
@@ -210,7 +215,7 @@ export class Avatar {
   private tile: TileXY;
   private blend = { x: 0, y: 0, until: 0 };
   /** Where the name label was last put on screen (px). */
-  private labelAt = { x: NaN, y: NaN };
+  private labelAt = { x: NaN, y: NaN, s: 1 };
   pos: TileXY;
   /** Where the avatar's drawn (`pos` with any correction still blending out): what the camera follows. */
   shown: TileXY = { x: 0, y: 0 };
@@ -322,6 +327,11 @@ export class Avatar {
   }
 
   /** Styles the name tag as a non-player character's. */
+  /** One of the game's own (a shopkeeper, the golf bot…), not a player. */
+  get isNpc(): boolean {
+    return this.npc;
+  }
+
   markNpc() {
     this.label.classList.add("npc");
     this.npc = true;
@@ -535,6 +545,7 @@ export class Avatar {
     const left = Math.max(0, (this.blend.until - performance.now()) / BLEND_MS);
     const before = { x: at.x + this.blend.x * left, y: at.y + this.blend.y * left };
     this.motion = m;
+    this.way.walk(m);
     const target = posAt(m, now);
     this.blend = { x: before.x - target.x, y: before.y - target.y, until: performance.now() + BLEND_MS };
   }
@@ -552,6 +563,7 @@ export class Avatar {
     this.motion = null;
     this.tile = t;
     this.pos = { ...t };
+    this.way.reset(t);
     this.blend = { x: from.x - t.x, y: from.y - t.y, until: performance.now() + BLEND_MS };
   }
 
@@ -559,6 +571,7 @@ export class Avatar {
     this.motion = null;
     this.tile = t;
     this.pos = { ...t };
+    this.way.reset(t);
     this.blend.until = 0;
   }
 
@@ -624,8 +637,13 @@ export class Avatar {
       this.pos = posAt(this.motion, serverNow);
       heading = headingAt(this.motion, serverNow);
       if (!heading && serverNow > this.motion.t0) {
+        // The walk's over: we stand at its end (the way we came kept, for our pet).
         const end = this.destination;
-        this.snap({ x: end.x, y: end.y });
+        this.way.stop(serverNow);
+        this.motion = null;
+        this.tile = { x: end.x, y: end.y };
+        this.pos = { x: end.x, y: end.y };
+        this.blend.until = 0;
       }
     }
     let { x, y } = this.pos;
@@ -675,7 +693,7 @@ export class Avatar {
     let actFrame: AvatarFrame | null = null;
     if (this.act) {
       const t = wallNow - this.act.start;
-      const dur = this.act.kind === "hug" ? HUG_MS : FIVE_MS;
+      const dur = this.act.ms ?? (this.act.kind === "hug" ? HUG_MS : FIVE_MS);
       const p = t < dur && !walking && !sitting ? this.act.partner() : null;
       if (!p) this.act = null;
       else {
@@ -683,7 +701,15 @@ export class Avatar {
         const dy = (p.y - y) * TILE;
         const d = Math.hypot(dx, dy);
         if (Math.abs(dx) > 1) this.facing = dx > 0 ? 1 : -1;
-        if (this.act.kind === "hug") {
+        if (this.act.kind === "hold") {
+          // A pet held close: arms wrapped round it, rocking gently side to side.
+          actFrame = 8;
+          leanX = Math.round(Math.sin(t / 260) * 1.2);
+        } else if (this.act.kind === "crouch") {
+          // Down beside the pet, working away (a brush, a scrub, a bowl set down).
+          actFrame = PET_CROUCH;
+          leanX = Math.round(Math.sin(t / 140)) * this.facing;
+        } else if (this.act.kind === "hug") {
           // In over 0.2 s, hold (with a slow sway together), out over 0.25 s.
           const ease = Math.min(1, t / 200) * Math.min(1, (dur - t) / 250);
           const move = d > 0 ? (Math.max(0, d - HUG_GAP) / 2) * ease : 0;
@@ -798,17 +824,19 @@ export class Avatar {
     this.updateWheels(ride && seat < 0 ? vehicle : 0, feetX, feetY + wave, walking, wallNow);
     this.drawTrail(walking && !!vehicle && seat < 0, feetX, feetY, wallNow, afloat);
     this.updateCan(feetX, feetY, wallNow);
-    this.updatePet({ x, y }, wallNow);
+    this.updatePet({ x, y }, serverNow, wallNow);
 
     // DOM label above the head.
     // Afloat, names spread along the boat (the front seat's a little higher, clear of the captain's).
-    const s = this.scene.tileToScreen(x + 0.5 + (seat >= 0 ? (SEAT_X[seat] ?? 0) / TILE : 0), y + 1 - 4 / TILE - (height + (fighting?.lift ?? 0)) / TILE - (seat === 0 ? 12 / TILE : 0));
+    const s = this.scene.headToScreen(x + 0.5 + (seat >= 0 ? (SEAT_X[seat] ?? 0) / TILE : 0), y + 1 - 4 / TILE, (height + (fighting?.lift ?? 0)) / TILE + (seat === 0 ? 12 / TILE : 0));
     // (Only touching the page when it moves: unchanged writes still cost a restyle.)
     const lx = Math.round(s.x);
     const ly = Math.round(s.y);
-    if (lx !== this.labelAt.x || ly !== this.labelAt.y) {
-      this.labelAt = { x: lx, y: ly };
-      this.label.style.transform = `translate3d(${lx}px, ${ly}px, 0)`;
+    // (The cinematic view: smaller further off, and not at all from far away.)
+    const ls = s.s < 0.42 ? 0 : s.s >= 1 ? 1 : Math.round(Math.min(1, s.s * 1.15) * 50) / 50;
+    if (lx !== this.labelAt.x || ly !== this.labelAt.y || ls !== this.labelAt.s) {
+      this.labelAt = { x: lx, y: ly, s: ls };
+      this.label.style.transform = `translate3d(${lx}px, ${ly}px, 0)${ls === 1 ? "" : ` scale(${ls})`}`;
     }
     if (this.nameEl.hidden === this.showName) this.nameEl.hidden = !this.showName;
     if (this.bubble && wallNow > this.bubbleUntil) {
@@ -881,6 +909,16 @@ export class Avatar {
    */
   together(kind: "hug" | "five", partner: () => TileXY | null) {
     this.act = { kind, partner, start: performance.now() };
+  }
+
+  /** Looking after a pet at `toward` (its spot, each frame) for `ms`: holding it close, or crouched beside it. */
+  petCare(kind: "hold" | "crouch", toward: () => TileXY | null, ms: number) {
+    this.act = { kind, partner: toward, start: performance.now(), ms };
+  }
+
+  /** Which way they face (+1 right, -1 left). */
+  get facingDir(): number {
+    return this.facing;
   }
 
   faceToward(x: number) {
@@ -983,7 +1021,7 @@ export class Avatar {
   nameBox(): { x0: number; x1: number; y: number } {
     if (!this.nameW && !this.nameEl.hidden) this.nameW = this.nameEl.offsetWidth;
     const w = this.nameW || this.info.name.length * 7;
-    const s = this.scene.tileToScreen(this.pos.x + 0.5, this.pos.y);
+    const s = this.scene.headToScreen(this.pos.x + 0.5, this.pos.y + 1, 1);
     return { x0: s.x - w / 2, x1: s.x + w / 2, y: s.y };
   }
 
@@ -1081,7 +1119,18 @@ export class Avatar {
     return this.follower?.pet ?? null;
   }
 
-  private updatePet(at: TileXY, now: number) {
+  /** Somewhere our pet's off to instead of at our heels (leading the way, fishing by the water). */
+  petGoal: TileXY | null = null;
+  /** Someone else's: where their pet's off to, as they told us (`PetGoal`; kind `pet_goal`). */
+  sharedPetGoal: { x: number; y: number; kind: number } | null = null;
+  /** The way we've come, for our pet to keep to (the same on every screen: see `pettrail.ts`). */
+  private walked: Trail | null = null;
+  private get way(): Trail {
+    this.walked ??= new Trail(this.pos);
+    return this.walked;
+  }
+
+  private updatePet(at: TileXY, serverNow: number, now: number) {
     const code = this.info.pet;
     if (this.follower && this.follower.pet.code !== code) {
       this.follower.destroy();
@@ -1092,8 +1141,11 @@ export class Avatar {
       this.follower = new Follower(code, at);
       this.scene.sorted.addChild(this.follower.pet.view);
     }
-    this.follower.update(at, this.facing, now);
-
+    // On wheels (not in a boat), it hops on its own little skateboard and keeps up.
+    const v = this.info.vehicle;
+    // (In an activity's hands, drawn where it says: at our heels as ever, no way to keep to.)
+    const heel = this.arena ? null : this.way.heel(serverNow, this.facing);
+    this.follower.update(at, this.facing, now, { board: !!v && !isBoat(v), goal: this.petGoal, heel });
   }
 
   /**

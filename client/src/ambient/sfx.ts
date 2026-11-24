@@ -63,9 +63,9 @@ export function sfxScale(): number {
   return scale;
 }
 
-/** The effects' output, or null while muted. */
+/** The effects' output, or null while muted (or while the tab's in the background: nothing plays there, not even what others do nearby). */
 function bus(): GainNode | null {
-  if (muted) return null;
+  if (muted || (typeof document !== "undefined" && document.hidden)) return null;
   const a = audio();
   if (!out) {
     out = a.createGain();

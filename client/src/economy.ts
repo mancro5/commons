@@ -154,7 +154,7 @@ export class Economy {
     return this.auth.get<FishQuest>(`/api/fisherman/${magnet ? "magnet-quest" : "quest"}`);
   }
 
-  /** Hands `qty` of `item` in for an order (paid triple); the order as it stands now. */
+  /** Hands `qty` of `item` in for an order (paid five times over); the order as it stands now. */
   async deliverFish(item: number, qty: number, magnet = false): Promise<FishQuest> {
     const r = await this.auth.send<{ applied: Applied; quest: FishQuest }>(`/api/fisherman/${magnet ? "magnet-quest" : "quest"}/deliver`, { item, qty, key: crypto.randomUUID() });
     this.applyResult(r.applied);

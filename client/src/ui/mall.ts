@@ -123,7 +123,7 @@ const ABOUT: Record<string, string> = {
   card: "Goes with a doorstep gift, with your note inside. Used up once the gift's sent.",
   exterior: "For the outside of your house, for everyone passing to see. Put it up at your front door.",
   vehicle: "Zips you across the city: anywhere outdoors, and you hop off at every door. Yours to keep. Try it on the test track first!",
-  pet: "A friend for life. Pets live at your house and wait in the yard by your door. They'd love a walk every day: take them out, show them the city, bring them home.",
+  pet: "A friend for life. Pets live inside your house. Feed them, play their games and take them for walks: a pet left hungry or bored gets sad. Want one made to order? The Pet Breeder is next to the Vehicles shop.",
 };
 
 /** Whether you can give a pet a home. */
@@ -194,7 +194,7 @@ export class ShopPanel extends Panel {
     const why: Record<Exclude<PetHome, "ok">, string> = {
       no_house: "A pet needs a garden: rent a house first (ask at the Post Office).",
       apartment: "A pet needs a garden: the apartments don't have one. A house in the home blocks does.",
-      have_pet: "You have a pet already: one is plenty of love.",
+      have_pet: "You have a pet already: one is plenty of love. To swap, put yours up for adoption from its panel (the paw button).",
     };
     const home = this.petHome();
     if (home !== "ok") return [el("p", "hint", why[home])];

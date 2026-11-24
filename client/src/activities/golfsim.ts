@@ -63,7 +63,13 @@ export type GolfEvent =
 
 type Seg = [P, P];
 
+/** Every hole stands this high (px) on its plinth above the lawn: its front shows (earth, stone…), and the rails stand on top. */
+export const PLINTH = 10;
+/** Levels and ramps are drawn this much taller than they roll (for the eye: a real rise). */
+export const LIFT = 1.5;
+
 /** A hole made ready to play: its rails as segments, once. */
+
 export class Green {
   readonly rails: Seg[] = [];
   /** This step, the ball's touched a rail. */
@@ -130,6 +136,16 @@ export class Green {
     let h = 0;
     for (const l of this.hole.levels) if (l.h > h && inPoly(l.poly, x, y)) h = l.h;
     return h;
+  }
+
+  /**
+   * How high (x, y) is drawn (px): its ground, up on the plinth every hole
+   * stands on above the lawn (`PLINTH`), its rise drawn `LIFT` times over (in
+   * the 3D view, built up that high). For the eye only: the rolling goes by
+   * `heightAt`.
+   */
+  liftAt(x: number, y: number): number {
+    return this.heightAt(x, y) * LIFT + PLINTH;
   }
 
   /** Whether (x, y) is on ice. */
@@ -404,4 +420,50 @@ export function preview(g: Green, b: Ball, vx: number, vy: number, t: number, le
   }
   out.push([s.x, s.y]);
   return out;
+}
+
+/** Two balls (a 1v1's) off each other: what's kept of their speed into each other. */
+const BALLS_E = 0.92;
+
+/**
+ * Ball `p` into ball `q` (a 1v1's two): pushed apart, and if they're closing,
+ * a click: equal balls, so they trade their speed along the line between
+ * them (`pStill`: `p`'s stopped, it's in `q`'s way: `q` bounces off it). True
+ * when they touch.
+ */
+export function hit(p: Ball, q: Ball, pStill: boolean): boolean {
+  const dx = q.x - p.x;
+  const dy = q.y - p.y;
+  const d = Math.hypot(dx, dy);
+  const min = BALL_R * 2;
+  if (d >= min || d === 0) return false;
+  const nx = dx / d;
+  const ny = dy / d;
+  const over = min - d;
+  if (pStill) {
+    q.x += nx * over;
+    q.y += ny * over;
+  } else {
+    p.x -= (nx * over) / 2;
+    p.y -= (ny * over) / 2;
+    q.x += (nx * over) / 2;
+    q.y += (ny * over) / 2;
+  }
+  // How fast they're closing, along the line between them.
+  const closing = (p.vx - q.vx) * nx + (p.vy - q.vy) * ny;
+  if (pStill) {
+    const into = -(q.vx * nx + q.vy * ny);
+    if (into > 0) {
+      q.vx += (1 + BALLS_E) * into * nx;
+      q.vy += (1 + BALLS_E) * into * ny;
+    }
+    return true;
+  }
+  if (closing <= 0) return true;
+  const j = ((1 + BALLS_E) / 2) * closing;
+  p.vx -= j * nx;
+  p.vy -= j * ny;
+  q.vx += j * nx;
+  q.vy += j * ny;
+  return true;
 }

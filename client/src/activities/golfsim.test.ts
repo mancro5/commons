@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HOLES } from "./golfcourse";
-import { type Ball, Green, MAX_SPEED, STEP, inPoly } from "./golfsim";
+import { type Ball, Green, MAX_SPEED, STEP, hit, inPoly } from "./golfsim";
 
 /** Plays a putt out (up to `secs`): how it ended, and whether it ever left the green. */
 function putt(g: Green, from: [number, number], angle: number, speed: number, secs = 14) {
@@ -122,6 +122,23 @@ describe("mini golf", () => {
       expect(holed, `hole ${h.n} (${h.name}) not holed in ${h.par + 2}`).toBeGreaterThan(0);
     }
   }, 120_000);
+
+  it("a 1v1: one ball straight into the other stops near dead and sends it on; a ball into a stopped one bounces back", () => {
+    const p: Ball = { x: 0, y: 0, vx: 300, vy: 0 };
+    const q: Ball = { x: 7, y: 0, vx: 0, vy: 0 };
+    expect(hit(p, q, false)).toBe(true);
+    expect(q.vx).toBeGreaterThan(250);
+    expect(Math.abs(p.vx)).toBeLessThan(30);
+    expect(q.x - p.x).toBeGreaterThanOrEqual(7.99);
+    // Into one that's in the way (stopped, held): back the way it came.
+    const still: Ball = { x: 0, y: 0, vx: 0, vy: 0 };
+    const r: Ball = { x: 7, y: 0, vx: -200, vy: 0 };
+    hit(still, r, true);
+    expect(r.vx).toBeGreaterThan(150);
+    expect(still.vx).toBe(0);
+    // Apart: nothing.
+    expect(hit({ x: 0, y: 0, vx: 1, vy: 0 }, { x: 20, y: 0, vx: 0, vy: 0 }, false)).toBe(false);
+  });
 
   it("never gets off a green, however it's hit, and always stops (or drops, or goes in the water or a pipe)", () => {
     let seed = 7;

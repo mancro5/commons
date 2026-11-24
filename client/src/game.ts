@@ -20,7 +20,7 @@ import type { TradePanel } from "./ui/trade";
 import { BOT as BOWL_BOT, BowlingPanel, scoreSoFar } from "./activities/bowling";
 import { ArenaShow } from "./activities/arena";
 import { SkatePark } from "./activities/skate";
-import { MiniGolf } from "./activities/minigolf";
+import { GOLF_BOT, MiniGolf } from "./activities/minigolf";
 import { SkateShop } from "./activities/skateshop";
 import { SkateTrainer } from "./activities/skatetrainer";
 import { SkateShopPanel } from "./ui/skateshop";
@@ -28,7 +28,8 @@ import { PaintballShow, PB_VIEW } from "./activities/paintball";
 import { CANCELLED, CHOOSING, RpsPicker, beats, pickIcon } from "./activities/rps";
 import { Sky } from "./ambient/sky";
 import { Campfire } from "./activities/campfire";
-import { BOAT, FOLLOW, type MoodPicker, type OfferCard, STOP_FOLLOW, TOGETHER } from "./activities/together";
+import { BOAT, FOLLOW, GOLF, type MoodPicker, type OfferCard, PET_DUO, STOP_FOLLOW, TOGETHER } from "./activities/together";
+import { PetDuoPanel } from "./activities/petduo";
 import type { BottlesPanel, WishPanel } from "./ui/dream";
 import type { WardrobePanel } from "./ui/wardrobe";
 import { Critters } from "./ambient/critters";
@@ -53,6 +54,7 @@ import { type Welcome, happeningNow } from "./welcome";
 import { Grove } from "./world/grove";
 import { tier } from "./ui/rarity";
 import { CatchShows } from "./world/catchfx";
+import { type PetGain, PetGains } from "./world/petgains";
 import { FlopShows } from "./world/flopfx";
 import { FountainFx } from "./world/fountainfx";
 import { PondFx } from "./world/pondfx";
@@ -71,8 +73,16 @@ import { CARDS, wrappedTexture } from "./world/goods";
 import { EMOTES } from "./world/avatars";
 import { BOAT_SEATS, BOAT_SPEED_X10, VESPA, isBoat, rideSpeed } from "./world/vehicles";
 import { itemIconUrl } from "./world/items";
-import { PetLife, petTitle } from "./ambient/petlife";
-import { PET_SOUNDS } from "./world/pets";
+import { PetLife, petSound, petTitle } from "./ambient/petlife";
+import type { PetGamePanel } from "./activities/petgames";
+import type { PetMakerPanel } from "./ui/petmaker";
+import type { PetPanel } from "./ui/petpanel";
+import { describe as describePet, decodeDesign } from "./world/petlook";
+import { type PetSprite, TRICK_KEYS } from "./world/pets";
+import { CARE_EMOTE, CARE_KINDS, type CareKind, CareScene } from "./world/petcare";
+import * as psfx from "./ambient/petsfx";
+import { speciesOfCode } from "./world/petlook";
+import { SKILLS, type SkillKey, TRICKS, TRICK_EMOTE, knows, levelOf } from "./pets";
 import type { Rent } from "./rent";
 import type { ApartmentsPanel, PostOfficePanel, StallPanel } from "./ui/homes";
 import type { Hud } from "./ui/hud";
@@ -90,7 +100,7 @@ import { WorldFx } from "./world/worldfx";
 import { PLAIN_SKIN, setRoomSkin } from "./world/roomskin";
 import { type MapObject, type ZoneMap, groundAt, nearestWalkable, spot, stepTarget, walkable } from "./world/map";
 import { isRamped, posAt, type TileXY, VESPA_SPEED_X10, WALK_SPEED_X10, endT, glideTiles, headingAt, retimed, routeAhead, skateRampAt, rideTopSpeed, speedAt, splice, sprintProfile, sprintingAt, timeToCover, TURN_EARLY } from "./world/motion";
-import { compress, route } from "./world/path";
+import { compress, findPath, route } from "./world/path";
 import { Props } from "./world/props";
 import { giftBoxTexture } from "./world/items";
 import { TILE } from "./world/art";
@@ -144,7 +154,16 @@ const DANCE_BOT_LOOK = encodeLook({ hue: 200, skin: 0, hair: 4, hat: 0, hatHue: 
 /** Protocol `drink::*`. */
 const BEER = 1;
 const WATER = 2;
-const FISH = { CAST: 0, BITE: 1, CAUGHT: 2, ESCAPED: 3, FLOP: 4, HIT: 5, LURE: 6, SALVAGE: 7, HAUL: 8 };
+const FISH = { CAST: 0, BITE: 1, CAUGHT: 2, ESCAPED: 3, FLOP: 4, HIT: 5, LURE: 6, SALVAGE: 7, HAUL: 8, PET_PULL: 9, PET_FLOP: 10, PET_HIT: 11, PET_CAUGHT: 12, PET_ESCAPED: 13 };
+/** The flopping catch of avatar `id`'s pet, among the anglers' own (`FlopShows` goes by number). */
+const petFlop = (id: number) => -id;
+/** How far ahead of you (tiles) your pet runs when it's leading the way, and how long it keeps at it (ms). */
+const LEAD_AHEAD = 3.5;
+const LEAD_MS = 4 * 60_000;
+/** How far (tiles) you may wander from the water before your pet stops fishing and follows (server `fishing::PET_STAY`). */
+const PET_STAY = 6;
+/** `pet_goal` (protocol): why a pet's off from its walker's heels. */
+const PET_GOAL = { NONE: 0, FISHING: 1, LEADING: 2 };
 /** protocol `fish_event::FLOP_MS`; and the treasure chest (opened for coins). */
 const FLOP_MS = 4500;
 const TREASURE_ITEM = 113;
@@ -162,6 +181,10 @@ export interface Ui {
   homes: Homes;
   rent: Rent;
   pets: Pets;
+  /** Your pet, the Breeder's studio, and your pet's games. */
+  petPanel: PetPanel;
+  petMaker: PetMakerPanel;
+  petGame: PetGamePanel;
   rides: Rides;
   goods: Goods;
   decorate: DecoratePanel;
@@ -552,6 +575,10 @@ export class Game {
   private cat: Cat | null = null;
   private caretaker: Caretaker | null = null;
   private petLife: PetLife;
+  /** Out under the sky (not in a building, a home or underground). */
+  outdoors = true;
+  /** When the pet button next checks what your pet wants. */
+  private petButtonAt = 0;
   private endingTest = false;
   private houseFronts: HouseFronts | null = null;
   /** The yard stands by the houses' front doors. */
@@ -595,6 +622,8 @@ export class Game {
   private playingCheckAt = 0;
   /** Fish just landed, held up above their anglers. */
   private catches: CatchShows;
+  /** What looking after your pet did for it, over its head. */
+  private petGains: PetGains;
   /** A catch just announced (and what it brings in): the plain "+1 …" for it would only cover it up. */
   private richToast: { item: number; text: string; until: number } | null = null;
   /** The lucky crate sitting somewhere in the park, if any. */
@@ -605,6 +634,20 @@ export class Game {
   private fountain: FountainFx | null = null;
   /** Rare fish flopping on the bank, to be hit; and where each angler's line went in. */
   private flops: FlopShows;
+  /** Your pet leading the way (a skill): to what, since when, and the way there (worked out now and then). */
+  private petLeading: { skill: SkillKey; since: number; target: TileXY; path: TileXY[]; pathAt: number } | null = null;
+  /**
+   * Your pet at the water with you (a fishing skill): from your first cast
+   * there till you wander off further than `PET_STAY` (the server's
+   * `fishing::PET_STAY`), line in or not.
+   */
+  private petFishing: { water: TileXY; spot: TileXY } | null = null;
+  /** What we last told everyone of where our pet's off to (`PetGoal`): why, where, when. */
+  private goalSent = { kind: 0, x: -1, y: -1, at: 0 };
+  /** Treat Catch, with someone and your pets (made the first time). */
+  private petDuo: PetDuoPanel | null = null;
+  /** Pets sent to the water's edge for a catch (by their walker): till when. */
+  private petAtWater = new Map<number, number>();
   /** Glimmer lures in the water. */
   private lures: LureShows;
   /** Bowling balls rolling up the alley's lanes. */
@@ -714,6 +757,7 @@ export class Game {
     const indoors = zoneId === "mall" || zoneId === "bar" || zoneId === "arcade" || zoneId.startsWith("library") || zoneId.startsWith("club") || zoneId === "bowling" || zoneId === "concert_hall" || zoneId === "casino" || zoneId === "museum" || zoneId === "paintball";
     // Under the hedge maze, the labyrinth: always dusk, no weather, no birds.
     const underground = zoneId === "labyrinth";
+    this.outdoors = !indoors && !underground && zoneId !== "home";
     this.ambient = new Ambient(this.scene, map, indoors || underground || zoneId === "home");
     this.daynight = new DayNight(app, this.scene, map, indoors, zoneId === "arcade" || zoneId === "bowling" || zoneId === "casino" || zoneId === "concert_hall", underground ? 22.5 : null);
     this.milestones = new Milestones(this.scene, map, (x, y, s) => this.daynight.addLight(x, y, s), app.stage);
@@ -738,6 +782,7 @@ export class Game {
     this.setupCorners(map);
     this.weather = new Weather(app, this.scene, map, indoors || underground || zoneId === "home");
     this.catches = new CatchShows(this.scene);
+    this.petGains = new PetGains(this.scene);
     this.lucky = new LuckyCrate(this.scene);
     if (underground) {
       this.scene.closeView = true;
@@ -773,16 +818,19 @@ export class Game {
       this.scene,
       map,
       ui.pets,
-      ui.eco,
       {
         self: () => this.self,
         avatars: () => this.avatars.values(),
         toast: (t, ms) => this.hud.toast(t, ms),
         refreshLook: () => this.refreshLook(),
+        petSpots: () => this.props.petSpots(),
       },
       zoneId === "city",
+      zoneId === "home" ? (place.owner ?? null) : null,
     );
-    if (zoneId === "city") void ui.pets.load().catch(() => {});
+    // Fresh pets everywhere (who's out, who's home, how they are).
+    void ui.pets.load().catch(() => {});
+    this.showPetButton();
     // Through a door, you get off what you ride (it waits for you outside);
     // a test ride ends when you leave the mall.
     const rides = ui.rides;
@@ -805,11 +853,6 @@ export class Game {
     }
     // In through your own front door: a pet out with you is home.
     if (zoneId === "home" && place.owner === ui.social.selfId && ui.pets.mine?.out) void this.petLife.bringHome().catch(() => {});
-    // At home, your pet curls up on its bed (or its scratching tree).
-    if (zoneId === "home" && place.owner === ui.social.selfId) {
-      const pet = ui.pets.mine;
-      if (pet) this.props.setPet(Number(ui.eco.items.get(pet.item)?.meta.code ?? 0));
-    }
     // The leaderboard signs: their top five, written on (and kept fresh).
     const signs = new LeaderSigns(this.scene, map.objects);
     if (signs.any) {
@@ -985,6 +1028,13 @@ export class Game {
           }
         },
         (x, y, scale) => this.daynight.addLight(x, y, scale),
+        // The golf bot golfer (a 1v1 against it): a sporty look, a visor.
+        (at) => {
+          const info = { id: GOLF_BOT, name: "Golf Bot 🤖", look: SKATE_BOT_LOOK, x: at.x, y: at.y, state: 0, speedX10: 0, t0: 0, sprintIn: 0, path: [], mood: 0, away: false, style: 0, pet: 0, vehicle: 0, tool: 0, reading: 0, calling: false, bot: true };
+          const a = new Avatar(info, this.scene, labels, false, this.socket?.clock.now() ?? performance.now());
+          a.markNpc();
+          return a;
+        },
       );
     }
     if (map.objects.some((o) => o.kind === "sk_park")) {
@@ -1574,7 +1624,7 @@ export class Game {
     const y = w.y / TILE;
     let t = { x: Math.floor(x), y: Math.floor(y) };
     if ((this.cat?.active && this.cat.hit(x, y)) || this.caretaker?.hit(x, y) || this.clerk?.hit(x, y) || this.francy?.hit(x, y) || this.trainer?.hit(x, y)) return null;
-    if (this.petLife.yardPetAt(x, y)) return null;
+    if (this.petLife.homePetAt(x, y) || this.petLife.showPetAt(x, y) !== null) return null;
     for (const a of this.avatars.values()) {
       if (a.info.id === this.selfId) continue;
       const b = this.scene.screenBounds(a.sprite);
@@ -1909,7 +1959,7 @@ export class Game {
     sfx.cash(1, amount);
     const self = this.self;
     if (!self) return;
-    const at = this.scene.tileToScreen(self.pos.x + 0.5, self.pos.y);
+    const at = this.scene.headToScreen(self.pos.x + 0.5, self.pos.y + 1, 1);
     const el = document.createElement("div");
     el.className = "coin-pop";
     el.style.left = `${Math.round(at.x)}px`;
@@ -2779,50 +2829,527 @@ export class Game {
     if (self) this.socket?.send({ t: "SetLook", look: self.info.look });
   }
 
-  /** Tapping a pet: yours (a walk, home), or someone else's (a pat). */
+  /** Tapping a pet: yours (its panel), someone else's (a pat), or one of the Breeder's. */
   private tapPet(sx: number, sy: number): boolean {
     const w = this.scene.screenToWorld(sx, sy);
     const x = w.x / TILE;
     const y = w.y / TILE;
     const ui = this.ui;
     const self = this.self;
-    const fail = (e: unknown) => this.hud.toast(e instanceof Error ? e.message : "That didn't work.", 4000);
-    const sound = (item: number) => {
-      const s = PET_SOUNDS[(ui.eco.items.get(item)?.meta.code ?? 1) & 0xff] ?? [];
-      return s[Math.floor(Math.random() * s.length)] ?? "";
-    };
-    const yard = this.petLife.yardPetAt(x, y);
-    if (yard) {
-      const at = { x: Math.floor(x), y: Math.floor(y) };
-      const mine = yard.owner === ui.social.selfId;
-      this.petLife.patYard(yard.owner);
+    const show = this.petLife.showPetAt(x, y);
+    if (show !== null) {
+      psfx.voice(speciesOfCode(show), "happy", 0.8);
+      this.petLife.patShow(show);
+      sfx.highFive(0.4);
+      this.hud.toast(`🐾 A ${describePet(decodeDesign(show)).toLowerCase()} from the Breeder. ${petSound(show)} Design your own at the studio!`, 4000);
+      return true;
+    }
+    const home = this.petLife.homePetAt(x, y);
+    if (home) {
+      const mine = home.owner === ui.social.selfId;
+      this.petLife.homeSprite?.greet(performance.now());
+      psfx.voice(speciesOfCode(home.code), this.ui.pets.sad(home) ? "sad" : "happy", 0.9);
       if (!mine) {
-        this.hud.toast(`🐾 You pat ${petTitle(ui.eco, yard, false)}. ${sound(yard.item)}`, 3500);
+        sfx.highFive(0.4);
+        this.hud.toast(`🐾 You pat ${petTitle(ui.eco, home, false)}. ${petSound(home.code)}`, 3500);
         return true;
       }
+      const at = { x: Math.floor(x), y: Math.floor(y) };
       if (self && cheb(this.standing ?? self.destination, at) > 2) this.walkTo(at);
-      const note = yard.walked_today ? `Had a walk today. ${yard.walks} walks together.` : `Hoping for a walk! ${yard.walks ? `${yard.walks} walks together so far.` : "Your first one together?"}`;
-      this.near(ui.menu, at, 6).showWith(petTitle(ui.eco, yard, true), note, [["Take for a walk 🐾", () => void this.petLife.takeOut().catch(fail)]]);
+      this.near(ui.petPanel, at, 8).show();
       return true;
     }
     const walker = this.petLife.walkerAt(x, y);
     if (!walker?.pet) return false;
     const pet = ui.pets.ofName(walker.info.name);
     walker.pet.greet(performance.now());
+    psfx.voice(walker.pet.species, walker.pet.sad ? "sad" : "happy", 0.9);
     if (walker !== self) {
-      this.hud.toast(`🐾 You pat ${pet ? petTitle(ui.eco, pet, false) : "the pet"}. ${pet ? sound(pet.item) : ""}`, 3500);
+      const mine = self?.pet;
+      const me = ui.pets.mine;
+      if (mine && me?.out && Math.hypot(mine.pos.x - walker.pet.pos.x, mine.pos.y - walker.pet.pos.y) < 4) {
+        // A playdate: the two of them romp round together.
+        const now = performance.now();
+        walker.pet.trick("zoomies", now);
+        mine.trick("zoomies", now);
+        window.setTimeout(() => (walker.pet?.greet(performance.now()), mine.greet(performance.now())), 2000);
+        this.socket?.send({ t: "Emote", emote: TRICK_EMOTE + TRICK_KEYS.indexOf("zoomies") });
+        const other = pet?.name ?? "their pet";
+        void ui.pets
+          .care("playdate")
+          .then((counted) => this.hud.toast(counted ? `🐾 Playdate! ${me.name} and ${other} chase each other round and round. Best friends!` : `🐾 ${me.name} and ${other} romp about again (they had a proper playdate just now).`, 4500))
+          .catch(() => {});
+        return true;
+      }
+      this.hud.toast(`🐾 You pat ${pet ? petTitle(ui.eco, pet, false) : "the pet"}. ${petSound(walker.pet.code)}`, 3500);
       // A heart for its walker to see.
       this.socket?.send({ t: "Emote", emote: 7 });
       return true;
     }
-    const mins = Math.floor((Date.now() - ui.pets.outSince) / 60_000);
-    const plot = ui.pets.mine?.plot;
-    const actions: [string, () => void][] = [];
-    if (plot && this.zoneId === "city") actions.push(["Walk home", () => void this.walkToSpot(`door:${plot}`)]);
-    actions.push(["Bring home now", () => void this.petLife.bringHome().catch(fail)]);
-    const note = ui.pets.outSince ? `Out together for ${mins < 1 ? "a minute" : `${mins} min`}. Back at your door, they're home.` : "Out for a walk with you.";
-    this.near(ui.menu, walker.destination, 6).showWith(pet ? petTitle(ui.eco, pet, true) : "Your pet", note, actions);
+    this.near(ui.petPanel, walker.destination, 8).show();
     return true;
+  }
+
+  /** The pet button on the bar: shown while you have a pet (marked when it wants something). */
+  showPetButton() {
+    const p = this.ui.pets.mine;
+    this.hud.setPet(p ? { code: p.code, name: p.name, wants: this.ui.pets.wish(p) !== null || this.ui.pets.sad(p) } : null);
+  }
+
+  /** Opens your pet's panel. */
+  openPet() {
+    this.ui.petPanel.show();
+  }
+
+  /** Your pet's minigame. */
+  playWithPet() {
+    const p = this.ui.pets.mine;
+    if (p) this.ui.petGame.openFor(p);
+  }
+
+  /** Your pet does a trick it's learnt: everyone nearby sees it, out on a walk. */
+  async petTrick(key: string) {
+    const ui = this.ui;
+    const p = ui.pets.mine;
+    const t = TRICKS.find((x) => x.key === key);
+    if (!p || !t) return;
+    if (levelOf(p.xp ?? 0) < t.level) return void this.hud.toast(`${p.name} learns "${t.name}" at level ${t.level}.`, 3500);
+    const here = p.out ? this.self?.pet : this.petLife.homeSprite;
+    if (!here) return void this.hud.toast(`${p.name} is at home: go in (or take them for a walk) to see the trick.`, 4000);
+    if (p.out) this.socket?.send({ t: "Emote", emote: TRICK_EMOTE + TRICK_KEYS.indexOf(key) });
+    else if (this.petLife.homeTrick(key)) psfx.trick(speciesOfCode(p.code), key, 1);
+    try {
+      await ui.pets.trick(key);
+    } catch (e) {
+      this.hud.toast(e instanceof Error ? e.message : "That didn't work.", 3500);
+    }
+  }
+
+  /** Pets being looked after just now (scenes in the world). */
+  private careScenes: CareScene[] = [];
+
+  private startCare(who: Avatar, pet: PetSprite, kind: CareKind, vol: number) {
+    // (One at a time for a pet: a new one replaces it.)
+    for (const c of this.careScenes) if (c.pet === pet) c.end();
+    this.careScenes = this.careScenes.filter((c) => !c.done);
+    this.careScenes.push(new CareScene(this.scene, who, pet, kind, vol));
+  }
+
+  /**
+   * Looking after your pet in person: it comes to you and you hug it, brush
+   * it, bath it, or set its bowl down. Out on a walk everyone nearby sees;
+   * at home, here. Elsewhere (it's at home and you're not) there's nothing
+   * to see.
+   */
+  petCare(kind: CareKind): boolean {
+    const p = this.ui.pets.mine;
+    const self = this.self;
+    if (!p || !self) return false;
+    if (p.out && self.pet) {
+      this.socket?.send({ t: "Emote", emote: CARE_EMOTE + CARE_KINDS.indexOf(kind) });
+      return true;
+    }
+    const home = this.petLife.homeSprite;
+    if (home && Math.hypot(home.pos.x - self.pos.x, home.pos.y - self.pos.y) < 12) {
+      this.startCare(self, home, kind, 1);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Your pet leads the way (`Skill.lead`): it sniffs out the lucky crate,
+   * the nearest player or home, and runs on ahead, looking back for you,
+   * till you're there.
+   */
+  petLead(skill: SkillKey) {
+    const p = this.ui.pets.mine;
+    const self = this.self;
+    const k = SKILLS.find((x) => x.key === skill);
+    if (!p || !self || !k || !knows(p, skill)) return;
+    if (!p.out || !self.pet) return void this.hud.toast(`Take ${p.name} for a walk first: they lead the way from your side.`, 4000);
+    const target = this.leadTarget(skill);
+    if (!target) {
+      const why: Record<string, string> = {
+        treasure: "There's no lucky crate about just now: one turns up somewhere in the park every so often. Try again in a bit!",
+        friend: "Nobody else is out here right now to find.",
+        home: this.zoneId === "city" ? "You don't have a house yet to go home to." : "Homeward works out in town: step outside first.",
+      };
+      psfx.sniff(1);
+      return void this.hud.toast(`${k.emoji} ${p.name} sniffs about… ${why[skill] ?? "Nothing to find."}`, 4500);
+    }
+    this.petLeading = { skill, since: performance.now(), target, path: [], pathAt: 0 };
+    psfx.sniff(1);
+    psfx.voice(speciesOfCode(p.code), "excited", 1, 350);
+    const where: Record<string, string> = { treasure: "the lucky crate", friend: "someone", home: "home" };
+    this.hud.toast(`${k.emoji} ${p.name} has the scent of ${where[skill]}! Follow them!`, 4000);
+  }
+
+  /** Where your pet would lead you for `skill` just now (null: nowhere to go). */
+  private leadTarget(skill: SkillKey): TileXY | null {
+    const self = this.self;
+    if (!self) return null;
+    if (skill === "treasure") return this.lucky.at;
+    if (skill === "home") {
+      const mine = this.ui.homes.mine;
+      if (this.zoneId !== "city" || !mine) return null;
+      return spot(this.scene.map, mine.startsWith("apt:") ? "apartments" : `door:${mine}`);
+    }
+    // The nearest other player: on the map (across town), or in view.
+    let best: TileXY | null = null;
+    let bestD = Infinity;
+    const consider = (x: number, y: number) => {
+      const d = Math.hypot(x - self.pos.x, y - self.pos.y);
+      if (d < bestD && d > 1.5) {
+        bestD = d;
+        best = { x: Math.round(x), y: Math.round(y) };
+      }
+    };
+    if (performance.now() - this.mapDotsAt < 6000) for (const d of this.mapDots) if (!d.bot && d.id !== this.selfId) consider(d.x, d.y);
+    for (const [id, a] of this.avatars) if (id !== this.selfId && !a.info.bot && !a.isNpc) consider(a.pos.x, a.pos.y);
+    return best;
+  }
+
+  /** The water tile nearest `at` (within 3 tiles), if any. */
+  private nearestWater(at: TileXY): TileXY | null {
+    const map = this.scene.map;
+    let best: TileXY | null = null;
+    let bestD = Infinity;
+    for (let y = Math.round(at.y) - 3; y <= Math.round(at.y) + 3; y++)
+      for (let x = Math.round(at.x) - 3; x <= Math.round(at.x) + 3; x++) {
+        if (groundAt(map, x, y) !== "water") continue;
+        const d = Math.hypot(x - at.x, y - at.y);
+        if (d < bestD) {
+          bestD = d;
+          best = { x, y };
+        }
+      }
+    return best;
+  }
+
+  /**
+   * Where your pet fishes from: a bit of bank right by the water, near you
+   * (not where you stand) and where you cast, up at the water's edge. None
+   * (no bank to be had): it doesn't fish, it stays with you.
+   */
+  private petBank(at: TileXY, water: TileXY): TileXY | null {
+    const map = this.scene.map;
+    const wet = (x: number, y: number) => groundAt(map, x, y) === "water";
+    const me = { x: Math.round(at.x), y: Math.round(at.y) };
+    let best: { x: number; y: number; wx: number; wy: number } | null = null;
+    let bestD = Infinity;
+    // (Round you and round where you cast, and between: you may cast from well back.)
+    const w = { x: Math.round(water.x), y: Math.round(water.y) };
+    for (let y = Math.min(me.y, w.y) - 3; y <= Math.max(me.y, w.y) + 3; y++) {
+      for (let x = Math.min(me.x, w.x) - 3; x <= Math.max(me.x, w.x) + 3; x++) {
+        if ((x === me.x && y === me.y) || wet(x, y) || !walkable(map, x, y)) continue;
+        for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+          if (!wet(x + dx, y + dy)) continue;
+          // (Near you, and toward where you cast.)
+          const d = Math.hypot(x - at.x, y - at.y) + 0.35 * Math.hypot(x - water.x, y - water.y);
+          if (d < bestD) {
+            bestD = d;
+            best = { x, y, wx: dx, wy: dy };
+          }
+        }
+      }
+    }
+    return best ? { x: best.x + best.wx * 0.3, y: best.y + best.wy * 0.3 } : null;
+  }
+
+  /** Pets at work: leading you on, and sitting by the water while you fish (and bringing up a catch). */
+  private updatePetWays(now: number) {
+    const self = this.self;
+    // Pets sent to the water's edge: back to heel once the catch is out.
+    for (const [id, until] of this.petAtWater) {
+      if (now < until) continue;
+      this.petAtWater.delete(id);
+      const a = this.avatars.get(id);
+      if (a && !(id === this.selfId && this.petLeading)) a.petGoal = a.sharedPetGoal ? { x: a.sharedPetGoal.x, y: a.sharedPetGoal.y } : null;
+    }
+    // Others' pets, fishing where they've told us: watching, pouncing in, as ours.
+    for (const [id, a] of this.avatars) {
+      if (id === this.selfId || !a.pet) continue;
+      const g = a.sharedPetGoal;
+      const wet = g && g.kind === PET_GOAL.FISHING ? this.nearestWater(a.pet.pos) : null;
+      const there = !!g && !!wet && Math.hypot(wet.x - a.pet.pos.x, wet.y - a.pet.pos.y) < 1.8 && Math.hypot(a.pet.pos.x - g.x, a.pet.pos.y - g.y) < 0.6;
+      if (there && !a.pet.fishing) {
+        const near = wet!;
+        const dx = near.x - a.pet.pos.x;
+        const dy = near.y - a.pet.pos.y;
+        const d = Math.hypot(dx, dy) || 1;
+        a.pet.fishing = { ux: dx / d, uy: dy / d, since: now };
+      } else if (!there && a.pet.fishing) a.pet.fishing = null;
+    }
+    if (!self) return;
+    const p = this.ui.pets.mine;
+    this.sharePetGoal(now);
+    // Fishing with a fishing buddy: it sits at the water's edge beside you
+    // (line in or not) till you wander off from the water.
+    const water = this.petFishing?.water;
+    if (water && (!p?.out || Math.max(Math.abs(self.pos.x - water.x), Math.abs(self.pos.y - water.y)) > PET_STAY)) this.petFishing = null;
+    const fishingBuddy = !!this.petFishing;
+    if (fishingBuddy && !this.petAtWater.has(this.selfId)) self.petGoal = this.petFishing!.spot;
+    // At its spot by the water: fishing (watching, pouncing in); its bubble a fish.
+    const pet = self.pet;
+    if (pet) {
+      const pf = this.petFishing;
+      // (Only with the water right there: never on dry land.)
+      const wet = pf ? this.nearestWater(pet.pos) : null;
+      const there = !!pf && !!wet && Math.hypot(wet.x - pet.pos.x, wet.y - pet.pos.y) < 1.8 && Math.hypot(pet.pos.x - pf.spot.x, pet.pos.y - pf.spot.y) < 0.6;
+      if (there && !pet.fishing) {
+        // (Toward the nearest water to it: it's right at the edge.)
+        const near = wet!;
+        const dx = near.x - pet.pos.x;
+        const dy = near.y - pet.pos.y;
+        const d = Math.hypot(dx, dy) || 1;
+        pet.fishing = { ux: dx / d, uy: dy / d, since: now };
+      } else if (!there && pet.fishing) pet.fishing = null;
+    }
+    // (Done fishing, not leading, nothing being fetched: back at heel.)
+    if (!fishingBuddy && !this.petLeading && !this.petAtWater.has(this.selfId) && self.petGoal) self.petGoal = null;
+    const L = this.petLeading;
+    if (!L) return;
+    const stop = (text: string | null) => {
+      this.petLeading = null;
+      self.petGoal = null;
+      if (text) this.hud.toast(text, 4500);
+    };
+    if (!p?.out || !self.pet) return stop(null);
+    if (now - L.since > LEAD_MS) return stop(`🐾 ${p.name} lost the scent. Try again later!`);
+    if (now - L.pathAt > 1500) {
+      const t = this.leadTarget(L.skill);
+      if (!t) return stop(L.skill === "treasure" ? `📦 Someone else got to the lucky crate first!` : `🐾 ${p.name} lost the scent.`);
+      L.target = t;
+      L.pathAt = now;
+      const from = { x: Math.round(self.pos.x), y: Math.round(self.pos.y) };
+      L.path = findPath(this.scene.map, from, t, 20000) ?? [from, t];
+    }
+    // There: a happy hop, and what it found.
+    if (Math.hypot(self.pos.x - L.target.x, self.pos.y - L.target.y) < 2.6) {
+      self.pet.hop(now, 3);
+      self.pet.greet(now);
+      psfx.welcome(1);
+      const found: Record<string, string> = {
+        treasure: `📦 ${p.name} found the lucky crate! Walk onto it to open it.`,
+        friend: `👥 ${p.name} found someone! Say hi.`,
+        home: `🏠 Home sweet home! ${p.name} knew the way.`,
+      };
+      return stop(found[L.skill] ?? null);
+    }
+    // Run on ahead along the way and wait there, looking back.
+    const path = L.path;
+    let near = 0;
+    let nearD = Infinity;
+    path.forEach((t, i) => {
+      const d = Math.hypot(t.x - self.pos.x, t.y - self.pos.y);
+      if (d < nearD) {
+        nearD = d;
+        near = i;
+      }
+    });
+    let left = LEAD_AHEAD;
+    let at = { x: self.pos.x, y: self.pos.y };
+    for (let i = near + 1; i < path.length && left > 0; i++) {
+      const seg = Math.hypot(path[i].x - at.x, path[i].y - at.y);
+      if (seg >= left) {
+        at = { x: at.x + ((path[i].x - at.x) * left) / seg, y: at.y + ((path[i].y - at.y) * left) / seg };
+        left = 0;
+      } else {
+        at = { x: path[i].x, y: path[i].y };
+        left -= seg;
+      }
+    }
+    self.petGoal = at;
+  }
+
+  /**
+   * Where our pet's off to, told to everyone about (`PetGoal`): when it
+   * changes (leading the way, only once it's moved on a tile, at most once
+   * a second), and every 10 s while it lasts (for those who've just come
+   * along). At our heels, nothing's sent: everyone works that spot out alike.
+   */
+  private sharePetGoal(now: number) {
+    const self = this.self;
+    if (!self?.pet || !this.socket) return;
+    const kind = this.petFishing ? PET_GOAL.FISHING : this.petLeading && self.petGoal ? PET_GOAL.LEADING : PET_GOAL.NONE;
+    const g = kind === PET_GOAL.NONE ? null : self.petGoal;
+    const x = g ? Math.round(g.x * 10) : 0;
+    const y = g ? Math.round(g.y * 10) : 0;
+    const s = this.goalSent;
+    const changed = kind !== s.kind || (kind !== PET_GOAL.NONE && Math.hypot(x - s.x, y - s.y) >= (kind === PET_GOAL.LEADING ? 10 : 3));
+    const due = changed ? now - s.at > (kind === s.kind && kind === PET_GOAL.LEADING ? 1000 : 0) : kind !== PET_GOAL.NONE && now - s.at > 10_000;
+    if (!due) return;
+    this.goalSent = { kind, x, y, at: now };
+    this.socket.send({ t: "PetGoal", x: Math.max(0, x), y: Math.max(0, y), kind });
+  }
+
+  /** Someone's pet's off somewhere (or back at heel), as they've told us. */
+  private onPetGoal(m: Extract<ServerMsg, { t: "PetGoal" }>) {
+    const a = this.avatars.get(m.id);
+    if (!a || m.id === this.selfId) return;
+    a.sharedPetGoal = m.kind === PET_GOAL.NONE ? null : { x: m.x / 10, y: m.y / 10, kind: m.kind };
+    if (!this.petAtWater.has(m.id)) a.petGoal = a.sharedPetGoal ? { x: a.sharedPetGoal.x, y: a.sharedPetGoal.y } : null;
+  }
+
+  /** Treat Catch's window (made the first time it's needed). */
+  private duoPanel(): PetDuoPanel {
+    this.petDuo ??= new PetDuoPanel({
+      selfId: () => this.selfId,
+      serverNow: () => this.socket?.clock.now() ?? 0,
+      nameOf: (id) => this.avatars.get(id)?.info.name ?? "your friend",
+      petOf: (id) => this.avatars.get(id)?.info.pet ?? 1,
+      send: (m) => this.socket?.send(m),
+    });
+    return this.petDuo;
+  }
+
+  /** A catch by someone's pet (`pet_skill::FISH`, `MAGNET`): out of the water by their pet, or flopping on the bank. */
+  private onPetFish(m: Extract<ServerMsg, { t: "FishEvent" }>, isSelf: boolean, vol: number) {
+    const a = this.avatars.get(m.id);
+    const pet = a?.pet;
+    const it = this.ui.eco.items.get(m.item);
+    const petName = isSelf ? (this.ui.pets.mine?.name ?? "Your pet") : "Their pet";
+    // (To the water's edge for it, a moment, then back to heel.)
+    const toWater = () => {
+      if (!a) return;
+      a.petGoal = { x: m.x, y: m.y };
+      this.petAtWater.set(m.id, performance.now() + 1800);
+    };
+    switch (m.kind) {
+      case FISH.PET_PULL: {
+        toWater();
+        // (It stays at the water's edge while it hauls it in and it flaps about on the bank.)
+        this.petAtWater.set(m.id, performance.now() + 3000);
+        // The yank: a lunge in, a heave back, and over onto the bank it comes.
+        const at = pet && Math.hypot(pet.pos.x - m.x, pet.pos.y - m.y) < 1.5 ? pet.pos : { x: m.x, y: m.y };
+        const water = this.nearestWater(at) ?? { x: Math.round(at.x), y: Math.round(at.y) - 1 };
+        const wx = water.x - at.x;
+        const wy = water.y - at.y;
+        const wd = Math.hypot(wx, wy) || 1;
+        const [ux, uy] = [wx / wd, wy / wd];
+        pet?.yank(performance.now(), ux, uy);
+        sfx.splash(vol, 200);
+        if (pet) psfx.voice(pet.species, "excited", vol * 0.8, 450);
+        // (Landing behind it on the bank, off to the side away from its walker, not at their feet.)
+        // (Along the bank the way that's away from them; no telling, then down the screen: they stand up tall.)
+        let [sx, sy] = [-uy, ux];
+        const toThem = a ? sx * (a.pos.x - at.x) + sy * (a.pos.y - at.y) : 0;
+        if (toThem > 0.2 || (Math.abs(toThem) <= 0.2 && sy < 0)) [sx, sy] = [-sx, -sy];
+        const land = {
+          x: (at.x - ux * 0.4 + sx * 0.9) * TILE + TILE / 2,
+          y: (at.y - uy * 0.4 + sy * 0.9) * TILE + TILE - 4,
+        };
+        window.setTimeout(() => sfx.flop(vol * 0.7), 300 + 480);
+        window.setTimeout(() => {
+          this.catches.start(
+            { x: water.x, y: water.y },
+            () => {
+              const p = this.avatars.get(m.id)?.pet;
+              return p ? { x: p.pos.x * TILE + TILE / 2, y: p.pos.y * TILE + TILE - 4 - 26 } : null;
+            },
+            it?.key ?? "minnow",
+            it?.name ?? "A fish",
+            it?.rarity ?? 0,
+            it?.kind ?? "fish",
+            undefined,
+            m.id,
+            land,
+          );
+        }, 300);
+        // (Held up once it's done flapping.)
+        window.setTimeout(() => sfx.landed(vol, it?.rarity ?? 0), 300 + 480 + 1000 + 500);
+        if (isSelf) this.hud.toast(`🐾 ${petName} pulled out ${it?.kind === "scrap" ? "some salvage" : "a fish"}: ${this.ui.eco.name(m.item)}! It's yours.`, 3500);
+        break;
+      }
+      case FISH.PET_FLOP: {
+        toWater();
+        pet?.hop(performance.now(), 3);
+        const water = this.castAt.get(m.id) ?? { x: m.x, y: m.y };
+        const need = [3, 3, 3, 4, 5, 5][it?.rarity ?? 2] ?? 5;
+        this.flops.start(petFlop(m.id), water, { x: m.x, y: m.y }, it?.key ?? "minnow", it?.rarity ?? 2, FLOP_MS, isSelf, need);
+        sfx.flop(vol);
+        if (pet) psfx.voice(pet.species, "excited", vol, 200);
+        if (isSelf) this.hud.toast(`🐾 ${petName} hauled out something rare and it's flopping on the bank! Tap it ${need} times quick!`, 4500);
+        break;
+      }
+      case FISH.PET_HIT:
+        this.flops.hit(petFlop(m.id), m.item, { x: m.x, y: m.y });
+        sfx.whack(vol, m.item);
+        break;
+      case FISH.PET_CAUGHT: {
+        this.flops.remove(petFlop(m.id));
+        const rarity = it?.rarity ?? 0;
+        sfx.landed(vol, rarity);
+        this.catches.start(
+          { x: m.x, y: m.y },
+          () => {
+            const p = this.avatars.get(m.id);
+            return p ? { x: p.pos.x * TILE + TILE / 2, y: p.pos.y * TILE + TILE - 4 - 34 } : null;
+          },
+          it?.key ?? "minnow",
+          it?.name ?? "A fish",
+          rarity,
+          it?.kind ?? "fish",
+          undefined,
+          m.id,
+        );
+        pet?.greet(performance.now());
+        if (isSelf) {
+          const t = tier(rarity);
+          this.hud.toast(`✨ You and ${petName} landed it: ${t.name} ${this.ui.eco.name(m.item)}! (worth ${it?.meta.sell ?? 0} coins to the fisherman)`, 5000);
+        }
+        break;
+      }
+      case FISH.PET_ESCAPED:
+        this.flops.escape(petFlop(m.id));
+        sfx.splash(vol, 450);
+        if (isSelf) this.hud.toast(`It wriggled back into the water… ${petName} looks at you, ears down.`, 3500);
+        break;
+    }
+  }
+
+  /** Someone's pet (`pet_skill::DIG`) dug up a few coins out walking. */
+  private onPetDug(m: Extract<ServerMsg, { t: "PetDug" }>) {
+    const a = this.avatars.get(m.id);
+    const pet = a?.pet;
+    const isSelf = m.id === this.selfId;
+    const vol = this.nearbyVolume(m.id);
+    if (pet) {
+      pet.hop(performance.now(), 3);
+      psfx.sniff(vol);
+      psfx.thump(vol, 250);
+      psfx.voice(pet.species, "excited", vol, 500);
+    }
+    if (isSelf) {
+      sfx.cash(1, m.coins);
+      this.hud.toast(`⛏️ ${this.ui.pets.mine?.name ?? "Your pet"} dug something up: ${m.coins} coins!`, 3500);
+    }
+  }
+
+  /**
+   * What something did for your pet (`+12 ♥ Fun`, `+6 ✦ XP`), over its head:
+   * out with you, or at home with you there. Whether it was there to show it on.
+   */
+  showPetGain(gain: PetGain): boolean {
+    const self = this.self;
+    const out = this.ui.pets.mine?.out ? self?.pet : null;
+    const home = this.petLife.homeSprite;
+    const near = home && self && Math.hypot(home.pos.x - self.pos.x, home.pos.y - self.pos.y) < 12 ? home : null;
+    const sprite = out ?? near;
+    return !!sprite && this.petGains.show(sprite, gain);
+  }
+
+  /** Hearts on your pet (wherever it is). */
+  cheerPet(n = 2) {
+    this.petLife.cheer(n);
+  }
+
+  /** Takes your pet out, or brings it home. */
+  walkPet(out: boolean) {
+    const fail = (e: unknown) => this.hud.toast(e instanceof Error ? e.message : "That didn't work.", 4000);
+    if (out) void this.petLife.takeOut().catch(fail);
+    else void this.petLife.bringHome().catch(fail);
   }
 
   /** Sends a wish up on a sky lantern. */
@@ -2947,10 +3474,37 @@ export class Game {
       case "CallingShown":
         this.avatars.get(m.id)?.setCalling(m.on);
         break;
-      case "EmoteShown":
-        this.avatars.get(m.id)?.emote(m.emote);
-        sfx.emoteSound(m.emote, this.nearbyVolume(m.id) * 0.8);
+      case "EmoteShown": {
+        const a = this.avatars.get(m.id);
+        // A walker's pet doing a trick.
+        if (m.emote >= TRICK_EMOTE && m.emote < TRICK_EMOTE + TRICK_KEYS.length) {
+          const kind = TRICK_KEYS[m.emote - TRICK_EMOTE];
+          if (a?.pet) {
+            a.pet.trick(kind, performance.now());
+            psfx.trick(a.pet.species, kind, this.nearbyVolume(m.id));
+          }
+          break;
+        }
+        // A walker looking after their pet: a hug, a brush, a bath, a meal.
+        if (m.emote >= CARE_EMOTE && m.emote < CARE_EMOTE + CARE_KINDS.length) {
+          if (a?.pet) this.startCare(a, a.pet, CARE_KINDS[m.emote - CARE_EMOTE], this.nearbyVolume(m.id));
+          break;
+        }
+        a?.emote(m.emote);
+        sfx.emoteSound(m.emote, this.emoteVolume(m.id));
+        // Pets join in: with their walker, and the one at home with whoever's in.
+        const now = performance.now();
+        const home = this.petLife.homeSprite;
+        const pets = [a?.pet, a && home && Math.hypot(home.pos.x - a.pos.x, home.pos.y - a.pos.y) < 6 ? home : null];
+        for (const pet of pets) {
+          if (!pet || pet.tricking) continue;
+          if (m.emote === 4 || m.emote === 8) pet.trick("dance", now);
+          else if (m.emote === 2) pet.trick("spin", now);
+          else if (m.emote === 1 || m.emote === 3 || m.emote === 6) pet.hop(now, 2);
+          else if (m.emote === 7) pet.greet(now);
+        }
         break;
+      }
       case "ChatBubble": {
         const a = this.avatars.get(m.id);
         if (!a || this.ui.social.isBlockedName(a.info.name)) break;
@@ -2994,6 +3548,9 @@ export class Game {
       case "LabState":
       case "LabEvent":
         this.lab?.handle(m);
+        break;
+      case "PetDug":
+        this.onPetDug(m);
         break;
       case "LuckyShown":
         this.lucky.show({ x: m.x, y: m.y }, m.moves);
@@ -3151,6 +3708,21 @@ export class Game {
       case "Together":
         this.together(m.a, m.b, m.kind);
         break;
+      case "PetGoal":
+        this.onPetGoal(m);
+        break;
+      case "PetDuo":
+        if (m.a === this.selfId || m.b === this.selfId) this.duoPanel().start(m);
+        break;
+      case "PetDuoMove":
+        this.petDuo?.onMove(m);
+        break;
+      case "PetDuoCatch":
+        this.petDuo?.onCatch(m);
+        break;
+      case "PetDuoOver":
+        this.petDuo?.onOver(m);
+        break;
       case "MapDots":
         this.mapDots = m.dots;
         this.mapDotsAt = performance.now();
@@ -3192,6 +3764,9 @@ export class Game {
         break;
       case "GolfBall":
       case "GolfBoard":
+      case "GolfDuel":
+      case "GolfDuelRoll":
+      case "GolfSeeking":
         this.golf?.onMsg(m);
         break;
       case "Skating":
@@ -3215,6 +3790,9 @@ export class Game {
         break;
       case "ArenaEvent":
         this.arena?.onEvent(m);
+        break;
+      case "ArenaStats":
+        this.arena?.onStats(m);
         break;
       case "ArenaStoodDown":
         this.hud.toast("Nobody started the match, so you've stepped out of the games.", 4000);
@@ -3720,9 +4298,13 @@ export class Game {
         this.socket?.send({ t: "FishHit" });
         return;
       }
+      if (this.flops.hits(petFlop(this.selfId), wx, wy)) {
+        this.socket?.send({ t: "PetFishHit" });
+        return;
+      }
       // Catching a fish (reeling in, or your catch flopping on the bank): a
       // tap that misses doesn't walk you off, which would end the fishing.
-      if (this.flops.has(this.selfId) || this.ui.reel.active || this.ui.net.active) return;
+      if (this.flops.has(this.selfId) || this.flops.has(petFlop(this.selfId)) || this.ui.reel.active || this.ui.net.active) return;
       // A bug or a mushroom: creep up on it.
       if (this.tapNature(wx, wy)) return;
       const t = this.scene.screenToTile(e.global.x, e.global.y);
@@ -3944,8 +4526,8 @@ export class Game {
     }
     if (PET_SPOTS.has(key)) {
       const pet = ui.pets.mine;
-      note = this.isOwnHome && pet ? `💤 ${pet.name}'s favourite spot.` : "For a pet: yours curls up here when you're home.";
-      if (this.isOwnHome && pet) actions.push([`🐾 Pat ${pet.name}`, () => (walkUp(), sfx.highFive(0.5), this.hud.toast(`💕 ${pet.name} stretches, yawns, and goes back to sleep.`, 3000))]);
+      note = this.isOwnHome && pet ? `💤 ${pet.name}'s favourite spot: they nap and eat here.` : "For a pet: yours naps on it, or eats from it, when they're home.";
+      if (this.isOwnHome && pet) actions.push([`🐾 Look after ${pet.name}`, () => this.near(ui.petPanel, t, 8).show()]);
     }
     if (mine) actions.push(["Pick up", () => this.socket?.send({ t: "Pickup", x: t.x, y: t.y })]);
     if (!actions.length) return;
@@ -4003,6 +4585,13 @@ export class Game {
       // Trade with them (or just give them something), face to face. (Not the town's bots.)
       if (!isBotName(name)) actions.push(["🤝 Trade", () => void this.ui.trade.start(name)]);
       for (const [kind, t] of Object.entries(TOGETHER)) {
+        // (A golf 1v1: only with you both there at the course.)
+        if (Number(kind) === GOLF) {
+          const me = this.self;
+          if (!this.golf || !me || this.golf.inDuel || !this.golf.onCourse(me.pos.x, me.pos.y) || !this.golf.onCourse(a.pos.x, a.pos.y)) continue;
+        }
+        // (Treat Catch: only with both your pets out on a walk.)
+        if (Number(kind) === PET_DUO && (!a.info.pet || !this.self?.info.pet)) continue;
         actions.push([`${t.icon} ${t.offer}`, () => this.offer(a.info.id, Number(kind), name)]);
       }
       actions.push(["Report", () => this.ui.report.openFor(name)]);
@@ -4488,6 +5077,15 @@ export class Game {
       return true;
     }
     const shopAt = obj?.kind === "counter" ? map.objects.find((d) => d.kind === "dept" && obj.x >= d.x && obj.x < d.x + d.w && obj.y >= d.y && obj.y < d.y + d.h) : undefined;
+    if (obj && (obj.kind === "pet_studio" || shopAt?.label === "breeder")) {
+      // The Breeder's studio: design a pet (or restyle yours).
+      if (cheb(this.standing ?? self.destination, { x: obj.x, y: obj.y }) > 2) {
+        const spot = nearestWalkable(map, obj.x + 1, obj.y + obj.h, 2);
+        if (spot) this.moveTo(spot, true);
+      }
+      this.near(ui.petMaker, { x: obj.x + 1, y: obj.y + obj.h }, 8).openStudio();
+      return true;
+    }
     if (obj && shopAt?.label && ui.shop.isOpen(shopAt.label)) {
       if (cheb(this.standing ?? self.destination, { x: obj.x, y: obj.y }) > 2) {
         const spot = nearestWalkable(map, obj.x + 1, obj.y + 1, 2);
@@ -4639,14 +5237,22 @@ export class Game {
     const isSelf = m.id === this.selfId;
     const vol = this.nearbyVolume(m.id);
     switch (m.kind) {
-      case FISH.CAST:
+      case FISH.CAST: {
         this.castAt.set(m.id, { x: m.x, y: m.y });
+        // Your pet sets to work by the water with you (if it's learnt how).
+        const p = this.ui.pets.mine;
+        const me = this.self;
+        if (isSelf && me && p?.out && knows(p, m.item === MAGNET_ITEM ? "magnet" : "fish")) {
+          const spot = this.petBank(me.pos, { x: m.x, y: m.y });
+          if (spot) this.petFishing = { water: { x: m.x, y: m.y }, spot };
+        }
         this.props.cast(m.id, { x: m.x, y: m.y }, m.item === MAGNET_ITEM);
         this.avatars.get(m.id)?.castLine({ x: m.x, y: m.y }, performance.now());
         // (The magnet's heavy iron, not a little bobber.)
         if (m.item === MAGNET_ITEM) salvagefx.plunge(vol, CAST_SWING_MS);
         else sfx.splash(vol, CAST_SWING_MS);
         break;
+      }
       case FISH.LURE: {
         // A lure thrown: the rod swung out, the lure arcing from the hand
         // over the water, a splash as it goes in.
@@ -4782,6 +5388,13 @@ export class Game {
         );
         break;
       }
+      case FISH.PET_PULL:
+      case FISH.PET_FLOP:
+      case FISH.PET_HIT:
+      case FISH.PET_CAUGHT:
+      case FISH.PET_ESCAPED:
+        this.onPetFish(m, isSelf, vol);
+        break;
       case FISH.ESCAPED:
         if (isSelf && this.ui.salvage.open) this.ui.salvage.stop();
         if (this.flops.has(m.id)) {
@@ -4802,6 +5415,31 @@ export class Game {
   }
 
   /** How loud someone's sounds are to you: full for your own, fading out over a dozen tiles. */
+  /** When each avatar's emote last made a sound, and any of them did (others', so a crowd doesn't make a racket). */
+  private emoteHeard = new Map<number, number>();
+  private emoteHeardAny = -1e9;
+
+  /**
+   * How loud someone else's emote is heard: yours always. Bots' (the
+   * filler crowd, emoting all the time) not at all: you see them, but they
+   * don't make noise. A real person's, only close by (fading out by 8
+   * tiles), at most once every 8 seconds each, and one of anyone's every 3.
+   */
+  private emoteVolume(id: number): number {
+    if (id === this.selfId) return 1;
+    const a = this.avatars.get(id);
+    const self = this.self;
+    if (!a || !self || a.info.bot) return 0;
+    const d = Math.hypot(a.pos.x - self.pos.x, a.pos.y - self.pos.y);
+    if (d >= 8) return 0;
+    const now = performance.now();
+    if (now - (this.emoteHeard.get(id) ?? -1e9) < 8_000 || now - this.emoteHeardAny < 3_000) return 0;
+    this.emoteHeard.set(id, now);
+    this.emoteHeardAny = now;
+    if (this.emoteHeard.size > 200) this.emoteHeard.clear();
+    return (1 - d / 8) * 0.5;
+  }
+
   private nearbyVolume(id: number): number {
     if (id === this.selfId) return 1;
     const a = this.avatars.get(id);
@@ -5231,6 +5869,7 @@ export class Game {
     this.milestones.update(wallNow, this.daynight.dark);
     this.ball?.update(serverNow);
     this.weather.update(wallNow, this.daynight.clockHour());
+    this.scene.setAir(this.daynight.hour(), this.daynight.dark, this.weather.kind);
     this.critters.update(wallNow, this.daynight.dark);
     if (this.natureFx) {
       this.natureFx.update(wallNow, this.daynight.dark);
@@ -5243,6 +5882,11 @@ export class Game {
     }
     this.cat?.update(Date.now());
     this.petLife.update(wallNow);
+    if (this.careScenes.length) this.careScenes = this.careScenes.filter((c) => c.update(wallNow));
+    if (wallNow > this.petButtonAt) {
+      this.petButtonAt = wallNow + 4000;
+      this.showPetButton();
+    }
     if (this.caretaker) {
       this.caretaker.update(Date.now(), wallNow);
       this.caretakerChat(wallNow);
@@ -5293,6 +5937,7 @@ export class Game {
     }
     this.ui.sound.update(wallNow, { dark: this.daynight.dark, weather: this.weather.kind });
     this.catches.update(wallNow);
+    this.petGains.update(wallNow);
     this.flops.update(wallNow, (id) => this.avatars.get(id)?.rodTip ?? null);
     // The lure's preview goes once its menu does (thrown, or closed), and
     // both go as soon as we walk off somewhere (keys, or a walk elsewhere).
@@ -5303,6 +5948,7 @@ export class Game {
     }
     this.lures.update(serverNow, wallNow);
     this.lucky.update(serverNow, wallNow);
+    this.updatePetWays(wallNow);
     this.lab?.update(wallNow, serverNow);
     this.fountain?.update(wallNow);
     this.pond?.update(performance.now());
@@ -5348,6 +5994,8 @@ export class Game {
     this.weather.destroy();
     this.critters.destroy();
     this.caretaker?.destroy();
+    for (const c of this.careScenes) c.end();
+    this.careScenes = [];
     this.petLife.destroy();
     this.houseFronts?.destroy();
     this.yardStands?.destroy();
@@ -5379,6 +6027,7 @@ export class Game {
     this.leaderSigns = null;
     this.pond = null;
     this.catches.destroy();
+    this.petGains.destroy();
     this.flops.destroy();
     this.lures.destroy();
     this.lucky.destroy();

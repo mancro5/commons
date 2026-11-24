@@ -7,6 +7,7 @@
 import { Container, Sprite, Texture } from "pixi.js";
 import { TILE } from "./art";
 import type { MapObject } from "./map";
+import { BASIN_WATER } from "./relief";
 import { type Scene, fountainFoot } from "./scene";
 
 /** The still drawing's sky above the fountain (its overhang), in pixels. */
@@ -95,6 +96,8 @@ export class FountainFx {
     // so in 3D it stands there with the pedestal, falling into the basin.)
     const footX = this.x0 + this.cx;
     const footY = fountainFoot(obj);
+    // (In the tilted views it stands in the raised basin's water.)
+    scene.liftUp(this.root, BASIN_WATER);
     this.root.pivot.set(footX, footY);
     this.root.position.set(footX, footY);
     scene.standOn(this.root, footY);
@@ -132,15 +135,18 @@ export class FountainFx {
 
     // The glow over the water, breathing slowly.
     const breathe = 0.5 + 0.5 * Math.sin(now / 1100);
-    this.glow.scale.set((ix * 2.3) / 64, (iy * 2.3) / 64);
+    // (Seen from low down, the basin's a thin oval.)
+    this.glow.scale.set((ix * 2.3) / 64, ((iy * 2.3) / 64) * (this.scene.cinematic ? 0.36 : 1));
     this.glow.alpha = 0.48 + 0.16 * breathe;
     this.bowlGlow.alpha = 0.32 + 0.12 * breathe;
 
     // Ripples spreading out from the pedestal over the basin, fading as they go.
+    // (Seen from low down, they're as thin an oval as the basin is.)
+    const thin = this.scene.cinematic ? 0.42 : 1;
     for (let i = 0; i < 3; i++) {
       const t = ((now / 2600 + i / 3) % 1 + 1) % 1;
       const ax = 14 + t * (ix - 20);
-      const ay = ax * (iy / ix);
+      const ay = ax * (iy / ix) * thin;
       const alpha = 0.75 * (1 - t);
       const steps = Math.round(ax * 2.2);
       for (let k = 0; k < steps; k++) {
@@ -189,7 +195,7 @@ export class FountainFx {
       const a = k * 2.4 + Math.floor(now / 1700 + k * 0.29) * 1.3;
       const r = 0.35 + ((k * 37) % 50) / 100;
       const sx = cx + Math.cos(a) * (ix - 6) * r;
-      const sy = cy + 6 + Math.sin(a) * (iy - 6) * r;
+      const sy = cy + 6 + Math.sin(a) * (iy - 6) * r * thin;
       const s = Math.sin((t / 0.3) * Math.PI);
       dot(sx, sy, 0xffffff, s);
       if (s > 0.6) {

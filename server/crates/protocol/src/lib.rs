@@ -13,7 +13,7 @@ pub mod wire;
 pub use wire::{DecodeError, Wire, push_framed, split_frame};
 
 /// Bumped on any incompatible message change.
-pub const PROTOCOL_VERSION: u16 = 59;
+pub const PROTOCOL_VERSION: u16 = 66;
 
 /// Spatial-hash cell size in tiles (spec §3).
 pub const CELL_TILES: u16 = 16;
@@ -46,6 +46,11 @@ records! {
     /// A gift the crowd threw in (`commons_sim::arena::gift`): where (arena tiles ×100), and how long till it lands (ms).
     ArenaGift { kind: u8, x: u16, y: u16, lands_ms: u16 }
 
+    /// A gladiator's round (`ArenaStats`): fighters knocked down, damage
+    /// dealt (hits and wall slams), blows landed, damage taken and times
+    /// downed; and over the whole match so far, knockdowns and damage.
+    ArenaStat { id: u32, kills: u8, damage: u16, hits: u16, taken: u16, downs: u8, match_kills: u16, match_damage: u32 }
+
     /// Someone on the paintball field (`commons_sim::paintball`): where
     /// (field tiles ×100), aiming where (a fraction of a full turn), paint
     /// left (`hp`) and balls in the hopper, `flags` (`paintball::flag`),
@@ -70,6 +75,10 @@ records! {
     /// A line on the skatepark's board (`SkateBoard`): who, and their score.
     SkateEntry { name: String, points: u32 }
 
+    /// A ball in a mini golf 1v1 (`GolfDuel`): where it is on the hole (px,
+    /// from its cell's top left) and `golf::*` (at rest, holed).
+    GolfDuelBall { x: u16, y: u16, state: u8 }
+
     /// Someone in the zone, for the map (`MapDots`): where they stand, their name, and whether a bot.
     MapDot { id: u32, x: u16, y: u16, name: String, bot: bool }
 
@@ -86,7 +95,7 @@ records! {
         name: String,
         look: u32,
         style: u32,
-        pet: u16,
+        pet: u32,
         vehicle: u8,
         tool: u8,
         x: u16,
@@ -319,6 +328,30 @@ message_enum! {
         82 GolfCard { strokes: Vec<u8> }
         /// Today's best rounds, please (a `GolfBoard`).
         83 GolfBoardAsk {}
+        /// A mini golf 1v1, your turn: both balls as your putt leaves them
+        /// (yours first; it can knock theirs), now and then as they roll and
+        /// (`done`) once they've stopped; `penalty`: strokes on (in the water).
+        84 GolfDuelShot { balls: Vec<GolfDuelBall>, done: bool, penalty: u8 }
+        /// Out of your 1v1 (it's theirs).
+        85 GolfDuelLeave {}
+        /// A 1v1 against the golf bot (`golf::BOT`), there at the course: you
+        /// and it turn about as with a person, your client putting for it.
+        86 GolfDuelBot {}
+        /// A 1v1 against whoever comes (`on`; false: not waiting any more):
+        /// with someone already waiting at the course, straight into it with
+        /// them (them first); else you wait there till someone does.
+        87 GolfDuelSeek { on: bool }
+        /// A smack at the fish your pet pulled out, flopping on the bank
+        /// (`fish_event::PET_FLOP`), as `FishHit` is at your own.
+        88 PetFishHit {}
+        /// Where your pet's off to on its own (tiles ×10), and why (`pet_goal`):
+        /// told when it changes (and now and then while it lasts), so everyone
+        /// sees it there. (At your heels, its spot is everyone's own reckoning.)
+        89 PetGoal { x: u16, y: u16, kind: u8 }
+        /// Treat Catch (`PetDuo`): your pet's across the lawn at `x` (0–1000),
+        /// for your partner to see; and you caught treat `treat`.
+        90 PetDuoMove { x: u16 }
+        91 PetDuoCatch { treat: u16 }
     }
 }
 
@@ -396,7 +429,7 @@ message_enum! {
         /// Avatar `id` changed its look (and what it wears from the mall),
         /// took its pet out or home, got on or off something to ride, or
         /// picked up another rod or watering can.
-        26 LookChanged { id: u32, look: u32, style: u32, pet: u16, vehicle: u8, tool: u8 }
+        26 LookChanged { id: u32, look: u32, style: u32, pet: u32, vehicle: u8, tool: u8 }
         /// A rock paper scissors match between `a` and `b` (`rps::*` phase).
         /// While choosing, picks are hidden (0) and `ends_t` is the deadline;
         /// at the reveal they show what each chose (0: didn't choose in time).
@@ -538,6 +571,31 @@ message_enum! {
         71 GolfBall { id: u32, hole: u8, x: u16, y: u16, strokes: u8, state: u8 }
         /// Today's best mini golf rounds (`points`: strokes for the nine, fewest first).
         72 GolfBoard { rounds: Vec<SkateEntry> }
+        /// Your mini golf 1v1 (`a` the one who asked, red; `b` blue): the
+        /// hole (1–9), whose turn, both balls (`a`'s first), the strokes so
+        /// far (`a`'s nine then `b`'s), and `over` (`winner` 0: a draw).
+        73 GolfDuel { a: u32, b: u32, hole: u8, turn: u32, balls: Vec<GolfDuelBall>, strokes: Vec<u8>, over: bool, winner: u32 }
+        /// The other player's putt rolling (both balls, as `GolfDuelShot`).
+        74 GolfDuelRoll { balls: Vec<GolfDuelBall> }
+        /// Who's waiting at the mini golf for someone to take them on in a 1v1
+        /// (`GolfDuelSeek`; 0: nobody): to everyone at the course as it changes.
+        75 GolfSeeking { id: u32 }
+        /// Avatar `id`'s pet (`pet_skill::DIG`) dug up `coins` at (x, y) out on a walk.
+        76 PetDug { id: u32, x: u16, y: u16, coins: u16 }
+        /// A gladiator round's over (round `round`, won by `winner`, 0 for
+        /// nobody; `over`: the match too): how each fighter did.
+        77 ArenaStats { round: u8, winner: u32, over: bool, rows: Vec<ArenaStat> }
+        /// Avatar `id`'s pet is off to (x, y) (tiles ×10) on its own (`pet_goal`; `NONE`: back at heel).
+        78 PetGoal { id: u32, x: u16, y: u16, kind: u8 }
+        /// A game of Treat Catch (`together::PET_DUO`), `a` and `b` and their pets:
+        /// its treats from `seed`, falling from instance time `start` for `ms`.
+        79 PetDuo { a: u32, b: u32, seed: u32, start: u32, ms: u32 }
+        /// Your partner's pet moved (`PetDuoMove`), or caught a treat.
+        80 PetDuoMove { id: u32, x: u16 }
+        81 PetDuoCatch { id: u32, treat: u16 }
+        /// The game's over: the two of you caught `score`; your pets are friends
+        /// to `friendship` (level `level`); `counted`: today's games still grow it.
+        82 PetDuoOver { score: u16, friendship: u16, level: u8, counted: bool, xp: u16 }
     }
 }
 
@@ -571,12 +629,19 @@ pub mod emote {
     pub const YO_YO: u8 = 11;
     pub const PINWHEEL: u8 = 12;
     pub const TOYS: std::ops::RangeInclusive<u8> = BUBBLES..=PINWHEEL;
+    /// The pet out with you does a trick it has learnt (the API's
+    /// `pets::TRICKS`, in order: sit, spin, beg, roll, high five, play dead,
+    /// dance, backflip, zoomies, bow). Only with a pet out.
+    pub const PET_TRICKS: std::ops::RangeInclusive<u8> = 40..=49;
+    /// Looking after the pet out with you, for all to see: a hug, a brush, a bath, a meal.
+    pub const PET_CARE: std::ops::RangeInclusive<u8> = 50..=53;
 }
 
 /// The skatepark: what `SkateMove.pose` and `SkateScore.kind` mean.
 pub mod skate {
     /// `pose`: rolling along, crouched to pop, in the air, grinding,
-    /// on a manual, and off the board (a bail).
+    /// on a manual, off the board (a bail), and powersliding (the board
+    /// kicked out sideways: how far, in `spin`).
     pub mod pose {
         pub const ROLL: u8 = 0;
         pub const CROUCH: u8 = 1;
@@ -584,7 +649,8 @@ pub mod skate {
         pub const GRIND: u8 = 3;
         pub const MANUAL: u8 = 4;
         pub const BAIL: u8 = 5;
-        pub const MAX: u8 = BAIL;
+        pub const SLIDE: u8 = 6;
+        pub const MAX: u8 = SLIDE;
     }
     /// `kind`: a combo landed, a bail, a timed run's final score.
     pub mod score {
@@ -641,7 +707,11 @@ pub mod together {
     pub const RPS: u8 = 6;
     /// Come aboard my boat (`boat`): only from a captain with a free seat.
     pub const BOAT: u8 = 7;
-    pub const MAX: u8 = BOAT;
+    /// A 1v1 round of mini golf (`GolfDuel`), turn about: on the course only.
+    pub const GOLF: u8 = 8;
+    /// Treat Catch, the two of you and your pets out on a walk (`PetDuo`).
+    pub const PET_DUO: u8 = 9;
+    pub const MAX: u8 = PET_DUO;
 }
 
 /// The Lake's rowboats: hired at the boat hire by the pier, rowed by their
@@ -863,7 +933,65 @@ pub mod fish_event {
     /// Something more out of the salvage game, with the `CAUGHT` one: held up
     /// beside it over the angler's head.
     pub const HAUL: u8 = 8;
+    /// The angler's pet (`pet_skill::FISH`, or `MAGNET` at the magnet)
+    /// pulled `item` out of the water at (x, y): a common or uncommon one,
+    /// theirs at once.
+    pub const PET_PULL: u8 = 9;
+    /// What the pet pulled out is rare or better: it flops on the bank at
+    /// (x, y) till hit enough (`PetFishHit`), as the angler's own does.
+    pub const PET_FLOP: u8 = 10;
+    /// The pet's flopping catch was hit and flopped off to (x, y); `item`: hits so far.
+    pub const PET_HIT: u8 = 11;
+    /// The pet's flopping catch is landed (`item`), at (x, y).
+    pub const PET_CAUGHT: u8 = 12;
+    /// The pet's flopping catch jumped back in.
+    pub const PET_ESCAPED: u8 = 13;
     pub const FLOP_MS: u32 = 4_500;
+}
+
+/// `PetGoal.kind`: why a pet's off from its walker's heels.
+pub mod pet_goal {
+    pub const NONE: u8 = 0;
+    /// Fishing by the water (its spot on the bank).
+    pub const FISHING: u8 = 1;
+    /// Leading the way (a skill): a little ahead of them.
+    pub const LEADING: u8 = 2;
+    pub const MAX: u8 = LEADING;
+}
+
+/// Treat Catch (`together::PET_DUO`): how long a game lasts, how long till
+/// the first treat lands, and between one and the next (ms); every
+/// `HEART_EVERY`th is a heart, worth `HEART_PTS` (only caught with both pets
+/// close: the client's judge); a catch counts this close to when it lands (ms).
+pub mod pet_duo {
+    pub const MS: u32 = 40_000;
+    pub const LEAD_MS: u32 = 1_600;
+    pub const GAP_MS: u32 = 700;
+    pub const HEART_EVERY: u16 = 4;
+    pub const HEART_PTS: u16 = 3;
+    pub const WINDOW_MS: u32 = 1_200;
+    /// How many treats there are in a game.
+    pub const TREATS: u16 = ((MS - LEAD_MS) / GAP_MS) as u16;
+}
+
+/// A pet's skills (`pets.skills`, the API's `pets::SKILLS`), a bit each:
+/// the walker's `SavedLook.pet_skills` while it's out with them.
+pub mod pet_skill {
+    /// Fishing buddy: pulls a fish out now and then while you fish (tier I:
+    /// up to rare ones; `FISH2`, tier II, epic too; `FISH3`, tier III, legendary).
+    pub const FISH: u32 = 1 << 0;
+    pub const FISH2: u32 = 1 << 6;
+    pub const FISH3: u32 = 1 << 7;
+    /// Scrap hound: pulls something up now and then at the magnet (after `FISH`).
+    pub const MAGNET: u32 = 1 << 1;
+    /// Treasure nose: leads you to the lucky crate (the client's).
+    pub const TREASURE: u32 = 1 << 2;
+    /// Coin digger: digs up a few coins now and then out walking (after `TREASURE`).
+    pub const DIG: u32 = 1 << 3;
+    /// Friend finder: leads you to the nearest player (the client's).
+    pub const FRIEND: u32 = 1 << 4;
+    /// Homeward: leads you home (the client's; after `FRIEND`).
+    pub const HOME: u32 = 1 << 5;
 }
 
 /// Shared jam beat length (a sixteenth note at 120 bpm).
@@ -920,6 +1048,8 @@ pub mod golf {
     /// Holes on the course, and the most strokes a hole counts for.
     pub const HOLES: usize = 9;
     pub const MAX_STROKES: u8 = 7;
+    /// The golf bot in a 1v1 (`GolfDuel.b`): its putts come from its opponent's client.
+    pub const BOT: u32 = 0xffff_ffed;
 }
 
 pub mod state {

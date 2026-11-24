@@ -1,6 +1,7 @@
-// The day's missions in one place: the three skate quests, the fisherman's
-// order and his magnet order, each with how far along it is, and a bar for
-// the day as a whole. Each is claimed right here (a skate quest's coins, or
+// The day's missions in one place: the skate mission (any one of the day's
+// three skate quests, whichever suits), the fisherman's order and his magnet
+// order (one find of each rarity, paid five times over), and a gladiator
+// match won as the day's class (paid by the class), each with how far along it is, and a bar for the day as a whole. Each is claimed right here (a skate quest's coins, or
 // what he ordered handed in from your bag), no trip to the van or the Pond
 // needed. Everything done: a bonus (`DAILY_BONUS` coins, once a day).
 
@@ -20,6 +21,8 @@ interface DailyState {
   skate: boolean[];
   fish: Order;
   magnet: Order;
+  /** The gladiator mission: win a match as the day's class (`kit`), for `reward` coins. */
+  arena?: { class: number; name: string; reward: number; done: boolean };
   all_done: boolean;
   bonus: number;
   claimed: boolean;
@@ -37,6 +40,8 @@ interface Row {
   hint?: string;
   /** What can be done about it here: a claim, a hand-in (label, what it does). */
   acts?: [string, () => void][];
+  /** Its choices (the skate mission: any one of three), each with how far along. */
+  subs?: { title: string; part: number; shown: string; done: boolean }[];
 }
 
 export class DailyPanel extends Panel {
@@ -78,20 +83,36 @@ export class DailyPanel extends Panel {
 
   private rows(s: DailyState): Row[] {
     const out: Row[] = [];
+    // The skate mission: any one of today's three quests does it.
     const skate = this.skateQuests?.() ?? [];
+    const subs: NonNullable<Row["subs"]> = [];
+    const claims: [string, () => void][] = [];
+    let ready = false;
     for (let slot = 0; slot < 3; slot++) {
       const q = skate.find((x) => x.slot === slot);
       const paid = !!s.skate[slot];
-      out.push({
-        icon: "🛹",
+      subs.push({
         title: q ? `${q.text} (${q.coins} coins)` : `Skate quest ${slot + 1}`,
         part: paid ? 1 : q ? Math.min(1, q.progress / Math.max(1, q.target)) : 0,
         shown: paid ? "Done" : (q?.shown ?? "At the skatepark"),
         done: paid,
-        hint: !paid && q?.done && !this.claimSkate ? "Done: claim it back in the city" : undefined,
-        acts: !paid && q?.done && this.claimSkate ? [[`🪙 Claim ${q.coins} coins`, () => this.claimSkate?.(slot)]] : undefined,
       });
+      if (!paid && q?.done) {
+        ready = true;
+        if (this.claimSkate) claims.push([`🪙 Claim ${q.coins} coins`, () => this.claimSkate?.(slot)]);
+      }
     }
+    const skateDone = s.skate.some(Boolean);
+    out.push({
+      icon: "🛹",
+      title: "Skate: any one of today's three",
+      part: skateDone ? 1 : Math.max(0, ...subs.map((x) => x.part)),
+      shown: skateDone ? "Done" : "Pick one",
+      done: skateDone,
+      hint: !skateDone && ready && !this.claimSkate ? "One's done: claim it back in the city" : undefined,
+      acts: claims.length ? claims : undefined,
+      subs,
+    });
     const order = (icon: string, title: string, o: Order, q: FishQuest | null, magnet: boolean): Row => {
       // What he still wants that's in your bag: handed in from here, paid as at the Pond.
       const acts: [string, () => void][] = [];
@@ -119,6 +140,17 @@ export class DailyPanel extends Panel {
     };
     out.push(order("🎣", "The fisherman's order", s.fish, this.orders.fish, false));
     out.push(order("🧲", "His magnet order", s.magnet, this.orders.magnet, true));
+    if (s.arena) {
+      const a = s.arena;
+      out.push({
+        icon: "⚔️",
+        title: `Win a gladiator match as a ${a.name}`,
+        part: a.done ? 1 : 0,
+        shown: a.done ? "Done" : `+${a.reward} 🪙`,
+        done: a.done,
+        hint: a.done ? undefined : `Talk to Caesar at the arena, pick the ${a.name}, and win.`,
+      });
+    }
     return out;
   }
 
@@ -133,7 +165,7 @@ export class DailyPanel extends Panel {
     fill.style.width = `${Math.round((done / rows.length) * 100)}%`;
     bar.append(fill);
     all.append(el("strong", "", `Today: ${done} of ${rows.length} done`), bar);
-    this.body.replaceChildren(el("p", "hint", `Do every mission today for a bonus of ${s.bonus} coins.`), all, this.msg);
+    this.body.replaceChildren(el("p", "hint", `Do all ${rows.length} missions today for a bonus of ${s.bonus} coins.`), all, this.msg);
     for (const r of rows) {
       const row = el("div", r.done ? "daily-row done" : "daily-row");
       const head = el("div", "daily-head");
@@ -143,6 +175,15 @@ export class DailyPanel extends Panel {
       f.style.width = `${Math.round(r.part * 100)}%`;
       b.append(f);
       row.append(head, b);
+      for (const sub of r.subs ?? []) {
+        const line = el("div", sub.done ? "daily-sub done" : "daily-sub");
+        const sb = el("div", "daily-bar tiny");
+        const sf = el("div", "daily-fill");
+        sf.style.width = `${Math.round(sub.part * 100)}%`;
+        sb.append(sf);
+        line.append(el("span", "daily-sub-title", `${sub.done ? "✅" : "▫️"} ${sub.title}`), el("span", "daily-shown", sub.shown), sb);
+        row.append(line);
+      }
       if (r.hint) row.append(el("div", "hint", r.hint));
       if (r.acts?.length) {
         const acts = el("div", "daily-acts");
@@ -157,7 +198,7 @@ export class DailyPanel extends Panel {
     }
     if (s.claimed) this.body.append(el("p", "daily-got", `🎉 Bonus collected: +${s.bonus} coins. New missions tomorrow!`));
     else if (s.all_done) this.body.append(button(`🎁 Claim your ${s.bonus} coin bonus`, () => void this.claim(), "primary"));
-    else this.body.append(el("p", "hint", "Skate quests are done at the skatepark; fish and magnet finds he wants can be handed in right here."));
+    else this.body.append(el("p", "hint", "His orders pay five times over: hand them in right here."));
   }
 
   /** Hands `qty` of `item` in for one of his orders, from wherever you are. */

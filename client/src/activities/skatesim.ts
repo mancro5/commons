@@ -493,6 +493,8 @@ export interface Input {
   /** Held: grab, spin (-1 anticlockwise, 1 clockwise). */
   grab: boolean;
   spin: number;
+  /** Held (Shift): a powerslide, the board kicked out sideways as you go. */
+  slide?: boolean;
 }
 
 export const NO_INPUT: Input = { x: 0, y: 0, pop: false, flip: false, manual: false, grab: false, spin: 0 };
@@ -502,6 +504,8 @@ export type SkateEvent =
   | { t: "push" }
   /** Surf trucks: a carve one way, then the other, paid out in speed (`power` 0–1: how deep, how in rhythm). */
   | { t: "pump"; power: number }
+  /** A held powerslide (Shift): kicked out (`on`), or done (how long it lasted, s, and the speed it shot you out with, px/s). */
+  | { t: "powerslide"; on: boolean; held: number; boost: number }
   | { t: "land"; hard: number; z: number }
   | { t: "trick"; name: string; pts: number }
   | { t: "flip"; kind: number }
@@ -550,6 +554,27 @@ export const OPEN_RIDE: Ride = { accel: 1, top: 1, flips: new Set(["", "left", "
  */
 const SLIDE_TURN = 6.5;
 const SLIDE_SCRUB = 240;
+/**
+ * A held powerslide (Shift): the board kicked out sideways (`POWER_YAW`
+ * rad off the way you're going, snapping out at `POWER_SNAP`/s) while you
+ * keep drifting on; steering swings your line round far tighter than a
+ * carve (`POWER_TURN` rad/s), the wheels scrubbing speed off as they
+ * slide (`POWER_SCRUB` px/s², more the harder you're swinging round).
+ * Kicked out only rolling at least `POWER_FROM` px/s, and over once you're
+ * down to `POWER_END`. Let go after `POWER_COUNTS` s or more: the board
+ * snaps straight and shoots you out of it (`POWER_BOOST` px/s and more the
+ * longer you held it, up to `POWER_BOOST_MAX`), a trick in the combo.
+ */
+const POWER_YAW = 1.25;
+const POWER_SNAP = 14;
+const POWER_TURN = 6.4;
+const POWER_SCRUB = 110;
+const POWER_SCRUB_TURN = 120;
+const POWER_FROM = 70;
+const POWER_END = 35;
+const POWER_COUNTS = 0.35;
+const POWER_BOOST = 45;
+const POWER_BOOST_MAX = 95;
 /** Into a wall more side-on than this (the cosine of the angle off it): you slide along it, not bounce off. */
 const GLANCE = 0.5;
 /**
@@ -667,6 +692,10 @@ export class Skater {
   pushing = false;
   /** Powersliding round (pressing back the way you came): which way round (−1, 1; 0 not). */
   slideDir = 0;
+  /** A held powerslide (Shift): which way the board's kicked out (−1, 1), for how long (s); null: not. */
+  power: { side: number; t: number } | null = null;
+  /** How far the board's turned off the way you're going (rad): out in a powerslide, snapping back after. */
+  slideYaw = 0;
   /** Pumping (surf trucks): which way the carve is going (−1, 0, 1), how far it's turned (rad), for how long (s), since it last turned (s), and the rhythm (0–1). */
   pumpDir = 0;
   /** Surf trucks: the line you're riding, that the carves swing either side of (rad). */
@@ -798,6 +827,10 @@ export class Skater {
         }
         break;
     }
+    // Off the ground (an ollie out of it, a bail, onto a rail): the powerslide's over, no shooting out of it.
+    if (this.power && this.mode !== "ground") this.endPower(ev, false);
+    // The board swings back straight under you once you're out of it.
+    if (!this.power) this.slideYaw += (0 - this.slideYaw) * Math.min(1, dt * POWER_SNAP);
     this.popWas = inp.pop;
     // The special meter ebbs away slowly when nothing's going on.
     if (this.combo.count === 0) this.special = Math.max(0, this.special - dt * 0.02);
@@ -821,7 +854,13 @@ export class Skater {
       this.side = 0;
     }
     let ahead = true;
-    if (mag > 0.2) {
+    // Shift held, rolling: a powerslide (see `POWER_YAW`); let go, out of it.
+    const powering = !!inp.slide && this.speed >= (this.power ? POWER_END : POWER_FROM);
+    if (this.power && !powering) this.endPower(ev, true);
+    if (powering) {
+      this.powerslide(dt, inp, mag, ev);
+      sliding = true;
+    } else if (mag > 0.2) {
       let want = Math.atan2(inp.y, inp.x);
       // (Powersliding round: no line to carve off till you're round.)
       if (surf && this.slideDir) this.line = this.heading;
@@ -915,6 +954,50 @@ export class Skater {
       return;
     }
     this.roll(dt, ev);
+  }
+
+  /**
+   * A held powerslide, this step: kicked out (which way: the way you're
+   * steering, else the way you last carved), swinging round toward the
+   * stick, the wheels scrubbing speed as they go.
+   */
+  private powerslide(dt: number, inp: Input, mag: number, ev: SkateEvent[]) {
+    const want = mag > 0.2 ? Math.atan2(inp.y, inp.x) : this.heading;
+    const diff = wrap(want - this.heading);
+    if (!this.power) {
+      const side = Math.abs(diff) > 0.15 ? Math.sign(diff) : Math.sign(this.slideYaw) || (Math.cos(this.heading) >= 0 ? 1 : -1);
+      this.power = { side, t: 0 };
+      this.pushing = false;
+      this.push = 0;
+      ev.push({ t: "powerslide", on: true, held: 0, boost: 0 });
+    }
+    const pw = this.power;
+    pw.t += dt;
+    // Swinging round: tight, toward the stick (and the board kicks out on that side).
+    const swing = Math.max(-POWER_TURN * dt, Math.min(POWER_TURN * dt, diff));
+    this.heading = wrap(this.heading + swing);
+    if (Math.abs(diff) > 0.25) pw.side = Math.sign(diff);
+    // The board out sideways, the further the harder you're swinging round.
+    const yaw = pw.side * POWER_YAW * (0.8 + 0.2 * Math.min(1, Math.abs(diff)));
+    this.slideYaw += (yaw - this.slideYaw) * Math.min(1, dt * POWER_SNAP);
+    const turning = Math.min(1, Math.abs(swing) / (POWER_TURN * dt + 1e-9));
+    this.speed = Math.max(0, this.speed - (POWER_SCRUB + POWER_SCRUB_TURN * turning) * dt);
+  }
+
+  /** Out of a powerslide: the board snapping straight; held long enough, a trick, and out of it you shoot (`POWER_BOOST`). */
+  private endPower(ev: SkateEvent[], clean: boolean) {
+    const pw = this.power;
+    this.power = null;
+    if (!pw) return;
+    let boost = 0;
+    if (clean && pw.t >= POWER_COUNTS) {
+      boost = Math.min(POWER_BOOST_MAX, POWER_BOOST + 35 * (pw.t - POWER_COUNTS));
+      this.speed = Math.min(this.pushTop() * 1.15, this.speed + boost);
+      this.trick(pw.t >= 1.5 ? "Long powerslide" : "Powerslide", Math.round(40 + 70 * Math.min(2.5, pw.t)), ev);
+      // (A moment to carry it on into a manual, else it's banked.)
+      this.link = LINK_S * 2;
+    }
+    ev.push({ t: "powerslide", on: false, held: pw.t, boost });
   }
 
   /** As fast as pushing gets you: in the park, as ever; out on the streets, as far as your bearings let you build up. */

@@ -156,7 +156,7 @@ function drawIcon(ctx: CanvasRenderingContext2D, key: string, kind: string) {
   }
   if (kind === "pet") {
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(petCanvas(COSMETIC_CODES.get(key) ?? 1, 2), 0, 0, 24, 18, 0, 2, 16, 12);
+    ctx.drawImage(petCanvas(COSMETIC_CODES.get(key) ?? 1, 2), 4, 2, 32, 28, 0, 1, 16, 14);
     return;
   }
   if (WEARABLE.has(kind)) {

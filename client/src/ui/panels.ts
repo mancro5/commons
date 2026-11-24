@@ -2,6 +2,7 @@
 // and the furniture placement banner. Plain DOM, styled in styles.css.
 
 import { till } from "../ambient/salvagesfx";
+import { Pager } from "./pager";
 import { COIN, type Economy, type FishQuest, type Item } from "../economy";
 import { ApiError } from "../net/api";
 import { itemIconUrl } from "../world/items";
@@ -84,6 +85,7 @@ export class Panel {
   readonly el: HTMLDivElement;
   protected body: HTMLDivElement;
   protected titleEl: HTMLElement;
+  private pager: Pager;
 
   constructor(title: string, cls: string) {
     this.el = el("div", `panel ${cls}`);
@@ -95,7 +97,9 @@ export class Panel {
     close.append(pxIcon("close", 2));
     head.append(this.titleEl, close);
     this.body = el("div", "panel-body");
-    this.el.append(head, this.body);
+    // (Too much to fit: its sections a page at a time, tabs along the top: see `pager.ts`.)
+    this.pager = new Pager(this.body, cls.split(" ")[0] || "panel");
+    this.el.append(head, this.pager.bar, this.body, this.pager.steps);
     document.body.appendChild(this.el);
   }
 
@@ -130,6 +134,7 @@ export class Panel {
     Panel.current = this;
     this.el.hidden = false;
     this.render();
+    this.pager.queue();
   }
 
   hide() {
@@ -615,7 +620,7 @@ export class FishermanPanel extends Panel {
     const h = Math.floor(left / 3600);
     const m = Math.floor((left % 3600) / 60);
     this.body.append(
-      el("p", "hint", q.done ? "\"That's the lot! Grand. Come back for my next order.\"" : magnet ? "\"Fish these up off the bottom with a magnet and I'll pay three times the going rate.\"" : "\"Bring me these and I'll pay three times the going rate. Every one.\""),
+      el("p", "hint", q.done ? "\"That's the lot! Grand. Come back for my next order.\"" : magnet ? "\"Fish me up one of each of these off the bottom with a magnet, and I'll pay five times the going rate.\"" : "\"One of each of these, that's all I'm after, and I'll pay five times the going rate.\""),
     );
     if (magnet && !q.done && this.eco.qty(MAGNET_ITEM) <= 0) this.body.append(el("p", "hint", "You'll need a Salvage Magnet first: it's in his shop."));
     // The order's progress, all three things together.

@@ -259,7 +259,7 @@ export class WorldFx {
       this.shadows.filters = in3d ? [] : [this.shadowBlur, this.shadowAlpha];
     }
     this.shadows.visible = this.shade;
-    this.drawHaze(hour, this.shade && in3d && outdoors);
+    this.drawHaze(hour, this.shade && in3d && outdoors && !this.scene.cinematic);
     const t = now / 1000;
     // The sun across the sky: -1 rising in the east, 0 high at noon, 1 setting in the west.
     const sun = Math.max(-1, Math.min(1, (hour - 12.5) / 6));

@@ -16,6 +16,9 @@ export interface Settings {
   fps: boolean;
   /** The 3D view (2.5D): the camera tilts and the world stands up in perspective. */
   view3d: boolean;
+  /** The cinematic view (the camera low and close, looking out to the horizon): whether it has its button, and whether it's on. */
+  cineOn: boolean;
+  cinema: boolean;
   /** Richer, punchier colours. */
   vibrant: boolean;
   /** Advanced shaders (experimental): everything casts a shadow from the sun and the lamps. */
@@ -25,7 +28,7 @@ export interface Settings {
 }
 
 const KEY = "commons.settings";
-const DEFAULTS: Settings = { master: 0.8, sfx: 1, ambience: 0.8, music: 0.8, quality: "high", weather: true, daynight: true, names: true, fps: false, view3d: false, vibrant: false, shaders: false, reflections: false };
+const DEFAULTS: Settings = { master: 0.8, sfx: 1, ambience: 0.8, music: 0.8, quality: "high", weather: true, daynight: true, names: true, fps: false, view3d: false, cineOn: false, cinema: false, vibrant: false, shaders: false, reflections: false };
 
 function load(): Settings {
   try {

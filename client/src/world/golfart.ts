@@ -13,20 +13,22 @@
 
 import { Container, Graphics, Sprite, Text } from "pixi.js";
 import { CELL_H, CELL_W, type Hole, HOLES, type P, type Theme, cellOrigin } from "../activities/golfcourse";
-import { CUP_R, Green, inPoly } from "../activities/golfsim";
+import { CUP_R, Green, LIFT, PLINTH, inPoly } from "../activities/golfsim";
 import { TILE, toTexture } from "./art";
+import { boxRelief } from "./relief";
+import { type Relief, settle } from "./skateart";
 import type { Scene } from "./scene";
 
 /** Room round a cell for its rails and its surroundings (px): at the sides, the top and the bottom. */
 const MX = 22;
 const MYT = 28;
 const MY = 28;
-/** Room over it all for the levels' rise (px). */
-const RISE = 36;
-const RAIL = 5;
+/** Room over it all for the levels' rise (px), the plinth's too. */
+const RISE = Math.ceil(30 * LIFT) + 12 + PLINTH;
+const RAIL = 6;
 /** How tall a rail stands, and a wall block (px). */
-const RAIL_H = 4;
-const BLOCK_H = 7;
+const RAIL_H = 6;
+const BLOCK_H = 9;
 
 type RGB = number[];
 
@@ -201,7 +203,7 @@ function lawnBit(theme: Theme, x: number, y: number, seed: number, far: number):
 }
 
 /** A hole's green (and the lawn round it), painted. */
-function paint(h: Hole, green: Green): HTMLCanvasElement {
+function paint(h: Hole, green: Green): { canvas: HTMLCanvasElement; relief: Relief } {
   const look = LOOKS[h.theme];
   const W = CELL_W + MX * 2;
   const WH = CELL_H + MYT + MY;
@@ -219,7 +221,7 @@ function paint(h: Hole, green: Green): HTMLCanvasElement {
   const m = h.mill;
   // Where each spot of ground is, how high, what it is.
   const G = new Float32Array(W * WH);
-  for (let j = 0; j < WH; j++) for (let i = 0; i < W; i++) G[j * W + i] = green.heightAt(i - MX + 0.5, j - MYT + 0.5);
+  for (let j = 0; j < WH; j++) for (let i = 0; i < W; i++) G[j * W + i] = green.liftAt(i - MX + 0.5, j - MYT + 0.5);
   // The highest ground near each spot (6 px round): what a wall or rail there stands on.
   const R = 6;
   const gx = new Float32Array(W * WH);
@@ -265,6 +267,14 @@ function paint(h: Hole, green: Green): HTMLCanvasElement {
   const shade = (col: RGB, k: number): RGB => col.map((v) => Math.max(0, Math.min(255, Math.round(v * k))));
   const stripeCol = shade(look.felt, 1.08);
   const feltShade = shade(look.felt, 0.84);
+  // In the 3D view: each pixel's ground row (from the painting's top edge, the
+  // course's `MYT` px north of the hole) and how high it stands (px).
+  const relief: Relief = { w: W, h: HH, gy: new Float32Array(W * HH).fill(NaN), z: new Float32Array(W * HH).fill(NaN) };
+  const mark = (px: number, py: number, gy: number, z: number) => {
+    if (px < 0 || py < 0 || px >= W || py >= HH) return;
+    relief.gy[py * W + px] = gy;
+    relief.z[py * W + px] = z;
+  };
   const set = (px: number, py: number, col: RGB) => {
     if (px < 0 || py < 0 || px >= W || py >= HH) return;
     const i = (py * W + px) * 4;
@@ -279,6 +289,8 @@ function paint(h: Hole, green: Green): HTMLCanvasElement {
   const BLOCKK = 2;
   const FELTK = 3;
   const H = new Float32Array(W * WH);
+  /** Spots on a ramp: one smooth slope (no edge drawn between its rows). */
+  const onRamp = new Uint8Array(W * WH);
   const kind = new Uint8Array(W * WH);
   const tops: RGB[] = new Array(W * WH);
   for (let j = 0; j < WH; j++) {
@@ -299,7 +311,10 @@ function paint(h: Hole, green: Green): HTMLCanvasElement {
           const edge = Math.min(i, W - 1 - i, j, WH - 1 - j);
           const far = Math.min(1, Math.max(0, (e - 20) / (REACH - 20), 1 - (edge - 2) / 20));
           const bit = e > RAIL + 3 && far < 1 ? lawnBit(h.theme, Math.floor(x), Math.floor(y), h.n * 97, far) : null;
-          if (bit) set(i, j + RISE, bit);
+          if (bit) {
+            set(i, j + RISE, bit);
+            mark(i, j + RISE, j, 0);
+          }
         }
         continue;
       }
@@ -364,22 +379,31 @@ function paint(h: Hole, green: Green): HTMLCanvasElement {
         tops[k] = rim ? C.iceEdge : glint ? C.iceGlint : C.ice;
         continue;
       }
-      // Felt: mown in diagonal stripes, a little shade along the rails, lit by its bumps.
+      // Felt: mown in diagonal stripes, a little shade along the rails, lit by its bumps,
+      // and lit from the back (the far side brighter, the near side a shade darker): depth.
       let col: RGB = Math.floor((x + y) / 16) % 2 === 0 ? stripeCol : look.felt;
+      col = shade(col, 1.06 - 0.1 * Math.max(0, Math.min(1, y / CELL_H)));
       if (nearest(segs, x, y) < 3 || (railSegs.length && nearest(railSegs, x, y) < 4.5)) col = feltShade;
       const z0 = bump(x, y);
       if (Math.abs(z0) > 0.01) {
         const lit = (bump(x - 2, y - 2) - z0) * -0.9;
         col = shade(col, 1 + Math.max(-0.1, Math.min(0.1, lit * 0.07)) + z0 * 0.003);
       }
-      // Ramps: treads across them, the face of a ramp up away from you lit a little.
+      // Ramps: one smooth slope, lit by which way it faces (up toward you, or the light on the
+      // left: brighter) and brighter as it climbs, a dark foot and a bright lip at its top.
       for (const r of h.ramps) {
         if (x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h) continue;
         const ns = r.dir === "n" || r.dir === "s";
         const along = ns ? y - r.y : x - r.x;
         const rising = (r.dir === "n" || r.dir === "w") === r.to > r.from;
-        col = shade(look.felt, ns ? (rising ? 1.1 : 0.9) : rising ? 0.92 : 1.08);
-        if (((along % 7) + 7) % 7 < 1) col = shade(col, 0.88);
+        const len = ns ? r.h : r.w;
+        // (How far up it, 0 at its foot to 1 at its top.)
+        const up01 = (green.heightAt(x, y) - Math.min(r.from, r.to)) / Math.max(1, Math.abs(r.to - r.from));
+        const faces = ns ? (rising ? 1.12 : 0.84) : rising ? 0.9 : 1.08;
+        col = shade(look.felt, faces * (0.94 + 0.12 * up01));
+        if (up01 * len < 2) col = shade(col, 0.86);
+        else if ((1 - up01) * len < 2) col = shade(col, 1.18);
+        onRamp[k] = 1;
         // Chevrons pointing up it.
         const across = ns ? Math.abs(x - (r.x + r.w / 2)) : Math.abs(y - (r.y + r.h / 2));
         const up = (r.dir === "n" || r.dir === "w") === r.to > r.from ? -1 : 1;
@@ -389,37 +413,46 @@ function paint(h: Hole, green: Green): HTMLCanvasElement {
       tops[k] = col;
     }
   }
-  // Painted front to back (row by row, north to south): each spot drawn up by its height, and
-  // where the ground drops away south of it, its front (a rail's wood, a wall's stone, the earth under a level).
-  for (let i = 0; i < W; i++) {
-    for (let j = 0; j < WH; j++) {
+  // Painted back to front (row by row, north to south): each spot drawn up by its height, and
+  // where the ground drops away south of it, its front down to there (a rail's wood, a wall's
+  // stone, the earth under a level, a ramp's wedge). Each pixel's place in 3D noted as it goes.
+  for (let j = 0; j < WH; j++) {
+    for (let i = 0; i < W; i++) {
       const k = j * W + i;
       if (!kind[k]) continue;
-      const sy = j + RISE - Math.round(H[k]);
+      const top = Math.round(H[k]);
+      const low = j + 1 < WH && kind[k + W] ? Math.round(H[k + W]) : 0;
+      const sy = j + RISE - top;
       set(i, sy, tops[k]);
-      const below = j + 1 < WH && kind[k + W] ? Math.round(H[k + W]) : 0;
-      const end = j + 1 + RISE - below;
-      for (let py = sy + 1; py < end; py++) {
-        const dp = py - sy;
+      mark(i, sy, j, H[k]);
+      for (let z = top - 1; z >= low; z--) {
+        const py = j + RISE - z;
+        const dp = top - z;
         let col: RGB;
-        if (kind[k] === RAILK && dp <= RAIL_H) col = dp === RAIL_H ? look.railDark : look.rail;
+        if (kind[k] === RAILK && dp <= RAIL_H) col = dp === 1 ? shade(look.rail, 1.12) : dp >= RAIL_H - 1 ? look.railDark : look.rail;
         else if (kind[k] === BLOCKK && dp <= BLOCK_H) col = dp >= BLOCK_H - 1 ? C.blockFace.map((v) => v - 24) : C.blockFace;
-        else if (kind[k] === FELTK && dp === 1) col = feltShade;
+        else if (kind[k] === FELTK && dp === 1) col = onRamp[k] ? tops[k] : feltShade;
         else {
           // The front of a level: blocks (stone, brick, ice) or earth in layers, darker at its foot.
           const row = Math.floor((py - RISE) / 6);
           const mortar = look.blocks ? (py - RISE) % 6 === 0 || (i + (row % 2) * 6) % 12 === 0 : (py * 7 + Math.floor(i / 9) * 3) % 9 === 0;
-          col = py === end - 1 || mortar ? look.faceDark : look.face;
+          col = z === low || mortar ? look.faceDark : look.face;
           // Moss and grass hanging over the earth's top.
           if (!look.blocks && kind[k] !== RAILK && dp < 4 && hash(i, 3, h.n) < 0.5 - dp * 0.12) col = feltShade;
         }
         set(i, py, col);
+        // (A front stands at its spot's south edge.)
+        mark(i, py, j + 1, z);
       }
     }
   }
   ctx.putImageData(img, 0, 0);
+  settle(relief, RISE);
   // The tee mat, the cup, the boosts, the pipes: drawn over, up at their ground's height.
-  const at = (x: number, y: number) => [Math.round(x + MX), Math.round(y + MYT + RISE - green.heightAt(x, y))];
+  const at = (x: number, y: number) => {
+    const lift = green.liftAt(x, y);
+    return [Math.round(x + MX), Math.round(y + MYT + RISE - lift)];
+  };
   const rgb = (col: RGB) => `rgb(${col[0]},${col[1]},${col[2]})`;
   const [tx, ty] = at(h.tee[0], h.tee[1]);
   ctx.fillStyle = rgb(C.matEdge);
@@ -432,7 +465,10 @@ function paint(h: Hole, green: Green): HTMLCanvasElement {
   const [cx, cy] = at(h.cup[0], h.cup[1]);
   disc(ctx, cx, cy, CUP_R + 1, rgb(C.rim));
   disc(ctx, cx, cy, CUP_R, rgb(C.cup));
-  disc(ctx, cx + 1, cy + 1, CUP_R - 3, "#0e1610");
+  // Its far wall catches the light; deep down, dark.
+  ctx.fillStyle = "#3d4a3e";
+  ctx.fillRect(cx - CUP_R + 2, cy - CUP_R + 1, CUP_R * 2 - 4, 2);
+  disc(ctx, cx + 1, cy + 2, CUP_R - 3, "#0a110c");
   for (const b of h.boosts) {
     const [bx, by] = at(b.x, b.y);
     ctx.save();
@@ -465,7 +501,36 @@ function paint(h: Hole, green: Green): HTMLCanvasElement {
     ctx.fillRect(ax - 3, ay - 13, 6, 3);
     ctx.fillRect(bx2 - 3, by2 - 12, 6, 3);
   });
-  return c;
+  return { canvas: c, relief };
+}
+
+/** Graphics' rect/circle/poly-then-fill, on a canvas (for a picture the 3D view can build up). */
+function pen(ctx: CanvasRenderingContext2D) {
+  const p = {
+    rect(x: number, y: number, w: number, h: number) {
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      return p;
+    },
+    circle(x: number, y: number, r: number) {
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      return p;
+    },
+    poly(pts: number[]) {
+      ctx.beginPath();
+      ctx.moveTo(pts[0], pts[1]);
+      for (let i = 2; i + 1 < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+      ctx.closePath();
+      return p;
+    },
+    fill(color: number) {
+      ctx.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
+      ctx.fill();
+      return p;
+    },
+  };
+  return p;
 }
 
 function disc(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string) {
@@ -715,7 +780,7 @@ export class GolfArt {
   private stands: Stands[] = [];
   private flats: Sprite[] = [];
   /** What's stood about (the windmill's house, trees...): drawn once. */
-  private still: Graphics[] = [];
+  private still: (Graphics | Sprite)[] = [];
   private arch: Container | null = null;
   /** When each bumper was last hit (hole, index) → ms. */
   private lit = new Map<string, number>();
@@ -734,8 +799,11 @@ export class GolfArt {
       const [cx, cy] = cellOrigin(h);
       const ox = x + cx;
       const oy = y + cy;
-      const s = new Sprite(toTexture(paint(h, green)));
+      const art = paint(h, green);
+      const s = new Sprite(toTexture(art.canvas));
       s.position.set(ox - MX, oy - MYT - RISE);
+      // In the 3D view: built up as it stands (its levels, ramps, rails), as the skatepark is.
+      scene.setRelief(s, art.relief, oy - MYT);
       // Flat on the lawn, under everyone.
       s.zIndex = oy - 2000;
       scene.layOnGround(s);
@@ -749,7 +817,10 @@ export class GolfArt {
       for (const g of [flag, ...(sails ? [sails] : []), ...bumpers, ...gates, sign]) scene.sorted.addChild(g);
       this.stands.push({ hole: h, green, ox, oy, flag, sails, bumpers, gates, sign });
       // The bumpers, drawn once (lit up when hit: redrawn).
-      h.bumpers.forEach((b, i) => this.drawBumper(bumpers[i], h, ox + b.x, oy + b.y, green.heightAt(b.x, b.y), b.r, false));
+      h.bumpers.forEach((b, i) => {
+        const lift = green.liftAt(b.x, b.y);
+        this.drawBumper(bumpers[i], h, ox + b.x, oy + b.y, lift, b.r, false);
+      });
       if (h.mill) this.millHouse(h, green, ox, oy);
       this.surroundings(h, ox, oy);
     }
@@ -757,7 +828,7 @@ export class GolfArt {
   }
 
   /** Something stood at its foot (world px). */
-  private stand(g: Graphics, foot: number) {
+  private stand(g: Graphics | Sprite, foot: number) {
     g.zIndex = foot;
     this.scene.sorted.addChild(g);
     this.scene.standOn(g, foot);
@@ -767,7 +838,7 @@ export class GolfArt {
   /** The things stood round a hole, by its theme: clear of the green (and of standing in front of it). */
   private surroundings(h: Hole, ox: number, oy: number) {
     const segs = edges(h.outline);
-    const top = Math.max(0, ...h.levels.map((l) => l.h)) + RAIL_H;
+    const top = Math.max(0, ...h.levels.map((l) => l.h)) * LIFT + RAIL_H + PLINTH;
     // Whether (x, y) is on (or near) the green as it's drawn: its ground, or up where its levels are drawn.
     const onGreen = (x: number, y: number) => {
       for (const dy of [0, top * 0.5, top]) {
@@ -804,18 +875,30 @@ export class GolfArt {
     }
   }
 
-  /** The windmill's house: on its level, its door in its front, a lantern by it; the sails go on in `update`. */
+  /**
+   * The windmill's house: on its level, its door in its front, a lantern by it;
+   * the sails go on in `update`. A picture (its roof seen from above over its
+   * front), and in the 3D view a box: the front stood up, the roof lying back.
+   */
   private millHouse(h: Hole, green: Green, ox: number, oy: number) {
     const m = h.mill!;
-    const lift = green.heightAt(m.x + m.w / 2, m.y + m.h - 2);
-    const x0 = ox + m.x;
-    const x1 = ox + m.x + m.w;
-    const fy = oy + m.y + m.h - lift;
-    const cx = (x0 + x1) / 2;
-    const g = new Graphics();
+    const lift = green.liftAt(m.x + m.w / 2, m.y + m.h - 2);
     const WALL = 40;
-    // The roof going back (seen from above), then the front: plaster and beams, the gable, the door.
     const depth = m.h - 8;
+    // Painted in its own picture: the house's left edge at 2, its front's foot at the bottom.
+    const PW = m.w + 4;
+    const PH = WALL + depth;
+    const canvas = document.createElement("canvas");
+    canvas.width = PW;
+    canvas.height = PH;
+    const g = pen(canvas.getContext("2d")!);
+    const left = ox + m.x - 2;
+    const top = oy + m.y + m.h - lift - PH;
+    const x0 = 2;
+    const x1 = x0 + m.w;
+    const fy = PH;
+    const cx = (x0 + x1) / 2;
+    // The roof going back (seen from above), then the front: plaster and beams, the gable, the door.
     g.rect(x0 + 2, fy - WALL - depth, m.w - 4, depth).fill(0xb8483a);
     for (let r = fy - WALL - depth + 4; r < fy - WALL; r += 5) g.rect(x0 + 2, r, m.w - 4, 1).fill(0x9a3a2f);
     g.rect(cx - 1, fy - WALL - depth, 2, depth).fill(0xd06050);
@@ -846,7 +929,7 @@ export class GolfArt {
       for (let k = 0; k < 4; k++) g.rect(wx + k * 3, fy - 22, 2, 2).fill([0xe8465a, 0xffce46, 0xf68cb4, 0xffffff][k]);
     }
     // The door: an arch through to the back, dark inside.
-    const [d0, d1] = [ox + m.door[0], ox + m.door[1]];
+    const [d0, d1] = [m.door[0] - m.x + x0, m.door[1] - m.x + x0];
     g.rect(d0 - 2, fy - 18, d1 - d0 + 4, 18).fill(0x7a5234);
     g.circle((d0 + d1) / 2, fy - 18, (d1 - d0) / 2 + 2).fill(0x7a5234);
     g.rect(d0, fy - 18, d1 - d0, 18).fill(0x2a1e16);
@@ -854,7 +937,7 @@ export class GolfArt {
     // A lantern by the door.
     g.rect(d1 + 4, fy - 26, 5, 7).fill(0x3a2a1c);
     g.rect(d1 + 5, fy - 25, 3, 5).fill(0xffd36a);
-    this.light(d1 + 6.5, fy - 22, 0.75);
+    this.light(left + d1 + 6.5, top + fy - 22, 0.75);
     // Tulips along its foot.
     for (let tx = x0 + 6; tx < x1 - 6; tx += 4) {
       if (tx > d0 - 6 && tx < d1 + 6) continue;
@@ -862,7 +945,16 @@ export class GolfArt {
       g.rect(tx, fy - 4, 1, 4).fill(0x4f9a48);
       g.rect(tx - 1, fy - 6, 3, 2).fill(col);
     }
-    this.stand(g, oy + m.y + m.h);
+    const sprite = new Sprite(toTexture(canvas));
+    sprite.position.set(left, top);
+    // In the 3D view: its front standing at the footprint's front, the roof lying back over the
+    // footprint at the walls' height, all of it up on its level.
+    // (No side drawn in: it would stand on the lawn, not up on the level.)
+    const r = boxRelief(canvas, depth, WALL);
+    for (let i = 0; i < r.z.length; i++) r.z[i] += lift;
+    for (let i = 0; i < r.edgeZ!.length; i++) r.edgeZ![i] += lift;
+    this.scene.setRelief(sprite, r, oy + m.y + m.h - depth);
+    this.stand(sprite, oy + m.y + m.h);
   }
 
   /** A bumper's been hit: it lights up a moment. */
@@ -876,7 +968,7 @@ export class GolfArt {
     for (const s of this.stands) {
       const g = greens[s.hole.n - 1];
       // The flag: a pole and a pennant rippling.
-      const lift = s.green.heightAt(...s.hole.cup);
+      const lift = s.green.liftAt(...s.hole.cup);
       const [cx, cy] = [s.ox + s.hole.cup[0], s.oy + s.hole.cup[1] - lift];
       const f = s.flag.clear();
       f.rect(cx - 1, cy - 26, 2, 26).fill(0xe9e2cf);
@@ -893,7 +985,8 @@ export class GolfArt {
       const m = s.hole.mill;
       if (s.sails && m) {
         const sg = s.sails.clear();
-        const fy = s.oy + m.y + m.h - s.green.heightAt(m.x + m.w / 2, m.y + m.h - 2);
+        const mlift = s.green.liftAt(m.x + m.w / 2, m.y + m.h - 2);
+        const fy = s.oy + m.y + m.h - mlift;
         const hx = s.ox + (m.door[0] + m.door[1]) / 2;
         const hy = fy - 36;
         const a0 = g.sailTurn(t);
@@ -919,7 +1012,7 @@ export class GolfArt {
       // The gates: bars on their runners, up at their ground's height.
       g.gates(t).forEach(([[x0, y0], [x1, y1]], i) => {
         const gg = s.gates[i].clear();
-        const lift = s.green.heightAt((x0 + x1) / 2, (y0 + y1) / 2);
+        const lift = s.green.liftAt((x0 + x1) / 2, (y0 + y1) / 2);
         const ax = s.ox + x0;
         const ay = s.oy + y0 - lift;
         const bx = s.ox + x1;
@@ -935,7 +1028,8 @@ export class GolfArt {
         const at = this.lit.get(`${s.hole.n}:${i}`);
         if (at === undefined) return;
         const on = now - at < 220;
-        this.drawBumper(s.bumpers[i], s.hole, s.ox + b.x, s.oy + b.y, s.green.heightAt(b.x, b.y), b.r, on);
+        const lift = s.green.liftAt(b.x, b.y);
+        this.drawBumper(s.bumpers[i], s.hole, s.ox + b.x, s.oy + b.y, lift, b.r, on);
         if (!on) this.lit.delete(`${s.hole.n}:${i}`);
       });
     }
@@ -975,7 +1069,7 @@ export class GolfArt {
   /** A little wooden signpost by the tee: the hole's number, its name and par. */
   private signpost(h: Hole, green: Green, ox: number, oy: number): Container {
     const c = new Container();
-    const lift = green.heightAt(...h.tee);
+    const lift = green.liftAt(...h.tee);
     const x = ox + h.tee[0] - 4;
     const y = oy + h.tee[1] - 14 - lift;
     const g = new Graphics();

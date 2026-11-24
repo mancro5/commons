@@ -6,21 +6,27 @@
 // up facing you, smaller with distance. It's applied just before each frame
 // is drawn and undone just after, so the rest of the game only ever sees the
 // flat world and goes through `screenToWorld` / `tileToScreen` for the screen.
+//
+// The cinematic view is the same tilt, taken right down: the camera close
+// behind you and low, looking across the land to the horizon (its sky and
+// far hills: cinesky.ts), mist lying between things, its lens (cinelens.ts).
 
 import { type Application, Container, type Filter, Graphics, Matrix, MeshPlane, Rectangle, RenderTexture, Sprite, Texture, UPDATE_PRIORITY } from "pixi.js";
-import { onSettings } from "../settings";
+import { onSettings, settings } from "../settings";
 import { BOWL_BLOCK, bowlArt, bowlGeom, bowlWallBlock } from "./amphitheatre";
 import { TILE, bakeChunk, decorTexture, hash, newTagTexture, objectTexture } from "./art";
 import { RUNS } from "./yardart";
 import type { Relief } from "./skateart";
+import { CineLens } from "./cinelens";
+import { type Air, CineSky, mix, skyAt } from "./cinesky";
 import { itemTexture } from "./items";
+import { BASIN_WATER } from "./relief";
+import { FAR_SHRINK, SKYLINE, SOLID, type Sides, concrete, dropSides, part, pictureOf, shrunk, sidesOf } from "./solids";
 import { type MapObject, type ZoneMap, groundAt } from "./map";
 import type { TileXY } from "./motion";
 
 /** 2.5D: the camera's angle above the ground (90° would be straight down). */
 const TILT = (58 * Math.PI) / 180;
-const SIN = Math.sin(TILT);
-const COS = Math.cos(TILT);
 /** How far back the camera stands, in screen heights (nearer: stronger perspective). */
 const DIST = 1.1;
 /** Where you stand on screen: a little below the middle, so more lies ahead. */
@@ -29,6 +35,50 @@ const FOCUS_DOWN = 0.12;
 const NEAR = 0.25;
 /** The furthest the view reaches north, in tiles. */
 const FAR = 60;
+
+/** A camera: its angle (radians), how far back, where you are on screen, how much closer in. */
+interface Lens {
+  tilt: number;
+  dist: number;
+  down: number;
+  zoom: number;
+}
+/** The 3D view's, and the cinematic view's: out under the sky, and in a room (higher: it has no horizon). */
+const USUAL: Lens = { tilt: TILT, dist: DIST, down: FOCUS_DOWN, zoom: 1 };
+const CINE_OUT: Lens = { tilt: (18 * Math.PI) / 180, dist: 1.5, down: 0.3, zoom: 1.7 };
+const CINE_IN: Lens = { tilt: (36 * Math.PI) / 180, dist: 1.3, down: 0.22, zoom: 1.35 };
+/** How long the camera takes to swoop down into it (and back up). */
+const SWOOP_MS = 1500;
+/** The furthest it sees (tiles), and the least it's zoomed (CSS px per art px): seeing further costs. */
+const CINE_FAR = 72;
+const CINE_ZOOM_MIN = 1.5;
+/** Mist, at these depths beyond you (tiles), each a sheet of it this thick. */
+const MIST: [number, number][] = [
+  [13, 0.035],
+  [19, 0.06],
+  [26, 0.09],
+  [34, 0.12],
+  [44, 0.15],
+  [55, 0.18],
+  [66, 0.24],
+  [86, 0.2],
+  [112, 0.22],
+];
+/** From how far (tiles) things fade into the distance, and over how many. (Buildings go over to their small copies.) */
+const FADE_FROM = 60;
+const FADE_OVER = 24;
+/** The skyline's small copies: how far (tiles) they're seen, fading over the last of it. */
+const SKY_FAR = 170;
+const SKY_OVER = 40;
+/** How long something newly come into range takes to fade in. */
+const BORN_MS = 700;
+/** In the cinematic view, what stands is drawn right up to the lens (it's slid out of the picture by then), not passed over well before it. */
+const CINE_NEAR = 0.06;
+/** A building stood between you and the lens: all there this far (tiles) to one side of you, all gone this near. */
+const ASIDE = 1.15;
+const IN_THE_WAY = 0.35;
+/** Little things between you and the lens (a lamp, a bush): how faint they go. (Big ones, and walls, go altogether.) */
+const FRONT_ALPHA = 0.3;
 /** Lying flat on the ground (a blanket, the dance floor) rather than standing up. */
 const lying = new WeakSet<Container>();
 /**
@@ -37,6 +87,35 @@ const lying = new WeakSet<Container>();
  * (their edges run straight, not in steps). What each one's faces show.
  */
 const standingWalls = new WeakMap<Container, Texture>();
+/** A room's wall tiles (in the cinematic view, the ones in front of you go see-through). */
+const wallTiles = new WeakSet<Container>();
+/** Fence tiles running away from the camera: their panel, seen square on, and their post. */
+const fenceRuns = new WeakMap<Container, { panel: Texture; post: Texture }>();
+/** Hedge tiles running away from the camera: stood as boxes; whether another follows to the south. */
+const hedgeRuns = new WeakMap<Container, { face: Texture; more: boolean }>();
+const fenceArt = new Map<string, { panel: Texture; post: Texture }>();
+const hedgeArt = new Map<Texture, Texture>();
+
+/** A fence kind's panel and post, cut from its picture. */
+function fencePanel(kind: string, seed: number): { panel: Texture; post: Texture } | null {
+  const key = `${kind}:${seed % 3}`;
+  let a = fenceArt.get(key);
+  if (!a) {
+    const t = decorTexture(kind, seed);
+    if (!t) return null;
+    // (The shadow at a steel fence's foot isn't part of it.)
+    const low = RUNS.has(kind) ? 4 : 1;
+    a = { panel: part(t, 0, 0, t.frame.width, t.frame.height - low), post: part(t, RUNS.has(kind) ? 0 : 4, 0, RUNS.has(kind) ? 5 : 4, t.frame.height - low) };
+    fenceArt.set(key, a);
+  }
+  return a;
+}
+
+/** Whether the decor at (x, y) is one of a run of its kind going north to south (none beside it). */
+function runsNorth(map: ZoneMap, x: number, y: number, kind: string): boolean {
+  const is = (xx: number, yy: number) => xx >= 0 && yy >= 0 && xx < map.width && yy < map.height && map.decor_legend[map.decor[yy * map.width + xx]] === kind;
+  return !is(x - 1, y) && !is(x + 1, y) && (is(x, y - 1) || is(x, y + 1));
+}
 const WALLS = new Set(["wall", "wood_wall", "neon_wall", "library_wall", "home_wall_cap", "casino_wall", "theatre_wall"]);
 
 /** Whether the wall at (x, y) is part of a run going north to south (and not a corner of one going across). */
@@ -81,6 +160,7 @@ interface Saved {
   sx: number;
   sy: number;
   visible: boolean;
+  alpha: number;
 }
 
 const CHUNK = 16;
@@ -169,6 +249,8 @@ interface Chunk {
   ground: Sprite;
   /** The same ground in perspective (3D view only, made when first needed). */
   mesh: MeshPlane | null;
+  /** When it was baked (it fades in, far off). */
+  born: number;
   props: Sprite[];
   sway: { s: Sprite; x: number; y: number; phase: number }[];
 }
@@ -189,6 +271,10 @@ interface Placed {
   extras: Sprite[];
   /** Bands cut from its picture, for those that part stand and part lie. */
   parts: Texture[];
+  /** A building's: its small copy, for far away (cinematic view), and its sides. */
+  far: Sprite | null;
+  sides: Sides | null | undefined;
+  walls: MeshPlane[] | null;
 }
 
 /** Inclusive chunk rectangle. */
@@ -224,6 +310,21 @@ export class Scene {
    */
   private chunks = new Map<number, Chunk>();
   private placed: Placed[];
+  /** What makes the skyline, seen from far off (the cinematic view). */
+  private skyline: Placed[] = [];
+  private farAt = 0;
+  /** The small copies' sprites; when things came into range; what stands up off the ground a way. */
+  private farSprites = new WeakSet<Container>();
+  /** The map's own things (people, and their pets, aren't: they never fade from in front of you), and the buildings among them. */
+  private own = new WeakSet<Container>();
+  private solidOf = new WeakMap<Container, Placed>();
+  private bornAt = new WeakMap<Container, number>();
+  private lifts = new WeakMap<Container, number>();
+  /** The side walls of ramps, and fences' and hedges' meshes. */
+  private skirts = new Map<Sprite, MeshPlane[]>();
+  private runs = new Map<Container, MeshPlane[]>();
+  /** Fences beside a ramp: the depth they go in at behind it, and their own. */
+  private besides = new WeakMap<Container, { behind: number; own: number; x: number; east: boolean }>();
   /**
    * Tiles right beside a raised skatepark piece, along its rows: the sort
    * depth what stands there goes in at. (A piece sorts by its back row, so
@@ -231,6 +332,8 @@ export class Scene {
    * over the ramp rising up next to it. It goes in behind the piece.)
    */
   private besideRaised = new Map<number, number>();
+  /** Which of those are on a piece's east side. */
+  private besideEast = new Set<number>();
   private cols: number;
   private rows: number;
   private loaded: Range | null = null;
@@ -242,6 +345,24 @@ export class Scene {
   private view3d = false;
   /** What the setting says (a locked view is flat, whatever it says). */
   private want3d = false;
+  /** The cinematic view: wanted, and how far the camera's swooped down into it (0–1). */
+  private wantCine = false;
+  private cine = 0;
+  private cineAt = performance.now();
+  private sky: CineSky | null = null;
+  private lens: CineLens | null = null;
+  private mist: Sprite[] = [];
+  /** The air outdoors, for the sky: the light's hour, how dark, the weather. */
+  private air: { hour: number; dark: number; kind: Air } = { hour: 13, dark: 0, kind: "clear" };
+  /** How faint what's in the lens's way has gone (easing). */
+  private fronts = new WeakMap<Container, number>();
+  private frontAt = 0;
+  private frontStep = 1;
+  /** The big things drawn this frame, where they are on screen, and their depth. */
+  private hiders: { x0: number; x1: number; y0: number; y1: number; foot: number }[] = [];
+  /** Their sides: on screen, which wall (world px across), and how high it is. */
+  private sideHiders: { x0: number; x1: number; wall: number; h: number }[] = [];
+  private glimmer = new WeakMap<Container, number>();
   private ground3d = new Container();
   /** Who the 3D camera looks at (tile), not held back at the map's edge. */
   private focus: TileXY = { x: 0, y: 0 };
@@ -282,6 +403,7 @@ export class Scene {
           if (x < 0 || x >= map.width || y < 0 || y >= map.height) continue;
           const at = y * map.width + x;
           // (Its own sort depth less a little: drawn just before it.)
+          if (x > o.x) this.besideEast.add(at);
           this.besideRaised.set(at, Math.min(this.besideRaised.get(at) ?? Infinity, o.y * TILE + 0.5));
         }
     }
@@ -292,13 +414,16 @@ export class Scene {
     // Tilt just before the frame is drawn (LOW), level again just after.
     app.ticker.add(this.tilt, this, UPDATE_PRIORITY.LOW + 1);
     app.ticker.add(this.level, this, UPDATE_PRIORITY.LOW - 1);
-    this.offSettings = onSettings((s) => this.set3d(s.view3d));
+    this.offSettings = onSettings((s) => this.set3d(s.view3d, s.cineOn && s.cinema));
+    // (Come in with it on: it starts down there.)
+    if (this.cinematic) this.cine = 1;
     this.cols = Math.ceil(map.width / CHUNK);
     this.rows = Math.ceil(map.height / CHUNK);
     this.placed = map.objects
       // Drawn elsewhere, or invisible.
-      .filter((o) => o.kind !== "grove_slot" && o.kind !== "nook" && o.kind !== "spot" && o.kind !== "sk_park" && o.kind !== "minigolf" && o.kind !== "forage" && o.kind !== "arena" && o.kind !== "yard_stand" && o.kind !== "yard" && o.kind !== "pb_grounds" && !(map.name === "Home" && o.kind === "arcade_cabinet") && o.kind !== "boat_lake" && (!o.kind.startsWith("lab_") || o.kind === "lab_exit" || o.kind === "lab_heart"))
-      .map((o) => ({ o, x0: o.x - 1, y0: o.y - 4, x1: o.x + o.w, y1: o.y + o.h, sprite: null, art: null, hiddenAt: 0, parts: [], extras: [] }));
+      .filter((o) => o.kind !== "grove_slot" && o.kind !== "nook" && o.kind !== "spot" && o.kind !== "sk_park" && o.kind !== "minigolf" && o.kind !== "pet_mat" && o.kind !== "forage" && o.kind !== "arena" && o.kind !== "yard_stand" && o.kind !== "yard" && o.kind !== "pb_grounds" && !(map.name === "Home" && o.kind === "arcade_cabinet") && o.kind !== "boat_lake" && (!o.kind.startsWith("lab_") || o.kind === "lab_exit" || o.kind === "lab_heart"))
+      .map((o) => ({ o, x0: o.x - 1, y0: o.y - 4, x1: o.x + o.w, y1: o.y + o.h, sprite: null, art: null, hiddenAt: 0, parts: [], extras: [], far: null, sides: undefined, walls: null }));
+    this.skyline = this.placed.filter((p) => SKYLINE.has(p.o.kind));
     this.resize();
   }
 
@@ -323,11 +448,18 @@ export class Scene {
     }
     // Nearest first; everything at once only for the very first view.
     const missing: [number, number, number][] = [];
-    const mx = (v.x0 + v.x1) / 2 / CHUNK;
-    const my = (v.y0 + v.y1) / 2 / CHUNK;
+    // (The cinematic view sees a long way, in a wedge: only what's in it.)
+    const wedge = this.cinematic || this.cine > 0 ? this.wedge() : null;
+    const seen = (cy: number, cx: number) => {
+      if (!wedge) return true;
+      const half = wedge(cy * CHUNK - CHUNK) + CHUNK;
+      return (cx + 1) * CHUNK > this.focus.x - half && cx * CHUNK < this.focus.x + half;
+    };
+    const mx = wedge ? this.focus.x / CHUNK : (v.x0 + v.x1) / 2 / CHUNK;
+    const my = wedge ? this.focus.y / CHUNK : (v.y0 + v.y1) / 2 / CHUNK;
     for (let cy = want.y0; cy <= want.y1; cy++) {
       for (let cx = want.x0; cx <= want.x1; cx++) {
-        if (!this.chunks.has(cy * this.cols + cx)) missing.push([Math.hypot(cx + 0.5 - mx, cy + 0.5 - my), cx, cy]);
+        if (seen(cy, cx) && !this.chunks.has(cy * this.cols + cx)) missing.push([Math.hypot(cx + 0.5 - mx, cy + 0.5 - my), cx, cy]);
       }
     }
     missing.sort((a, b) => a[0] - b[0]);
@@ -341,13 +473,25 @@ export class Scene {
     const tx1 = (want.x1 + 2) * CHUNK;
     const ty1 = (want.y1 + 2) * CHUNK;
     for (const p of this.placed) {
-      const near = p.x1 >= tx0 && p.x0 < tx1 && p.y1 >= ty0 && p.y0 < ty1;
+      let near = p.x1 >= tx0 && p.x0 < tx1 && p.y1 >= ty0 && p.y0 < ty1;
+      if (near && wedge) {
+        const half = wedge(p.y0) + CHUNK * 2;
+        near = p.x1 > this.focus.x - half && p.x0 < this.focus.x + half;
+      }
       if (near && !p.sprite) {
         this.show(p);
       } else if (!near && p.sprite) {
         this.hide(p);
       }
     }
+  }
+
+  /** How far to each side of you (tiles) the tilted camera sees at row `y`. */
+  private wedge(): (y: number) => number {
+    const cam = this.camera();
+    const half = this.app.screen.width / 2 / cam.z / TILE;
+    const d = cam.d / TILE;
+    return (y) => (half * Math.max(d * 0.3, d - (y - this.focus.y) * cam.cos)) / d;
   }
 
   /** Draws a placed object (and what's on show on it). */
@@ -369,6 +513,10 @@ export class Scene {
     if (FLAT_OBJECTS.has(p.o.kind) || LAID_OBJECTS.has(p.o.kind) || fountain) lying.add(s);
     this.sorted.addChild(s);
     p.sprite = s;
+    this.bornAt.set(s, performance.now());
+    this.own.add(s);
+    if (SOLID.has(p.o.kind)) this.solidOf.set(s, p);
+    if (SKYLINE.has(p.o.kind)) this.keepFar(p);
     // The shop inside the skatepark's van sorts behind its seller, but in 3D stands where the van does.
     if (p.o.kind === "sk_shop_back") this.feet.set(s, (p.o.y + 4) * TILE - 1);
     if (fountain) {
@@ -377,6 +525,7 @@ export class Scene {
       ped.zIndex = s.zIndex + 0.1;
       // (It stands on the basin's floor, in the middle.)
       this.feet.set(ped, fountainFoot(p.o));
+      this.lifts.set(ped, BASIN_WATER);
       this.sorted.addChild(ped);
       p.extras.push(ped);
     }
@@ -421,6 +570,58 @@ export class Scene {
     return part;
   }
 
+  /** Keeps a small copy of a building's picture, for far away (made once). */
+  private keepFar(p: Placed) {
+    if (p.far || !p.art) return;
+    const c = pictureOf(p.art.texture);
+    if (!c) return;
+    const s = new Sprite(shrunk(c));
+    s.scale.set(FAR_SHRINK);
+    s.position.set(p.o.x * TILE - p.art.left, p.o.y * TILE - p.art.overhang);
+    s.zIndex = (p.o.y + p.o.h) * TILE - 1.2;
+    s.visible = false;
+    this.farSprites.add(s);
+    this.fxSkip.add(s);
+    this.sorted.addChild(s);
+    p.far = s;
+  }
+
+  /**
+   * The skyline, far off (the cinematic view): each building's small copy
+   * shows while the building itself isn't drawn (or is still fading, in or
+   * out). Any not seen yet are drawn small one at a time, nearest first.
+   */
+  private updateFar(now: number) {
+    const on = this.cinematic && this.open;
+    let next: Placed | null = null;
+    let nextD = Infinity;
+    const wedge = on ? this.wedge() : null;
+    for (const p of this.skyline) {
+      const ahead = this.focus.y - (p.o.y + p.o.h);
+      const half = wedge ? wedge(p.o.y) + 24 : 0;
+      const seen = on && ahead > 20 && ahead < SKY_FAR && p.x1 > this.focus.x - half && p.x0 < this.focus.x + half;
+      if (p.far) {
+        const born = p.sprite ? (this.bornAt.get(p.sprite) ?? 0) : Infinity;
+        const show = seen && (!p.sprite || ahead > FADE_FROM - 4 || now - born < BORN_MS + 100);
+        if (p.far.visible !== show) p.far.visible = show;
+      } else if (on && ahead > 0 && ahead < SKY_FAR) {
+        const d = ahead + Math.max(0, Math.abs(p.o.x - this.focus.x) - half) * 2;
+        if (d < nextD) {
+          nextD = d;
+          next = p;
+        }
+      }
+    }
+    if (next && now - this.farAt > 70) {
+      this.farAt = now;
+      const had = next.art;
+      next.art ??= objectTexture(next.o);
+      this.keepFar(next);
+      if (!next.far) this.skyline = this.skyline.filter((q) => q !== next);
+      if (!had && !next.sprite) this.dropArt(next);
+    }
+  }
+
   private hide(p: (typeof this.placed)[number]) {
     // (Its art's kept for when we come back, up to a point: the longest
     // gone go first.)
@@ -439,6 +640,10 @@ export class Scene {
   }
 
   private dropArt(p: (typeof this.placed)[number]) {
+    for (const m of p.walls ?? []) m.destroy();
+    p.walls = null;
+    if (p.sides) dropSides(p.sides);
+    p.sides = undefined;
     p.art?.texture.destroy(true);
     p.art = null;
   }
@@ -450,6 +655,8 @@ export class Scene {
     const shown = !!p.sprite;
     this.hide(p);
     this.dropArt(p);
+    p.far?.destroy({ texture: true, textureSource: true });
+    p.far = null;
     if (shown) this.show(p);
   }
 
@@ -462,7 +669,7 @@ export class Scene {
     const ground = new Sprite(bakeChunk(x0, y0, w, h, (x, y) => groundAt(map, x, y)));
     ground.position.set(x0 * TILE, y0 * TILE);
     this.ground.addChild(ground);
-    const chunk: Chunk = { ground, mesh: null, props: [], sway: [] };
+    const chunk: Chunk = { ground, mesh: null, born: performance.now(), props: [], sway: [] };
     for (let y = y0; y < y0 + h; y++) {
       for (let x = x0; x < x0 + w; x++) {
         const kind = map.decor_legend[map.decor[y * map.width + x]];
@@ -479,7 +686,20 @@ export class Scene {
         const behind = FLAT.has(kind) ? undefined : this.besideRaised.get(y * map.width + x);
         if (behind !== undefined && behind < s.zIndex) {
           this.feet.set(s, s.zIndex);
+          this.besides.set(s, { behind, own: s.zIndex, x: s.position.x, east: this.besideEast.has(y * map.width + x) });
           s.zIndex = behind;
+        }
+        if (WALLS.has(kind)) wallTiles.add(s);
+        this.bornAt.set(s, chunk.born);
+        this.own.add(s);
+        if ((RUNS.has(kind) || kind === "fence") && runsNorth(map, x, y, kind)) {
+          const a = fencePanel(kind, hash(x, y, 5));
+          if (a) fenceRuns.set(s, a);
+        }
+        if (kind === "hedge" && runsNorth(map, x, y, kind)) {
+          let face = hedgeArt.get(tex);
+          if (!face) hedgeArt.set(tex, (face = part(tex, 0, 2, tex.frame.width, tex.frame.height - 4)));
+          hedgeRuns.set(s, { face, more: y + 1 < map.height && map.decor_legend[map.decor[(y + 1) * map.width + x]] === "hedge" });
         }
         // (A home's side walls wear the same paper as its back wall.)
         if (WALLS.has(kind) && wallRun(map, x, y)) standingWalls.set(s, (kind === "home_wall_cap" ? decorTexture("home_wall", hash(x, y, 5)) : tex) ?? tex);
@@ -626,6 +846,11 @@ export class Scene {
   /** Frees the baked chunk and object textures, then everything else. */
   destroy() {
     this.offSettings();
+    this.sky?.destroy();
+    this.sky = null;
+    this.world.filters = [];
+    this.lens?.destroy();
+    this.mist[0]?.texture.destroy(true);
     this.app.ticker.remove(this.tilt, this);
     this.app.ticker.remove(this.level, this);
     this.haze?.destroy({ texture: true, textureSource: true });
@@ -634,6 +859,8 @@ export class Scene {
     for (const [key, c] of this.chunks) this.unload(key, c);
     for (const p of this.placed) {
       p.sprite?.destroy();
+      p.far?.destroy({ texture: true, textureSource: true });
+      p.far = null;
       this.dropArt(p);
       for (const e of p.extras) e.destroy();
     }
@@ -833,7 +1060,12 @@ export class Scene {
 
   /** The world point (art pixels) on the ground under a screen point. */
   screenToWorld(sx: number, sy: number): TileXY {
-    if (this.view3d) return this.unproject(sx, sy);
+    if (this.view3d) {
+      const p = this.unproject(sx, sy);
+      // (A tap on the sky, or far off by the horizon: only as far as you'd walk in one go.)
+      const far = this.focus.y - (this.cinematic ? 24 : FAR);
+      return { x: p.x, y: Math.max(p.y, (far + 0.5) * TILE) };
+    }
     return { x: (sx - this.world.position.x) / this.scale, y: (sy - this.world.position.y) / this.scale };
   }
 
@@ -864,6 +1096,26 @@ export class Scene {
     };
   }
 
+  /**
+   * Screen position of a point `up` tiles over the ground at (x, foot) (tiles):
+   * a name over a head. Flat (and in the 3D view), that far up the screen; in
+   * the cinematic view, that high up where it stands, and how big it looks
+   * from there (`s`: 1 where you are).
+   */
+  headToScreen(x: number, foot: number, up: number): { x: number; y: number; s: number } {
+    if (this.view3d && this.cine > 0) {
+      const cam = this.camera();
+      const p = this.project(x * TILE, foot * TILE, cam);
+      if (p) {
+        const flat = this.project(x * TILE, (foot - up) * TILE, cam)!;
+        const y = p.y - up * TILE * p.s;
+        return { x: p.x, y: flat.y + (y - flat.y) * this.cine, s: 1 + (p.s / cam.z - 1) * this.cine };
+      }
+      return { x: -999, y: -999, s: 0 };
+    }
+    return { ...this.tileToScreen(x, foot - up), s: 1 };
+  }
+
   /** Where `c` is on screen (the 3D view draws it somewhere other than its flat place). */
   screenBounds(c: Container): { minX: number; minY: number; maxX: number; maxY: number } {
     const d = this.view3d ? this.drawn3d.get(c) : undefined;
@@ -890,6 +1142,11 @@ export class Scene {
     this.feet.set(c, foot);
   }
 
+  /** `c` stands `up` px off the ground in the tilted views (in the fountain's raised basin). */
+  liftUp(c: Container, up: number) {
+    this.lifts.set(c, up);
+  }
+
   /** `c` stands at its own depth again (its sort depth), not where `standOn` put it. */
   unstand(c: Container) {
     this.feet.delete(c);
@@ -909,18 +1166,47 @@ export class Scene {
 
   // ---- the 3D view ----
 
-  private set3d(on: boolean) {
+  private set3d(on: boolean, cine: boolean) {
+    // (Straight from flat: the camera starts up where the 3D view's is.)
+    if (!this.view3d && cine) this.cine = 0;
     this.want3d = on;
+    if (cine !== this.wantCine) this.loaded = null;
+    this.wantCine = cine;
     this.apply3d();
+  }
+
+  /** The cinematic view's on (never in a locked view: what you see there's the same for everyone). */
+  get cinematic(): boolean {
+    return this.view3d && this.wantCine && !this.locked;
+  }
+
+  /** The horizon's in the picture: the cinematic view, outdoors. */
+  private get open(): boolean {
+    return !!this.map.streets;
+  }
+
+  /** The air outdoors now, for the cinematic view's sky and mist. */
+  setAir(hour: number, dark: number, kind: Air) {
+    this.air = { hour, dark, kind };
   }
 
   /** The setting, unless the view's locked flat (it must be the same for everyone). */
   private apply3d() {
-    this.view3d = this.want3d && !(this.locked && this.locked.flat !== false);
+    // (Leaving the cinematic view for the flat one: not till the camera's back up.)
+    this.view3d = (this.want3d || this.wantCine || this.cine > 0) && !(this.locked && this.locked.flat !== false);
     this.app.renderer.background.color = (this.view3d && !this.map.streets) || this.map.name === "Home" ? ROOF_DARK : HEDGE;
     if (!this.view3d) {
       this.ground3d.visible = false;
       if (this.haze) this.haze.visible = false;
+      for (const c of this.chunks.values()) {
+        for (const s of c.props) {
+          const b = this.besides.get(s);
+          if (b) s.zIndex = b.behind;
+        }
+      }
+      for (const p of this.skyline) if (p.far) p.far.visible = false;
+      this.cine = 0;
+      this.cineOff();
     }
   }
 
@@ -937,29 +1223,38 @@ export class Scene {
   /** The camera, for this frame: screen centre, distance (art pixels), zoom, and who it looks at. */
   private camera() {
     const { width, height } = this.app.screen;
-    const z = this.scale;
+    const to = this.open ? CINE_OUT : CINE_IN;
+    // (Easing in and out of the swoop.)
+    const k = this.cine * this.cine * (3 - 2 * this.cine);
+    const of = (a: number, b: number) => a + (b - a) * k;
+    const tilt = of(USUAL.tilt, to.tilt);
+    const z = of(this.scale, Math.max(this.scale * to.zoom, Math.min(CINE_ZOOM_MIN, height / 300)));
     return {
       ox: width / 2,
-      oy: height / 2 + FOCUS_DOWN * height,
+      oy: height / 2 + of(USUAL.down, to.down) * height,
       z,
-      d: (DIST * height) / z,
+      d: (of(USUAL.dist, to.dist) * height) / z,
       fx: (this.focus.x + 0.5) * TILE,
       fy: (this.focus.y + 0.5) * TILE,
+      sin: Math.sin(tilt),
+      cos: Math.cos(tilt),
+      far: of(FAR, CINE_FAR),
+      near: of(NEAR, CINE_NEAR),
     };
   }
 
   /** A ground point (art pixels) on screen, and how big things there are drawn; null behind the lens. */
   private project(wx: number, wy: number, cam = this.camera()): { x: number; y: number; s: number } | null {
     const dy = wy - cam.fy;
-    const den = cam.d - dy * COS;
-    if (den < cam.d * NEAR) return null;
+    const den = cam.d - dy * cam.cos;
+    if (den < cam.d * cam.near) return null;
     const s = (cam.d / den) * cam.z;
-    return { x: cam.ox + (wx - cam.fx) * s, y: cam.oy + dy * SIN * s, s };
+    return { x: cam.ox + (wx - cam.fx) * s, y: cam.oy + dy * cam.sin * s, s };
   }
 
   /** A ground point on screen for a mesh: one behind the lens is held at its edge (off screen, whatever's near it). */
   private projectMesh(wx: number, wy: number, cam: ReturnType<Scene["camera"]>): { x: number; y: number } {
-    return this.project(wx, Math.min(wy, cam.fy + (cam.d * (1 - NEAR)) / COS - 1), cam)!;
+    return this.project(wx, Math.min(wy, cam.fy + (cam.d * (1 - NEAR)) / cam.cos - 1), cam)!;
   }
 
   /** Lays `m` (a grid `n` vertices a side) over world rectangle (x0, y0)–(x1, y1). */
@@ -982,15 +1277,15 @@ export class Scene {
     const cam = this.camera();
     const u = (sx - cam.ox) / cam.z;
     const v = (sy - cam.oy) / cam.z;
-    const den = cam.d * SIN + v * COS;
-    const far = -FAR * TILE;
-    const dy = den <= cam.d * SIN * 0.05 ? far : Math.max(far, (v * cam.d) / den);
-    const s = cam.d / (cam.d - dy * COS);
+    const den = cam.d * cam.sin + v * cam.cos;
+    const far = -cam.far * TILE;
+    const dy = den <= cam.d * cam.sin * 0.05 ? far : Math.max(far, (v * cam.d) / den);
+    const s = cam.d / (cam.d - dy * cam.cos);
     return { x: cam.fx + u / s, y: cam.fy + dy };
   }
 
   private save(c: Container) {
-    this.saved.push({ c, x: c.position.x, y: c.position.y, sx: c.scale.x, sy: c.scale.y, visible: c.visible });
+    this.saved.push({ c, x: c.position.x, y: c.position.y, sx: c.scale.x, sy: c.scale.y, visible: c.visible, alpha: c.alpha });
   }
 
   /**
@@ -1004,9 +1299,48 @@ export class Scene {
       c.visible = false;
       return;
     }
-    const sy = flat ? p.s * SIN : p.s;
-    c.position.set(p.x, p.y + (c.position.y - footY) * sy);
+    // (Well out of the picture to one side: not drawn at all. Only pictures: what's drawn in world coordinates isn't where its position is.)
+    if (this.cine > 0 && c instanceof Sprite) {
+      const w = c.texture.width * Math.abs(c.scale.x) * p.s;
+      const left = p.x - c.anchor.x * w;
+      if (left > cam.ox * 2 + 40 || left + w < -40) {
+        c.visible = false;
+        return;
+      }
+    }
+    if (this.cine > 0) {
+      const f = this.farFade(c, footY, cam) * (this.own.has(c) || !this.cleared.length ? 1 : this.onSolid(c.position.x, footY));
+      if (f < 0.01) {
+        c.visible = false;
+        return;
+      }
+      if (f < 1) c.alpha *= f;
+    }
+    // (A reflection reaches as far over the water as the water's seen to go.)
+    const squash = this.cine > 0 && this.fxSkip.has(c) && !this.farSprites.has(c) ? Math.min(1, cam.sin / Math.sin(TILT)) : 1;
+    const sy = flat ? p.s * cam.sin : p.s * squash;
+    c.position.set(p.x, p.y + (c.position.y - footY - (this.lifts.get(c) ?? 0)) * sy);
     c.scale.set(c.scale.x * p.s, c.scale.y * sy);
+    const solid = this.cine > 0 && !flat ? this.solidOf.get(c) : undefined;
+    if (solid) {
+      c.alpha *= this.solidFade(solid, footY, cam);
+      if (c.alpha < 0.01) c.visible = false;
+    } else if (this.cine > 0 && !flat && footY > cam.fy && c instanceof Sprite && (this.own.has(c) || c.texture.height > 56 || c.texture.width > 56)) {
+      const w = c.texture.width * Math.abs(c.scale.x);
+      const h = c.texture.height * Math.abs(c.scale.y);
+      const left = c.position.x - c.anchor.x * w;
+      const top = c.position.y - c.anchor.y * h;
+      c.alpha *= this.frontFade(c, left, left + w, top, top + h, footY, cam);
+      if (c.alpha < 0.01) c.visible = false;
+    }
+    // (Big things, houses: they hide the lights behind them, drawn over the world.)
+    if (this.cine > 0 && !flat && c instanceof Sprite && c.texture.height > 4 * TILE && c.visible && c.alpha > 0.6) {
+      const w = c.texture.width * Math.abs(c.scale.x);
+      const h = c.texture.height * Math.abs(c.scale.y);
+      const x0 = c.position.x - c.anchor.x * w;
+      const y0 = c.position.y - c.anchor.y * h;
+      this.hiders.push({ x0: x0 + w * 0.02, x1: x0 + w * 0.98, y0: y0 + h * 0.12, y1: y0 + h, foot: footY });
+    }
     this.drawn3d.set(c, { x: c.position.x, y: c.position.y, sx: c.scale.x, sy: c.scale.y });
   }
 
@@ -1028,7 +1362,7 @@ export class Scene {
     }
     const m = l.mesh;
     m.zIndex = this.flatOver.has(c) ? 1e9 : c.zIndex;
-    m.alpha = c.alpha;
+    m.alpha = this.cine > 0 ? c.alpha * this.farFade(c, (y0 + y1) / 2, cam) : c.alpha;
     m.blendMode = c.blendMode;
     if (c instanceof Sprite) m.tint = c.tint;
     m.visible = c.visible;
@@ -1046,8 +1380,9 @@ export class Scene {
   private layRelief(s: Sprite, r: Relief, cam: ReturnType<Scene["camera"]>) {
     // (Upright furniture: two points across, one at every row's edge down.)
     const upright = !!r.edgeGy && !!r.edgeZ;
-    const nx = upright ? 2 : Math.ceil(r.w / RELIEF_STEP) + 1;
-    const ny = upright ? r.h + 1 : Math.ceil(r.h / RELIEF_STEP) + 1;
+    const step = r.step ?? RELIEF_STEP;
+    const nx = upright ? 2 : Math.ceil(r.w / step) + 1;
+    const ny = upright ? r.h + 1 : Math.ceil(r.h / step) + 1;
     const n = nx * 1000 + ny;
     let l = this.laid.get(s);
     if (l && (l.texture !== s.texture || l.n !== n)) {
@@ -1063,9 +1398,15 @@ export class Scene {
     }
     const m = l.mesh;
     m.zIndex = s.zIndex;
-    m.alpha = s.alpha;
+    // (Only what's wholly in front of you may fade: never the ramp you're on.)
+    const north = this.reliefTop.get(s) ?? s.position.y;
+    const back = upright ? Math.min(north + r.edgeGy![0], north + r.edgeGy![r.h]) : north;
+    const foot = upright ? north + r.edgeGy![r.h] : north + r.gy[(r.h - 1) * r.w + (r.w >> 1)];
+    const x0f = s.position.x - s.anchor.x * r.w;
+    m.alpha = back > cam.fy + TILE * 0.5 ? s.alpha * this.boxFade(s, x0f, x0f + r.w, foot, upright ? r.h : (r.tall ??= r.z.reduce((a, b) => Math.max(a, b), 0)), cam) : s.alpha;
+    if (this.cine > 0) m.alpha *= this.farFade(s, foot, cam);
     m.tint = s.tint;
-    m.visible = s.visible;
+    m.visible = s.visible && m.alpha > 0.01;
     // Its pixels' ground rows count from the piece's north edge (or, a piece
     // of furniture, from its feet); its left edge, wherever it's anchored.
     const x0 = s.position.x - s.anchor.x * r.w;
@@ -1108,6 +1449,7 @@ export class Scene {
         }
         g.clear();
         g.zIndex = s.zIndex - 0.25;
+        g.alpha = m.alpha;
         g.visible = s.visible && Math.abs(xb - xf) > 0.6;
         if (g.visible) {
           g.poly([xf, f.y, xf, f.y - sd.h * f.s, xb, b.y - sd.h * b.s, xb, b.y])
@@ -1119,6 +1461,8 @@ export class Scene {
       s.visible = false;
       return;
     }
+    if (r.walls) this.standSkirts(s, r.walls, x0, ground0, m, cam);
+    if (r.posts) this.standPosts(s, r.posts, x0, ground0, m, cam);
     for (let j = 0; j < ny; j++) {
       const row = Math.min(r.h - 1, Math.round((j * (r.h - 1)) / (ny - 1)));
       for (let i = 0; i < nx; i++) {
@@ -1134,6 +1478,224 @@ export class Scene {
     m.geometry.getBuffer("aPosition").update();
     this.save(s);
     s.visible = false;
+  }
+
+  /** A ramp's (or a box's) side wall, on the side you see: from the ground up to its edge. */
+  private standSkirts(s: Sprite, walls: NonNullable<Relief["walls"]>, x0: number, y0: number, top: MeshPlane, cam: ReturnType<Scene["camera"]>) {
+    let ms = this.skirts.get(s);
+    const d = walls.west.length - 1;
+    const n = Math.min(96, Math.ceil(d / 4) + 1);
+    if (!ms) {
+      ms = [walls.west, walls.east].map((z, k) => {
+        const m = new MeshPlane({ texture: concrete(), verticesX: n, verticesY: 2 });
+        m.autoResize = false;
+        m.tint = k ? 0xb6afa4 : 0xdad3c6;
+        const uv = m.geometry.uvs;
+        for (let i = 0; i < n; i++) {
+          const y = Math.round((d * i) / (n - 1));
+          uv[i * 2] = uv[(n + i) * 2] = y / 64;
+          uv[i * 2 + 1] = 1 - z[y] / 64;
+          uv[(n + i) * 2 + 1] = 1;
+        }
+        m.geometry.getBuffer("aUV").update();
+        this.sorted.addChild(m);
+        return m;
+      });
+      this.skirts.set(s, ms);
+    }
+    const limit = cam.fy + (cam.d * (1 - NEAR)) / cam.cos - 1;
+    [walls.west, walls.east].forEach((z, k) => {
+      const m = ms[k];
+      const x = k ? x0 + walls.w : x0;
+      m.visible = top.visible && (k ? cam.fx > x : cam.fx < x);
+      if (!m.visible) return;
+      m.zIndex = top.zIndex + 0.05;
+      m.alpha = top.alpha;
+      const pos = m.geometry.positions;
+      for (let i = 0; i < n; i++) {
+        const y = Math.round((d * i) / (n - 1));
+        const p = this.project(x, Math.min(y0 + y, limit), cam)!;
+        pos[i * 2] = pos[(n + i) * 2] = p.x;
+        pos[i * 2 + 1] = p.y - z[y] * p.s;
+        pos[(n + i) * 2 + 1] = p.y;
+      }
+      m.geometry.getBuffer("aPosition").update();
+    });
+  }
+
+  /** A rail's posts, under it. */
+  private standPosts(s: Sprite, posts: NonNullable<Relief["posts"]>, x0: number, y0: number, top: MeshPlane, cam: ReturnType<Scene["camera"]>) {
+    let ms = this.skirts.get(s);
+    if (!ms) {
+      ms = posts.map(() => {
+        const m = groundMesh(Texture.WHITE, 2);
+        m.tint = 0x565e66;
+        this.sorted.addChild(m);
+        return m;
+      });
+      this.skirts.set(s, ms);
+    }
+    ms.forEach((m, i) => {
+      const q = posts[i];
+      m.zIndex = top.zIndex - 0.05;
+      m.alpha = top.alpha;
+      this.layFace(m, (u, v) => [x0 + q.x - 1.5 + 3 * u, y0 + q.y, q.z * (1 - v)], cam, 2);
+      m.visible = top.visible;
+    });
+  }
+
+  /** Off the picture to one side (px either way), or behind the lens: nothing to stand up. */
+  private offside(x0: number, x1: number, foot: number, cam: ReturnType<Scene["camera"]>): boolean {
+    const a = this.project(x0, foot, cam);
+    const b = this.project(x1, foot, cam);
+    return !a || !b || b.x < -60 || a.x > cam.ox * 2 + 60;
+  }
+
+  /** A fence tile running away from you: its panel along the ground, its post. */
+  private standFence(c: Sprite, cam: ReturnType<Scene["camera"]>) {
+    const art = fenceRuns.get(c)!;
+    const x = c.position.x;
+    const y1 = c.position.y + 2;
+    const y0 = y1 - TILE;
+    this.save(c);
+    c.visible = false;
+    const fade = this.cine > 0 ? this.farFade(c, y1, cam) * this.boxFade(c, x - 2, x + 2, y1, art.panel.height, cam) : 1;
+    if (fade < 0.01 || this.offside(x - TILE, x + TILE, y1, cam)) return;
+    let ms = this.runs.get(c);
+    if (!ms) {
+      ms = [groundMesh(art.panel, 3), groundMesh(art.post, 2)];
+      this.sorted.addChild(...ms);
+      this.runs.set(c, ms);
+    }
+    const [panel, post] = ms;
+    const h = art.panel.height;
+    const half = art.post.width / 2;
+    for (const m of ms) {
+      m.alpha = fade;
+      m.tint = c.tint;
+    }
+    panel.zIndex = c.zIndex - 0.2;
+    post.zIndex = c.zIndex - 0.3;
+    this.layFace(panel, (u, v) => [x, y0 + TILE * u, h * (1 - v)], cam, 3);
+    this.layFace(post, (u, v) => [x - half + half * 2 * u, y0 + 1, h * (1 - v)], cam, 2);
+  }
+
+  /** A hedge tile running away from you: the side you see, its top, its end. */
+  private standHedge(c: Sprite, cam: ReturnType<Scene["camera"]>) {
+    const { face, more } = hedgeRuns.get(c)!;
+    const x0 = c.position.x - TILE / 2;
+    const x1 = x0 + TILE;
+    const y1 = c.position.y + 2;
+    const y0 = y1 - TILE;
+    const h = face.height;
+    const fade = this.farFade(c, y1, cam) * this.boxFade(c, x0, x1, y1, h, cam);
+    this.save(c);
+    c.visible = false;
+    if (fade < 0.01 || this.offside(x0, x1, y1, cam)) return;
+    let ms = this.runs.get(c);
+    if (!ms) {
+      const side = groundMesh(face, 3);
+      side.tint = 0xc4ccc0;
+      const top = groundMesh(face, 2);
+      top.tint = 0xf0ffe6;
+      ms = [side, top, groundMesh(face, 2)];
+      this.sorted.addChild(...ms);
+      this.runs.set(c, ms);
+    }
+    const [side, top, end] = ms;
+    for (const m of ms) {
+      m.zIndex = c.zIndex - 0.2;
+      m.alpha = fade;
+      m.visible = false;
+    }
+    if (cam.fx < x0) this.layFace(side, (u, v) => [x0, y0 + TILE * u, h * (1 - v)], cam, 3);
+    else if (cam.fx > x1) this.layFace(side, (u, v) => [x1, y0 + TILE * u, h * (1 - v)], cam, 3);
+    this.layFace(top, (u, v) => [x0 + TILE * u, y0 + TILE * v, h], cam, 2);
+    if (!more) this.layFace(end, (u, v) => [x0 + TILE * u, y1, h * (1 - v)], cam, 2);
+  }
+
+  /**
+   * A building's side, carried back from its front as deep as it stands on
+   * the map (only the side toward you shows).
+   */
+  private standSides(p: Placed, cam: ReturnType<Scene["camera"]>) {
+    const s = p.sprite!;
+    if (p.sides === undefined) {
+      const c = p.art && pictureOf(p.art.texture);
+      p.sides = c ? sidesOf(c) : null;
+    }
+    const sd = p.sides;
+    if (!sd) return;
+    const x0 = p.o.x * TILE - p.art!.left;
+    const top = p.o.y * TILE - p.art!.overhang;
+    const foot = this.footOfPlaced(p);
+    const deep = p.o.h * TILE - 4;
+    const n = 13;
+    const k = sd.rows.length;
+    const limit = cam.fy + (cam.d * (1 - cam.near)) / cam.cos - 1;
+    const fade = this.solidFade(p, foot, cam) * this.farFade(s, foot, cam) * this.cine;
+    const back = foot - deep;
+    if (fade < 0.01 || back > limit - 4) {
+      for (const m of p.walls ?? []) m.visible = false;
+      return;
+    }
+    // (Closer together toward the front, where it's nearest: so its courses run straight.)
+    const along = (i: number) => {
+      const t = i / (n - 1);
+      return deep * (t * 0.45 + t * t * 0.55);
+    };
+    if (!p.walls) {
+      p.walls = [sd.left, sd.right].map((tex) => {
+        const m = new MeshPlane({ texture: tex, verticesX: n, verticesY: k });
+        m.autoResize = false;
+        const uv = m.geometry.uvs;
+        sd.rows.forEach((row, j) => {
+          for (let i = 0; i < n; i++) {
+            uv[(j * n + i) * 2] = along(i) / sd.span;
+            uv[(j * n + i) * 2 + 1] = (row.y + 0.5) / sd.h;
+          }
+        });
+        m.geometry.getBuffer("aUV").update();
+        this.sorted.addChild(m);
+        return m;
+      });
+    }
+    const mid = sd.rows[Math.floor(k * 0.75)];
+    // (Seen from where its innermost part, the roof's end, starts to show: hidden behind the front till then, so it comes in from nothing.)
+    const inL = sd.rows.reduce((m, r) => Math.max(m, r.l), 0);
+    const inR = sd.rows.reduce((m, r) => Math.min(m, r.r), Infinity);
+    const at = this.project(cam.fx, Math.min(foot, limit), cam)!;
+    const far = this.project(cam.fx, back, cam)!;
+    p.walls.forEach((m, right) => {
+      const x = x0 + (right ? mid.r : mid.l);
+      const a = cam.ox + (x - cam.fx) * at.s;
+      const b = cam.ox + (x - cam.fx) * far.s;
+      // (Only the side toward you, and only while any of it's in the picture.)
+      m.visible = (right ? cam.fx > x0 + inR : cam.fx < x0 + inL) && Math.max(a, b) > -60 && Math.min(a, b) < cam.ox * 2 + 60;
+      if (!m.visible) return;
+      m.alpha = fade;
+      m.tint = s.tint;
+      if (fade > 0.6 && (right ? cam.fx > x : cam.fx < x)) this.sideHiders.push({ x0: Math.min(a, b), x1: Math.max(a, b), wall: x, h: foot - top - sd.rows[0].y });
+      // (In at its back: what's beside it, nearer, is drawn over it; what's behind it, under.)
+      m.zIndex = p.o.y * TILE + 1;
+      const pos = m.geometry.positions;
+      // (Each depth back along it seen once, for every row of it.)
+      for (let i = 0; i < n; i++) {
+        const q = this.project(cam.fx, Math.min(foot - along(i), limit), cam)!;
+        for (let j = 0; j < k; j++) {
+          const row = sd.rows[j];
+          const wx = x0 + (right ? row.r - 0.5 : row.l + 0.5);
+          const at2 = (j * n + i) * 2;
+          pos[at2] = cam.ox + (wx - cam.fx) * q.s;
+          pos[at2 + 1] = q.y - (foot - top - row.y) * q.s;
+        }
+      }
+      m.geometry.getBuffer("aPosition").update();
+    });
+  }
+
+  private footOfPlaced(p: Placed): number {
+    return this.feet.get(p.sprite!) ?? p.sprite!.zIndex;
   }
 
   /**
@@ -1221,7 +1783,7 @@ export class Scene {
   /** One face of a wall box: `at` gives each corner's ground point and height. */
   private layFace(m: MeshPlane, at: (u: number, v: number) => [number, number, number], cam: ReturnType<Scene["camera"]>, n = WALL_VERTS) {
     const pos = m.geometry.positions;
-    const limit = cam.fy + (cam.d * (1 - NEAR)) / COS - 1;
+    const limit = cam.fy + (cam.d * (1 - NEAR)) / cam.cos - 1;
     let k = 0;
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
@@ -1333,6 +1895,7 @@ export class Scene {
       this.bowlFaces = faces;
     }
     for (const f of this.bowlFaces) {
+      f.m.alpha = this.cine > 0 ? this.farFade(p.sprite, f.foot, cam) : 1;
       f.m.zIndex = f.foot;
       this.layFace(f.m, f.at, cam, f.n);
     }
@@ -1360,7 +1923,11 @@ export class Scene {
     const y1 = c.position.y;
     const y0 = y1 - TILE;
     const h = face.height;
-    for (const m of box) m.zIndex = c.zIndex;
+    const fade = this.boxFade(c, x0, x1, y1, h, cam);
+    for (const m of box) {
+      m.zIndex = c.zIndex;
+      m.alpha = fade;
+    }
     west.visible = east.visible = false;
     const side = (m: MeshPlane, x: number) => this.layFace(m, (u, v) => [x, y0 + TILE * u, h * (1 - v)], cam);
     if (cam.fx < x0) side(west, x0);
@@ -1378,6 +1945,13 @@ export class Scene {
         this.wallBoxes.delete(c);
       }
     }
+    for (const map of [this.skirts, this.runs] as Map<Container, MeshPlane[]>[]) {
+      for (const [c, ms] of map) {
+        if (!c.destroyed && c.parent) continue;
+        for (const m of ms) m.destroy();
+        map.delete(c);
+      }
+    }
     for (const [c, l] of this.laid) {
       if (c.destroyed || !c.parent) {
         l.mesh.destroy();
@@ -1391,8 +1965,8 @@ export class Scene {
   /** Tilts a layer drawn in world coordinates all at once (exact at your feet, close enough around). */
   private placeWhole(c: Container, cam: ReturnType<Scene["camera"]>) {
     this.save(c);
-    c.position.set(cam.ox + (c.position.x - cam.fx) * cam.z, cam.oy + (c.position.y - cam.fy) * cam.z * SIN);
-    c.scale.set(c.scale.x * cam.z, c.scale.y * cam.z * SIN);
+    c.position.set(cam.ox + (c.position.x - cam.fx) * cam.z, cam.oy + (c.position.y - cam.fy) * cam.z * cam.sin);
+    c.scale.set(c.scale.x * cam.z, c.scale.y * cam.z * cam.sin);
   }
 
   /** Just before the frame is drawn: everything where the tilted camera sees it. */
@@ -1420,6 +1994,12 @@ export class Scene {
     this.worldAt = { x: w.position.x, y: w.position.y, s: w.scale.x };
     w.position.set(0, 0);
     w.scale.set(1);
+    const now = performance.now();
+    this.frontStep = Math.min(1, (now - this.frontAt) / 260);
+    this.frontAt = now;
+    this.hiders.length = 0;
+    this.sideHiders.length = 0;
+    this.cleared.length = 0;
 
     // The ground, chunk by chunk, in true perspective.
     this.ground.visible = false;
@@ -1432,6 +2012,8 @@ export class Scene {
         c.mesh = groundMesh(g.texture, CHUNK_VERTS);
         this.ground3d.addChild(c.mesh);
       }
+      // (Far off, it fades out into the land, and in as it comes.)
+      c.mesh.alpha = this.cine === 0 ? 1 : 1 - this.cine * (1 - Math.min(1, (now - c.born) / BORN_MS) * Math.max(0, Math.min(1, (104 - (cam.fy - y0) / TILE) / 24)));
       this.layMesh(c.mesh, CHUNK_VERTS, x0, y0, x0 + g.texture.width, y0 + g.texture.height, cam);
     }
 
@@ -1441,10 +2023,20 @@ export class Scene {
     // Big flat things (a carpet, the dance floor, burning sand) are laid in
     // true perspective, as the ground is, so they stay put on it.
     this.pruneLaid();
+    // (Which buildings are in your way, before what's on them is drawn.)
+    if (this.cine > 0 && this.open) for (const p of this.skyline) if (p.sprite && SOLID.has(p.o.kind)) this.solidFade(p, this.footOfPlaced(p), cam);
     for (const c of this.flatLayers) if (c.destroyed) this.flatLayers.delete(c);
     for (const c of [...this.sorted.children]) {
       if (c instanceof MeshPlane || this.asIs.has(c)) continue;
+      // (A fence beside a ramp: in front of it seen from its own side, behind it from the other.)
+      const b = this.besides.get(c);
+      if (b) {
+        const z = b.east === cam.fx > b.x ? b.own : b.behind;
+        if (c.zIndex !== z) c.zIndex = z;
+      }
       if (this.flatLayers.has(c)) this.layFlat(c, cam);
+      else if (c instanceof Sprite && fenceRuns.has(c)) this.standFence(c, cam);
+      else if (this.cine > 0 && c instanceof Sprite && hedgeRuns.has(c)) this.standHedge(c, cam);
       else if (c instanceof Sprite && standingWalls.has(c)) this.standWall(c, cam);
       else if (c instanceof Sprite && this.reliefs.has(c)) this.layRelief(c, this.reliefs.get(c)!, cam);
       else if (lying.has(c) && c instanceof Sprite && (Math.abs(c.width) > LAY_TILES * TILE || Math.abs(c.height) > LAY_TILES * TILE)) this.laySprite(c, cam);
@@ -1453,10 +2045,11 @@ export class Scene {
       else this.place(c, this.footOf(c), false, cam);
     }
     this.standBowl(cam);
+    if (this.cine > 0 && this.open) for (const p of this.skyline) if (p.sprite && SOLID.has(p.o.kind) && cam.fy - p.o.y * TILE < (FADE_FROM + FADE_OVER) * TILE) this.standSides(p, cam);
     this.layers3d = this.layers3d.filter((l) => !l.c.destroyed);
     const inLayer = new Set(this.layers3d.map((l) => l.c));
     for (const c of w.children) {
-      if (c === this.ground || c === this.ground3d || c === this.sorted || inLayer.has(c)) continue;
+      if (c === this.ground || c === this.ground3d || c === this.sorted || c === this.sky?.back || c === this.sky?.front || inLayer.has(c)) continue;
       if (this.flatLayers.has(c)) this.layFlat(c, cam);
       else if (c.position.x === 0 && c.position.y === 0) this.placeWhole(c, cam);
       else this.place(c, c.position.y, false, cam);
@@ -1476,14 +2069,27 @@ export class Scene {
         const foot = this.feet.get(k);
         if (this.asIs.has(k)) continue;
         if (this.flatLayers.has(k)) this.layFlat(k, cam);
-        else if (foot !== undefined) this.place(k, foot, false, cam);
-        else if (k.position.x === 0 && k.position.y === 0) this.placeWhole(k, cam);
-        else this.place(k, k.position.y, !stand, cam);
+        else if (foot !== undefined) {
+          this.place(k, foot, false, cam);
+          // (Drawn over the world, out along the ground: the town's houses hide it.)
+          if (this.cine > 0) this.glim(k, foot, cam);
+        } else if (k.position.x === 0 && k.position.y === 0) this.placeWhole(k, cam);
+        else {
+          const y = k.position.y;
+          this.place(k, y, !stand, cam);
+          // (A pool of lamplight far off along the ground, the same, and it fades with distance.)
+          if (this.cine > 0) {
+            k.alpha *= 1 - this.cine * Math.max(0, Math.min(1, (cam.fy - y) / TILE / 12 - 1));
+            this.glim(k, y, cam);
+          }
+        }
       }
     }
 
-    // Outdoors, the far distance fades into haze.
-    if (this.map.streets) {
+    this.cineNow(cam, now);
+    // Outdoors, the far distance fades into haze (the cinematic view has its own air).
+    if (this.haze) this.haze.visible = false;
+    if (this.map.streets && this.cine === 0) {
       this.haze ??= this.makeHaze();
       const { width, height } = this.app.screen;
       this.haze.visible = true;
@@ -1501,6 +2107,7 @@ export class Scene {
       s.c.position.set(s.x, s.y);
       s.c.scale.set(s.sx, s.sy);
       s.c.visible = s.visible;
+      s.c.alpha = s.alpha;
     }
     this.saved.length = 0;
     for (const l of this.laid.values()) {
@@ -1509,9 +2116,236 @@ export class Scene {
     }
     for (const box of this.wallBoxes.values()) for (const m of box) m.visible = false;
     for (const f of this.bowlFaces ?? []) f.m.visible = false;
+    for (const m of this.mist) m.visible = false;
+    for (const ms of this.skirts.values()) for (const m of ms) m.visible = false;
+    for (const ms of this.runs.values()) for (const m of ms) m.visible = false;
+    for (const p of this.skyline) if (p.walls) for (const m of p.walls) m.visible = false;
     this.world.position.set(this.worldAt.x, this.worldAt.y);
     this.world.scale.set(this.worldAt.s);
     this.ground.visible = true;
+  }
+
+  // ---- the cinematic view ----
+
+  /**
+   * How much of something standing at depth `foot`, drawn over this box on
+   * screen, to draw: what's between you and the lens fades away (not what's
+   * beside you, or too short to hide you), and anything right up at the lens.
+   */
+  private frontFade(c: Container, left: number, right: number, top: number, bottom: number, foot: number, cam: ReturnType<Scene["camera"]>): number {
+    let want = 1;
+    const ahead = foot - cam.fy;
+    if (ahead > TILE * 0.4 && !this.asIs.has(c)) {
+      const z = cam.z;
+      const hides = right > cam.ox - 15 * z && left < cam.ox + 15 * z && top < cam.oy - 12 * z && bottom > cam.oy - 40 * z;
+      if (hides) want = bottom - top > 80 * z || right - left > 96 * z ? 0 : FRONT_ALPHA;
+      if (wallTiles.has(c) && !this.open) want = 0.1;
+      const near = (cam.d - ahead * cam.cos) / cam.d;
+      want = Math.min(want, Math.max(0, Math.min(1, (near - 0.1) / 0.16)));
+    }
+    const was = this.fronts.get(c) ?? want;
+    const is = was + (want - was) * this.frontStep;
+    if (is > 0.995 && want === 1) {
+      this.fronts.delete(c);
+      return 1;
+    }
+    this.fronts.set(c, is);
+    return 1 + (is - 1) * this.cine;
+  }
+
+  /** How much of something at depth `foot` to draw: newly come, it fades in; far off, it fades into the distance. */
+  private farFade(c: Container, foot: number, cam: ReturnType<Scene["camera"]>): number {
+    const away = (cam.fy - foot) / TILE;
+    const ramp = (v: number) => Math.max(0, Math.min(1, v));
+    if (this.farSprites.has(c)) return this.cine * ramp((SKY_FAR - away) / SKY_OVER);
+    let f = away > FADE_FROM ? 1 - ramp((away - FADE_FROM) / FADE_OVER) : 1;
+    const born = this.bornAt.get(c);
+    if (born !== undefined) {
+      const age = (this.frontAt - born) / BORN_MS;
+      if (age < 1) f *= ramp(age);
+      else this.bornAt.delete(c);
+    }
+    return 1 + (f - 1) * this.cine;
+  }
+
+  /**
+   * How much of a building to draw: all of it, till it'd stand between you
+   * and the lens (you've gone round behind it); then it clears, by how far
+   * round you've gone (and not all in one go).
+   */
+  private solidFade(p: Placed, foot: number, cam: ReturnType<Scene["camera"]>): number {
+    let want = 1;
+    if (foot > cam.fy + 4) {
+      const x0 = p.o.x * TILE;
+      const x1 = (p.o.x + p.o.w) * TILE;
+      const aside = Math.max(x0 - cam.fx, cam.fx - x1) / TILE;
+      const t = Math.max(0, Math.min(1, (aside - IN_THE_WAY) / (ASIDE - IN_THE_WAY)));
+      want = t * t * (3 - 2 * t);
+    }
+    const was = this.solidNow.get(p);
+    // (Once a frame, however many of its parts ask.)
+    if (was && was.at === this.frontAt) return 1 + (was.v - 1) * this.cine;
+    const v = was ? was.v + (want - was.v) * Math.min(1, this.frontStep * 0.7) : want;
+    this.solidNow.set(p, { v, at: this.frontAt });
+    if (v < 0.99) this.cleared.push({ x0: p.o.x * TILE, x1: (p.o.x + p.o.w) * TILE, back: p.o.y * TILE + 8, foot, v: 1 + (v - 1) * this.cine });
+    return 1 + (v - 1) * this.cine;
+  }
+
+  private solidNow = new WeakMap<Placed, { v: number; at: number }>();
+  /** The buildings cleared (or clearing) out of your way this frame, and how much of each is left: what's on them goes with them. */
+  private cleared: { x0: number; x1: number; back: number; foot: number; v: number }[] = [];
+
+  /** How much of something on a building (its lamps, its smoke) to draw, by how much of the building is. */
+  private onSolid(x: number, foot: number): number {
+    for (const q of this.cleared) if (x > q.x0 && x < q.x1 && foot > q.back && foot < q.foot + 8) return q.v;
+    return 1;
+  }
+
+  /** Whether something standing at depth `foot`, where it's drawn now, is behind one of the big things. */
+  private hidden(c: Container, foot: number, cam: ReturnType<Scene["camera"]>): boolean {
+    const { x, y } = c.position;
+    for (const h of this.hiders) if (h.foot > foot + TILE && x > h.x0 && x < h.x1 && y > h.y0 && y < h.y1) return true;
+    for (const h of this.sideHiders) {
+      if (x <= h.x0 || x >= h.x1) continue;
+      // (Where the wall is, at that point across the screen: further off than that, it's behind it.)
+      const z = (x - cam.ox) / (h.wall - cam.fx);
+      const wy = cam.fy + (cam.d - (cam.d * cam.z) / z) / cam.cos;
+      if (foot > wy - 6) continue;
+      const ground = cam.oy + (wy - cam.fy) * cam.sin * z;
+      if (y < ground + 4 && y > ground - h.h * z) return true;
+    }
+    return false;
+  }
+
+  /** A light drawn over the world: dimmed away as a building comes between it and you, and back as it goes. */
+  private glim(k: Container, foot: number, cam: ReturnType<Scene["camera"]>) {
+    if (!k.visible) return;
+    // (Off the picture: nothing to draw.)
+    if (k.position.x < -400 || k.position.x > cam.ox * 2 + 400) {
+      k.visible = false;
+      return;
+    }
+    const want = this.hidden(k, foot, cam) ? 0 : 1;
+    const was = this.glimmer.get(k) ?? want;
+    const v = was + (want - was) * Math.min(1, this.frontStep * 1.6);
+    this.glimmer.set(k, v);
+    k.alpha *= v;
+    if (v < 0.02) k.visible = false;
+  }
+
+  /** The same for something built up in perspective: its sides and its foot (world px), and how tall. */
+  private boxFade(c: Container, x0: number, x1: number, foot: number, h: number, cam: ReturnType<Scene["camera"]>): number {
+    if (this.cine === 0 || foot <= cam.fy) return 1;
+    const a = this.project(x0, foot, cam);
+    const b = this.project(x1, foot, cam);
+    if (!a || !b) return 1 - this.cine;
+    return this.frontFade(c, a.x, b.x, a.y - h * a.s, a.y, foot, cam);
+  }
+
+  /** The cinematic view's frame: its sky, the mist between things, its lens. */
+  private cineNow(cam: ReturnType<Scene["camera"]>, now: number) {
+    if (this.cine === 0) {
+      this.cineOff();
+      return;
+    }
+    const { width, height } = this.app.screen;
+    const horizon = cam.oy - (cam.d * cam.z * cam.sin) / cam.cos;
+    const open = this.open;
+    if (open) {
+      if (!this.sky) {
+        this.sky = new CineSky();
+        this.world.addChildAt(this.sky.back, 0);
+      }
+      // (In front of it all, whatever's been added since.)
+      if (this.world.children[this.world.children.length - 1] !== this.sky.front) this.world.addChild(this.sky.front);
+      this.sky.back.visible = this.sky.front.visible = true;
+      this.sky.update({
+        w: width,
+        h: height,
+        horizon,
+        on: 1,
+        fx: this.focus.x,
+        fy: this.focus.y,
+        hour: this.air.hour,
+        dark: this.air.dark,
+        air: this.air.kind,
+        wind: this.wind,
+        now,
+        edge: this.project(cam.fx, cam.fy - CINE_FAR * TILE, cam)!.y,
+        at: (x, y, up) => {
+          const p = this.project(x * TILE, y * TILE, cam);
+          return p && { x: p.x, y: p.y - up * p.s, s: p.s };
+        },
+      });
+      this.layMist(cam, horizon);
+    }
+    // The lens: sharp round you, soft in the far distance and right up close.
+    if (settings.quality === "high") {
+      this.lens ??= new CineLens();
+      const k = height / 800;
+      const head = cam.oy - 58 * cam.z;
+      if (open) this.lens.set(horizon - height * 0.1, Math.min(head, horizon + height * 0.2), cam.oy + height * 0.09, height * 1.02, 0.9 * k * this.cine, 4.5 * k * this.cine, 0.6 * this.cine);
+      else this.lens.set(-height * 0.2, head - height * 0.12, cam.oy + height * 0.12, height * 1.05, 2.2 * k * this.cine, 3.5 * k * this.cine, 0.5 * this.cine);
+      if (this.world.filters?.[0] !== this.lens) {
+        this.world.filters = [this.lens];
+        this.world.filterArea = this.app.screen;
+      }
+    } else if (this.world.filters?.length) this.world.filters = [];
+  }
+
+  /**
+   * Mist: sheets of the horizon's colour stood across the land at their
+   * depths, so what's beyond each is paler by it, and what's before it isn't.
+   */
+  private layMist(cam: ReturnType<Scene["camera"]>, horizon: number) {
+    const { width, height } = this.app.screen;
+    if (!this.mist.length) {
+      const cv = document.createElement("canvas");
+      cv.width = 1;
+      cv.height = 128;
+      const g = cv.getContext("2d")!;
+      const grad = g.createLinearGradient(0, 0, 0, 128);
+      grad.addColorStop(0, "rgba(255,255,255,0)");
+      grad.addColorStop(0.38, "rgba(255,255,255,0.55)");
+      grad.addColorStop(0.62, "rgba(255,255,255,1)");
+      grad.addColorStop(0.8, "rgba(255,255,255,0.9)");
+      grad.addColorStop(1, "rgba(255,255,255,0)");
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 1, 128);
+      const tex = Texture.from(cv);
+      tex.source.scaleMode = "linear";
+      for (let i = 0; i < MIST.length; i++) {
+        const m = new Sprite(tex);
+        this.asIs.add(m);
+        this.fxSkip.add(m);
+        this.sorted.addChild(m);
+        this.mist.push(m);
+      }
+    }
+    const sky = skyAt(this.air.hour, this.air.kind);
+    const thick = this.air.kind === "mist" ? 2.4 : this.air.kind === "rain" || this.air.kind === "snow" ? 1.6 : 1;
+    MIST.forEach(([deep, alpha], i) => {
+      const m = this.mist[i];
+      const y = cam.fy - deep * TILE;
+      const p = this.project(cam.fx, y, cam);
+      m.visible = !!p;
+      if (!p) return;
+      const top = horizon - height * 0.16;
+      m.position.set(0, top);
+      m.width = width;
+      // (Its foot fades out a little nearer than it stands: no edge on the grass.)
+      m.height = Math.max(8, p.y - top + (p.y - horizon) * 0.2);
+      m.zIndex = y;
+      m.tint = mix(sky.horizon, sky.mid, 0.38);
+      m.alpha = Math.min(0.75, alpha * thick) * this.cine;
+    });
+  }
+
+  /** Out of it: its sky and lens put away. */
+  private cineOff() {
+    if (this.sky) this.sky.back.visible = this.sky.front.visible = false;
+    for (const m of this.mist) m.visible = false;
+    if (this.lens && this.world.filters?.length) this.world.filters = [];
   }
 
   /** A soft sky-coloured fade from the top of the screen, just over the world. */
@@ -1552,10 +2386,25 @@ export class Scene {
       this.zoom = Math.abs(this.zoomTo - next) < 0.01 ? this.zoomTo : next;
       this.resize();
     }
+    // The camera swoops down into the cinematic view, and back up out of it.
+    const cineTo = this.cinematic ? 1 : 0;
+    const step = Math.min(100, now - this.cineAt) / SWOOP_MS;
+    this.cineAt = now;
+    if (this.locked) {
+      if (this.cine > 0) {
+        this.cine = 0;
+        this.apply3d();
+      }
+    } else if (this.cine !== cineTo) {
+      this.cine = cineTo > this.cine ? Math.min(1, this.cine + step) : Math.max(0, this.cine - step);
+      this.loaded = null;
+      if (this.cine === 0) this.apply3d();
+    }
     const left = this.markerUntil - now;
     this.marker.alpha = left > 0 ? Math.min(1, left / 300) : 0;
     this.marker.visible = left > 0;
     this.stream();
+    this.updateFar(now);
     // Wind: plants on screen lean gently, each a little out of step.
     const v = this.viewRect();
     const t = now / 1000;

@@ -78,7 +78,7 @@ const OBJECTS: Record<string, string> = {
 
 /** Kinds that aren't drawn at all: markers and tiny props. */
 // (`boat_lake` only marks the water the rowboats go on; `boat_moored` sits on it.)
-const HIDDEN = new Set(["spot", "forage", "nook", "grove_slot", "signpost", "postbox", "dept", "shopfront", "boat_lake", "boat_moored", "yard_stand", "yard", "sk_park", "minigolf", "sk_paint", "sk_shop_back"]);
+const HIDDEN = new Set(["spot", "forage", "nook", "grove_slot", "signpost", "postbox", "dept", "shopfront", "boat_lake", "boat_moored", "yard_stand", "yard", "sk_park", "minigolf", "pet_mat", "sk_paint", "sk_shop_back"]);
 
 export function mapImage(map: ZoneMap): HTMLCanvasElement {
   const c = document.createElement("canvas");

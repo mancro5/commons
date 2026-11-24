@@ -46,6 +46,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/activity", post(activity))
         .merge(crate::clubroom::routes())
         .merge(crate::leaderboards::internal_routes())
+        .merge(crate::daily::internal_routes())
+        .merge(crate::pets::internal_routes())
 }
 
 pub(crate) fn service(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
@@ -454,18 +456,18 @@ async fn player_look(
         .player(&player)
         .await?
         .ok_or_else(|| ApiError::bad_request("bad_player", "no such player"))?;
-    let (pet, vehicle, tool, kit) = match uuid::Uuid::parse_str(&player) {
+    let ((pet, pet_skills), vehicle, tool, kit) = match uuid::Uuid::parse_str(&player) {
         Ok(id) => (
             crate::pets::out_with(&state, id).await?,
             crate::vehicles::riding(&state, id).await?,
             crate::goods::tool(&state, id).await?,
             crate::goods::kit(&state, id).await?,
         ),
-        Err(_) => (0, 0, 0, 0),
+        Err(_) => ((0, 0), 0, 0, 0),
     };
     Ok(Json(serde_json::json!({
         "look": p.look, "style": p.style, "pet": pet, "vehicle": vehicle,
-        "tool": tool, "kit": kit,
+        "tool": tool, "kit": kit, "pet_skills": pet_skills,
     })))
 }
 

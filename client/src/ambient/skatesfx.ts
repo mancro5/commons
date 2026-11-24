@@ -91,6 +91,8 @@ const wheels = new NoiseLoop("bandpass", 0.9);
 const wheelsLow = new NoiseLoop("lowpass", 0.7);
 const railGrind = new NoiseLoop("bandpass", 5, [1870, 2930, 4410]);
 const ledgeGrind = new NoiseLoop("bandpass", 1.6);
+/** Urethane sliding sideways over concrete: a hiss with a squeal in it. */
+const powerSlide = new NoiseLoop("bandpass", 2.2, [1580, 2370, 3160]);
 let jointAt = 0;
 
 /**
@@ -98,10 +100,13 @@ let jointAt = 0;
  * the air or down), whether you're grinding (and what), how far you've come
  * (for the joints in the concrete clacking by).
  */
-export function rolling(speed: number, grinding: "" | "rail" | "ledge", travelled: number) {
+export function rolling(speed: number, grinding: "" | "rail" | "ledge", travelled: number, slide = 0) {
   const s = Math.min(1, speed / 420);
+  // A held powerslide (`slide` 0–1: how fast still): the wheels screech across the concrete, the roll under it.
+  if (slide > 0) powerSlide.set(0.1 + slide * 0.16, 1200 + slide * 1100 + Math.random() * 120);
+  else powerSlide.set(0, 0);
   if (speed > 8 && !grinding) {
-    wheels.set(0.05 + s * 0.12, 260 + s * 900);
+    wheels.set((0.05 + s * 0.12) * (slide > 0 ? 0.5 : 1), 260 + s * 900);
     wheelsLow.set(0.06 + s * 0.08, 140 + s * 160);
     // A saw-cut joint every four tiles: clack-clack as the two trucks cross it.
     if (travelled - jointAt > 128) {
@@ -121,6 +126,7 @@ export function rolling(speed: number, grinding: "" | "rail" | "ledge", travelle
 }
 
 export function quiet() {
+  powerSlide.stop();
   wheels.stop();
   wheelsLow.stop();
   railGrind.stop();
@@ -130,6 +136,30 @@ export function quiet() {
 function tick(t: number, k: number) {
   burst(t, 0.03, 0.05 * k, "bandpass", 2100, 1500, 3);
   tone(t, 0.035, 0.03 * k, "sine", 220, 140);
+}
+
+/** Kicked out into a powerslide: the board's tail swung round, the wheels biting and starting to squeal. */
+export function slideKick(k: number) {
+  const t = at(0);
+  burst(t, 0.12, 0.09 + k * 0.06, "bandpass", 900, 2600, 1.4);
+  tone(t, 0.16, 0.05 + k * 0.03, "triangle", 1900, 1350);
+  tone(t, 0.08, 0.08, "sine", 140, 70);
+}
+
+/**
+ * Out of a powerslide: the board snapping straight (a clack and a chirp of
+ * the wheels catching), and, held long enough to shoot out of it (`boost`
+ * px/s), a rising whoosh away, bigger the longer it was held.
+ */
+export function slideOut(boost: number, held: number) {
+  const t = at(0);
+  tone(t, 0.05, 0.1, "square", 420, 260);
+  burst(t, 0.04, 0.08, "highpass", 2200, 2600, 1);
+  if (boost <= 0) return;
+  const k = Math.min(1, held / 2);
+  tone(t + 0.02, 0.09, 0.06, "sine", 1500, 2300);
+  burst(t + 0.03, 0.32 + k * 0.15, 0.06 + k * 0.05, "bandpass", 500, 2400 + k * 1200, 1.6);
+  tone(t + 0.04, 0.26, 0.05 + k * 0.03, "triangle", 260, 520 + k * 200);
 }
 
 /** A push off: the back foot scuffing the concrete. */

@@ -22,6 +22,8 @@ mod home;
 mod labyrinth;
 mod lucky;
 mod paintball;
+mod petduo;
+mod petwalk;
 mod pool;
 mod rps;
 mod skate;
@@ -149,8 +151,13 @@ struct Avatar {
     look: u32,
     /// What it wears from the mall (outfit, hat, accessory, skin codes).
     style: u32,
-    /// The pet out on a walk with it (0: none).
-    pet: u16,
+    /// The pet out on a walk with it (0: none), and its skills (`pet_skill`).
+    pet: u32,
+    pet_skills: u32,
+    /// Its pet at the water (`pet_skill::FISH`, `MAGNET`); walking it's
+    /// done toward its next dig (ms).
+    pet_catch: Option<fishing::PetCatch>,
+    pet_walked: u32,
     /// What it's riding, as saved (`commons_sim::vehicles`; may be a test
     /// ride), and what others see of it here (0: on foot).
     ride: u8,
@@ -326,6 +333,10 @@ pub struct Instance {
     /// Activity of players who left since the last report.
     activity_left: Vec<crate::econ::ActivityRow>,
     next_activity_report: u32,
+    /// When walkers' pets are next checked on (`petwalk`).
+    pet_check_at: u32,
+    /// Games of Treat Catch on (`petduo`).
+    pet_duos: Vec<petduo::Duo>,
     /// When everyone's next told where everyone is, for the map (`MapDots`).
     next_map_dots: u32,
     /// Index of the programme last announced on the big screen.
@@ -459,6 +470,8 @@ impl Instance {
             ball,
             activity_left: Vec::new(),
             next_activity_report: ACTIVITY_EVERY_MS,
+            pet_check_at: 0,
+            pet_duos: Vec::new(),
             next_map_dots: 0,
             screen_index: None,
             owner,
@@ -599,6 +612,9 @@ impl Instance {
             }
             self.screen_tick(now);
             self.fish_tick(now);
+            self.pet_catch_tick(now);
+            self.pet_walk_tick(now);
+            self.pet_duo_tick(now);
             self.rps_tick(now);
             self.pool_tick(now);
             self.bowl_tick(now);
@@ -832,6 +848,9 @@ impl Instance {
             look: claims.look,
             style: claims.style,
             pet: 0,
+            pet_skills: 0,
+            pet_catch: None,
+            pet_walked: 0,
             ride: 0,
             vehicle: 0,
             tool: 0,
@@ -921,6 +940,8 @@ impl Instance {
         self.leave_seat(id);
         self.stop_fishing(id, false);
         self.rps_leave(id);
+        self.golf_duel_leave(id);
+        self.pet_duo_leave(id);
         self.pool_leave(id);
         self.bowl_leave_all(id);
         self.arena_leave(id);
@@ -1000,7 +1021,12 @@ impl Instance {
                 let a = self.avatars.get_mut(&id).unwrap();
                 // Free emotes, or playing with a toy you own.
                 let toy = emote::TOYS.contains(&e) && a.kit & (1 << e) != 0;
-                if !((1..=emote::MAX).contains(&e) || toy) || !a.emote_rl.try_take(now as u64) {
+                // Or a trick from the pet out with you.
+                let trick =
+                    (emote::PET_TRICKS.contains(&e) || emote::PET_CARE.contains(&e)) && a.pet != 0;
+                if !((1..=emote::MAX).contains(&e) || toy || trick)
+                    || !a.emote_rl.try_take(now as u64)
+                {
                     return;
                 }
                 let cell = a.cell;
@@ -1118,6 +1144,30 @@ impl Instance {
             } => self.golf_ball(id, hole, x, y, strokes, state, now),
             ClientMsg::GolfCard { strokes } => self.golf_card(id, strokes),
             ClientMsg::GolfBoardAsk {} => self.golf_board(id),
+            ClientMsg::GolfDuelShot {
+                balls,
+                done,
+                penalty,
+            } => self.golf_duel_shot(id, balls, done, penalty, now),
+            ClientMsg::GolfDuelLeave {} => self.golf_duel_leave(id),
+            ClientMsg::GolfDuelBot {} => self.golf_duel_bot(id),
+            ClientMsg::GolfDuelSeek { on } => self.golf_duel_seek(id, on),
+            ClientMsg::PetGoal { x, y, kind } => {
+                let now = self.clock.now_ms();
+                self.pet_goal(id, x, y, kind, now)
+            }
+            ClientMsg::PetDuoMove { x } => {
+                let now = self.clock.now_ms();
+                self.pet_duo_move(id, x, now)
+            }
+            ClientMsg::PetDuoCatch { treat } => {
+                let now = self.clock.now_ms();
+                self.pet_duo_catch(id, treat, now)
+            }
+            ClientMsg::PetFishHit {} => {
+                let now = self.clock.now_ms();
+                self.pet_fish_hit(id, now)
+            }
             ClientMsg::SkateDuel { join, bot, grinds } => {
                 self.skate_duel(id, join, bot, grinds, now)
             }

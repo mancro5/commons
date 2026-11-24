@@ -628,3 +628,51 @@ describe("riding about", () => {
     expect(h.speed).toBeLessThan(120);
   });
 });
+
+describe("a held powerslide (Shift)", () => {
+  const east: Input = { ...NO_INPUT, x: 1 };
+  const south: Input = { ...NO_INPUT, y: 1 };
+  const rolling = () => {
+    const s = new Skater(park(), 3 * T, 6 * T, steady());
+    s.heading = 0;
+    s.speed = 260;
+    return s;
+  };
+
+  it("kicks the board out sideways and swings you round tighter than a carve, scrubbing speed", () => {
+    const carve = rolling();
+    run(carve, 0.2, south);
+    const slide = rolling();
+    const ev = run(slide, 0.2, { ...south, slide: true });
+    expect(ev.some((e) => e.t === "powerslide" && e.on)).toBe(true);
+    expect(slide.heading).toBeGreaterThan(carve.heading);
+    expect(slide.power?.side).toBe(1);
+    expect(slide.slideYaw).toBeGreaterThan(0.9);
+    expect(slide.speed).toBeLessThan(carve.speed);
+    expect(slide.speed).toBeGreaterThan(150);
+  });
+
+  it("let go: the board snaps straight and shoots you out, a trick in the combo", () => {
+    const s = rolling();
+    run(s, 0.6, { ...east, slide: true });
+    const before = s.speed;
+    const ev = run(s, 0.05, east);
+    const done = ev.find((e) => e.t === "powerslide" && !e.on);
+    expect(done && done.t === "powerslide" && done.boost).toBeGreaterThan(40);
+    expect(s.speed).toBeGreaterThan(before + 30);
+    expect(ev.some((e) => e.t === "trick" && e.name === "Powerslide")).toBe(true);
+    run(s, 0.5, east);
+    expect(Math.abs(s.slideYaw)).toBeLessThan(0.05);
+  });
+
+  it("isn't a slide at a crawl, nor a trick if it's just a flick", () => {
+    const slow = rolling();
+    slow.speed = 50;
+    expect(run(slow, 0.3, { ...NO_INPUT, slide: true }).some((e) => e.t === "powerslide")).toBe(false);
+    const s = rolling();
+    run(s, 0.1, { ...east, slide: true });
+    const ev = run(s, 0.05, east);
+    expect(ev.some((e) => e.t === "trick")).toBe(false);
+    expect(ev.some((e) => e.t === "powerslide" && !e.on && e.boost === 0)).toBe(true);
+  });
+});

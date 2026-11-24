@@ -12,6 +12,9 @@ import type { TileXY } from "./motion";
 import type { Scene } from "./scene";
 
 const FLY_MS = 650;
+/** Yanked out by a pet (`land`): over onto the bank, then flapping about on it, before it's held up. */
+const TOSS_MS = 480;
+const FLAP_MS = 1000;
 const OUT_MS = 350;
 /** A haul of several, held up side by side: how many to a row, and how far apart (px). */
 const HAUL_ROW = 4;
@@ -34,6 +37,10 @@ interface Show {
   color: number;
   /** One of a haul: whose (the rest of it are held up beside it). */
   haul: number | null;
+  /** Yanked out onto the bank first (px), by a pet: tossed there, flapping (then up as ever). */
+  land: { x: number; y: number } | null;
+  /** How long it's on its way there and flapping (0: none of that). */
+  pre: number;
   name: string;
 }
 
@@ -46,7 +53,7 @@ export class CatchShows {
    * A fish (`key`) of `rarity` caught at `water`, landing above wherever
    * `head` says the angler's head is.
    */
-  start(water: TileXY, head: () => { x: number; y: number } | null, key: string, name: string, rarity: number, kind = "fish", title?: string, haul: number | null = null) {
+  start(water: TileXY, head: () => { x: number; y: number } | null, key: string, name: string, rarity: number, kind = "fish", title?: string, haul: number | null = null, land: { x: number; y: number } | null = null) {
     const t = tier(rarity);
     const color = Number.parseInt(t.color.slice(1), 16);
     const root = new Container();
@@ -78,18 +85,23 @@ export class CatchShows {
       const sp = 40 + Math.random() * 60;
       sparks.push({ g, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, born: now });
     }
-    this.shows.push({ root, glow, rays, fish, label, sparks, from, head, start: now, hold: 1800 + rarity * 450 + (haul === null ? 0 : 1200), rarity, color, haul, name: title ?? `${name}\n${t.name}` });
+    this.shows.push({ root, glow, rays, fish, label, sparks, from, head, start: now, hold: 1800 + rarity * 450 + (haul === null ? 0 : 1200), rarity, color, haul, name: title ?? `${name}\n${t.name}`, land, pre: land ? TOSS_MS + FLAP_MS : 0 });
   }
 
   update(now: number) {
     this.shows = this.shows.filter((s) => {
-      const t = now - s.start;
-      const end = FLY_MS + s.hold + OUT_MS;
       const head = s.head();
-      if (t > end || !head) {
+      if (!head || now - s.start > s.pre + FLY_MS + s.hold + OUT_MS) {
         s.root.destroy({ children: true });
         return false;
       }
+      // Yanked out by a pet: over onto the bank first, flapping there.
+      if (s.land && now - s.start < s.pre) {
+        this.onBank(s, s.land, now - s.start, now);
+        return true;
+      }
+      const t = now - s.start - s.pre;
+      const from = s.land ?? s.from;
       // (One of a haul: its place in the rows held up over their head.)
       const haul = s.haul === null ? [] : this.shows.filter((o) => o.haul === s.haul);
       const at = haul.indexOf(s);
@@ -112,8 +124,8 @@ export class CatchShows {
         // Out of the water in an arc, tumbling, growing as it comes.
         const f = t / FLY_MS;
         const e = 1 - (1 - f) * (1 - f);
-        x = s.from.x + (over.x - s.from.x) * e;
-        y = s.from.y + (over.y - s.from.y) * e - Math.sin(f * Math.PI) * 40;
+        x = from.x + (over.x - from.x) * e;
+        y = from.y + (over.y - from.y) * e - Math.sin(f * Math.PI) * 40;
         scale = k + (big - k) * e;
         s.fish.rotation = (1 - f) * Math.PI * 2.5;
       } else if (t < FLY_MS + s.hold) {
@@ -175,8 +187,15 @@ export class CatchShows {
         s.root.addChild(g);
         s.sparks.push({ g, vx: (Math.random() - 0.5) * 30, vy: -20 - Math.random() * 30, born: now });
       }
-      s.sparks = s.sparks.filter((p) => {
-        const age = (now - p.born) / 1000;
+      this.sparkle(s, now);
+      return true;
+    });
+  }
+
+  /** The splash and sparkles, falling and fading. */
+  private sparkle(s: Show, now: number) {
+    s.sparks = s.sparks.filter((p) => {
+      const age = (now - p.born) / 1000;
         if (age > 0.9) {
           p.g.destroy();
           return false;
@@ -184,11 +203,43 @@ export class CatchShows {
         p.g.x += p.vx * (1 / 60);
         p.g.y += (p.vy + age * 160) * (1 / 60);
         p.g.alpha = 1 - age / 0.9;
-        p.g.rotation += 0.1;
-        return true;
-      });
+      p.g.rotation += 0.1;
       return true;
     });
+  }
+
+  /**
+   * Yanked out by a pet (`t` ms in): a toss over its head onto the bank,
+   * a bounce, then flip-flapping there, before it's held up as ever.
+   */
+  private onBank(s: Show, land: { x: number; y: number }, t: number, now: number) {
+    const k = 16 / s.fish.texture.width;
+    s.glow.clear();
+    s.rays.clear();
+    s.label.visible = false;
+    s.root.alpha = 1;
+    s.fish.scale.set(k);
+    if (t < TOSS_MS) {
+      // Out of the water and over, tumbling.
+      const f = t / TOSS_MS;
+      s.fish.position.set(s.from.x + (land.x - s.from.x) * f, s.from.y + (land.y - s.from.y) * f - Math.sin(f * Math.PI) * 26);
+      s.fish.rotation = f * Math.PI * 3;
+    } else {
+      // On the bank: a bounce as it lands, then flapping, little hops, flipping over and back.
+      const h = t - TOSS_MS;
+      const bounce = h < 220 ? Math.sin((h / 220) * Math.PI) * 5 : Math.max(0, Math.sin(h / 95)) * 2.5 * (Math.floor(h / 300) % 2);
+      s.fish.position.set(land.x, land.y - 3 - bounce);
+      s.fish.rotation = Math.floor(h / 110) % 2 ? 0.4 : -0.4;
+      s.fish.scale.set(k * (Math.floor(h / 330) % 2 ? -1 : 1), k);
+      // A drop or two flicked off it now and then.
+      if (Math.random() < 0.08) {
+        const g = new Graphics().circle(0, 0, 1).fill({ color: 0xcfe8ff, alpha: 0.9 });
+        g.position.set(land.x + (Math.random() - 0.5) * 8, land.y - 4);
+        s.root.addChild(g);
+        s.sparks.push({ g, vx: (Math.random() - 0.5) * 50, vy: -40 - Math.random() * 30, born: now });
+      }
+    }
+    this.sparkle(s, now);
   }
 
   destroy() {

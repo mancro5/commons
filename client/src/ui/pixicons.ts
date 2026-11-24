@@ -6,7 +6,9 @@
 // The emoji stays in the text (names still read and compare the same),
 // wrapped in a span the stylesheet paints the picture over (`.px-icon`).
 
-interface Icon {
+import { PET_ICONS } from "./peticons";
+
+export interface Icon {
   /** For its CSS class (`px-<name>`) and what a screen reader says. */
   name: string;
   /** A character a pixel: `.` clear, the rest keys into `colors`. */
@@ -346,6 +348,8 @@ const ICONS: [string, Icon][] = [
   ["\u{1F3C6}", TROPHY],
   ["\u{1F6F9}", SKATEBOARD],
   ["\u{1F6E4}", RAIL],
+  // The pets' (ui/peticons.ts).
+  ...PET_ICONS,
 ];
 
 const BY_CHAR = new Map(ICONS);

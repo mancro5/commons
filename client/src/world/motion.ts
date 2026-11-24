@@ -149,7 +149,7 @@ class Skate {
   }
 }
 
-const pathLen = (m: Motion) => {
+export const pathLen = (m: Motion) => {
   let len = 0;
   for (let i = 1; i < m.path.length; i++) len += segLen(m.path[i - 1], m.path[i]);
   return len;
@@ -186,7 +186,7 @@ const msPerTile = (m: Motion) => 10_000 / Math.max(1, m.speedX10);
 const SPRINT_MS_PER_TILE = 10_000 / SPRINT_SPEED_X10;
 
 /** Tiles covered by `t` (walking, then sprinting once `sprintIn` is up). */
-function distAt(m: Motion, t: number): number {
+export function distAt(m: Motion, t: number): number {
   if (t <= m.t0) return 0;
   const dt = t - m.t0;
   const sk = skateOf(m);

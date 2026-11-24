@@ -6,7 +6,7 @@
 
 use super::{Instance, Pending};
 use crate::econ::{CallError, FishInfo};
-use commons_protocol::{ServerMsg, error_code, fish_event, lure, state};
+use commons_protocol::{ServerMsg, error_code, fish_event, lure, pet_skill, state};
 use commons_sim::TilePos;
 use rand::Rng;
 
@@ -121,6 +121,26 @@ pub(super) struct FishSession {
     diving: bool,
 }
 
+/// An angler's pet at the water (`pet_skill::FISH`, or `MAGNET` at the
+/// magnet), from their first cast there till they walk off (further than
+/// `PET_STAY` from `water`): pulling something out every so often (next
+/// when `due`); or, a rare fish, flopping on the bank till it's hit
+/// enough (`PetFishHit`).
+#[derive(Debug, Clone)]
+pub(super) struct PetCatch {
+    due: u32,
+    water: TilePos,
+    magnet: bool,
+    flop: Option<Flop>,
+}
+
+/// How long after the first cast it pulls something out (ms), and between
+/// one catch and the next after that; and how far (tiles) its angler may
+/// wander from the water before it gives up and follows them.
+const PET_PULL_MS: std::ops::RangeInclusive<u32> = 5_000..=12_000;
+const PET_EVERY_MS: std::ops::RangeInclusive<u32> = 18_000..=32_000;
+pub(super) const PET_STAY: i32 = 6;
+
 #[derive(Debug, Clone)]
 pub(super) struct Flop {
     item: u32,
@@ -139,6 +159,27 @@ pub(crate) fn flop_toughness(rarity: i16) -> (u32, i32) {
         3 => (4, 1),
         4 => (5, 1),
         _ => (5, 2),
+    }
+}
+
+/// The rarest fish a fishing pet can bring up, by its tier: tier I rare,
+/// II epic, III legendary (`pet_skill::FISH`, `FISH2`, `FISH3`).
+pub(super) fn pet_fish_most(skills: u32) -> i16 {
+    if skills & pet_skill::FISH3 != 0 {
+        4
+    } else if skills & pet_skill::FISH2 != 0 {
+        3
+    } else {
+        2
+    }
+}
+
+/// The pet skill for fishing at the magnet (or with a line).
+fn pet_skill_for(magnet: bool) -> u32 {
+    if magnet {
+        pet_skill::MAGNET
+    } else {
+        pet_skill::FISH
     }
 }
 
@@ -463,6 +504,210 @@ impl Instance {
                 item: if magnet { MAGNET_ITEM } else { 0 },
             },
             None,
+        );
+        self.pet_cast(id, target, magnet, now);
+    }
+
+    /// `id` cast (at the magnet, or a line): a pet out with them that's
+    /// learnt to (`pet_skill::FISH`, `MAGNET`) sets to work at the water
+    /// with them (already at it: it carries on, at this water, this way).
+    fn pet_cast(&mut self, id: u32, water: TilePos, magnet: bool, now: u32) {
+        let Some(a) = self.avatars.get_mut(&id) else {
+            return;
+        };
+        if a.pet == 0 || a.pet_skills & pet_skill_for(magnet) == 0 {
+            return;
+        }
+        if let Some(c) = a.pet_catch.as_mut() {
+            c.water = water;
+            c.magnet = magnet;
+            return;
+        }
+        a.pet_catch = Some(PetCatch {
+            due: now + rand::rng().random_range(PET_PULL_MS),
+            water,
+            magnet,
+            flop: None,
+        });
+    }
+
+    /// Pets pulling things out of the water (their angler still at it), and
+    /// their rare catches flopping on the bank (not hit in time: back in).
+    pub(super) fn pet_catch_tick(&mut self, now: u32) {
+        let due: Vec<u32> = self
+            .avatars
+            .values()
+            .filter(|a| a.pet_catch.is_some())
+            .map(|a| a.id)
+            .collect();
+        for id in due {
+            let a = self.avatars.get_mut(&id).unwrap();
+            let cell = a.cell;
+            let c = a.pet_catch.as_ref().unwrap();
+            if let Some(f) = &c.flop {
+                if now > f.until + GRACE_MS {
+                    let at = f.at;
+                    let c = a.pet_catch.as_mut().unwrap();
+                    c.flop = None;
+                    c.due = now + rand::rng().random_range(PET_EVERY_MS);
+                    let msg = ServerMsg::FishEvent {
+                        id,
+                        kind: fish_event::PET_ESCAPED,
+                        x: at.0,
+                        y: at.1,
+                        item: 0,
+                    };
+                    self.broadcast(cell, &msg, None);
+                }
+                continue;
+            }
+            if now < c.due {
+                continue;
+            }
+            // (Walked off from the water, or the pet's gone home: it's done.)
+            if a.pet == 0
+                || a.pet_skills & pet_skill_for(c.magnet) == 0
+                || chebyshev(a.tile, c.water) > PET_STAY
+            {
+                a.pet_catch = None;
+                continue;
+            }
+            let (water, magnet, tile) = (c.water, c.magnet, a.tile);
+            let catalog = self.economy.as_ref().and_then(|e| e.catalog());
+            let Some(c) = catalog else {
+                self.avatars.get_mut(&id).unwrap().pet_catch = None;
+                continue;
+            };
+            // (Fishing, only as rare as its tier lets it bring up; the magnet, as ever.)
+            let skills = self.avatars[&id].pet_skills;
+            let capped: Vec<FishInfo>;
+            let list = if magnet {
+                &c.scrap
+            } else {
+                let most = pet_fish_most(skills);
+                capped = c
+                    .fish
+                    .iter()
+                    .filter(|f| f.rarity <= most)
+                    .cloned()
+                    .collect();
+                &capped
+            };
+            let night = magnet || is_night();
+            let Some(item) = roll_fish_from(list, night, 1.0, 0, rand::rng().random()) else {
+                self.avatars.get_mut(&id).unwrap().pet_catch = None;
+                continue;
+            };
+            let rarity = list.iter().find(|f| f.id == item).map_or(0, |f| f.rarity);
+            let at = self.flop_spot(tile, water, None, 1);
+            let a = self.avatars.get_mut(&id).unwrap();
+            let c = a.pet_catch.as_mut().unwrap();
+            c.due = now + rand::rng().random_range(PET_EVERY_MS);
+            // A rare fish (not a chest; nothing at the magnet flops): hit it to land it.
+            if rarity >= FLOP_FROM && item != TREASURE_ITEM && !magnet {
+                let (need, reach) = flop_toughness(rarity);
+                c.flop = Some(Flop {
+                    item,
+                    at,
+                    until: now + fish_event::FLOP_MS,
+                    hits: 0,
+                    need,
+                    reach,
+                });
+                let msg = ServerMsg::FishEvent {
+                    id,
+                    kind: fish_event::PET_FLOP,
+                    x: at.0,
+                    y: at.1,
+                    item,
+                };
+                self.broadcast(cell, &msg, None);
+                continue;
+            }
+            let msg = ServerMsg::FishEvent {
+                id,
+                kind: fish_event::PET_PULL,
+                x: at.0,
+                y: at.1,
+                item,
+            };
+            self.broadcast(cell, &msg, None);
+            self.pet_grant(id, item);
+        }
+    }
+
+    /// A smack at your pet's catch flopping on the bank: enough and it's yours.
+    pub(super) fn pet_fish_hit(&mut self, id: u32, now: u32) {
+        let Some(a) = self.avatars.get_mut(&id) else {
+            return;
+        };
+        let cell = a.cell;
+        let Some(f) = a.pet_catch.as_mut().and_then(|c| c.flop.as_mut()) else {
+            return;
+        };
+        if now > f.until + GRACE_MS || !a.hit_rl.try_take(now as u64) {
+            return;
+        }
+        f.hits += 1;
+        let (item, at, hits, need, reach) = (f.item, f.at, f.hits, f.need, f.reach);
+        let water = a.pet_catch.as_ref().map_or(at, |c| c.water);
+        let at = if hits < need {
+            let next = self.flop_spot(at, water, Some(at), reach);
+            if let Some(f) = self
+                .avatars
+                .get_mut(&id)
+                .and_then(|a| a.pet_catch.as_mut())
+                .and_then(|c| c.flop.as_mut())
+            {
+                f.at = next;
+            }
+            next
+        } else {
+            at
+        };
+        let kind = if hits >= need {
+            fish_event::PET_CAUGHT
+        } else {
+            fish_event::PET_HIT
+        };
+        let msg = ServerMsg::FishEvent {
+            id,
+            kind,
+            x: at.0,
+            y: at.1,
+            item: if hits >= need { item } else { hits },
+        };
+        self.broadcast(cell, &msg, None);
+        if hits >= need {
+            if let Some(c) = self.avatars.get_mut(&id).unwrap().pet_catch.as_mut() {
+                c.flop = None;
+                c.due = now + rand::rng().random_range(PET_EVERY_MS);
+            }
+            self.pet_grant(id, item);
+        }
+    }
+
+    /// What `id`'s pet brought up is theirs (a chest: its coins).
+    fn pet_grant(&mut self, id: u32, item: u32) {
+        let Some(econ) = self.economy.clone() else {
+            return;
+        };
+        let player = self.avatars[&id].player_id.clone();
+        let (grant, qty) = if item == TREASURE_ITEM {
+            (COIN, TREASURE_COINS)
+        } else {
+            (item, 1)
+        };
+        let key = self.next_key("petfish");
+        self.spawn_call(
+            async move { econ.grant(&player, grant, qty, "pet_fishing", &key).await },
+            move |inst, result| {
+                if let Ok(applied) = result
+                    && inst.avatars.contains_key(&id)
+                {
+                    inst.send_granted(id, &applied);
+                }
+            },
         );
     }
 
@@ -1393,5 +1638,183 @@ mod tests {
         assert_eq!(flop_toughness(3), (4, 1), "epic");
         assert_eq!(flop_toughness(4), (5, 1), "legendary");
         assert_eq!(flop_toughness(5), (5, 2), "mythical: two tiles");
+    }
+
+    #[test]
+    fn a_pet_that_can_fish_pulls_some_out_and_its_rare_ones_flop_till_hit() {
+        let mut inst = pond_instance();
+        let mut a = connect(&mut inst, 1, "angler", (20, 12));
+        place(&mut inst, 1, (5, 4));
+        let cast = |inst: &mut Instance| {
+            inst.stop_fishing(1, false);
+            inst.handle(Cmd::Msg {
+                conn: 1,
+                msg: ClientMsg::FishCast {
+                    x: 5,
+                    y: 6,
+                    magnet: false,
+                },
+            });
+        };
+        // No pet (or one that hasn't learnt it): it never does.
+        for _ in 0..40 {
+            cast(&mut inst);
+            assert!(inst.avatars[&1].pet_catch.is_none());
+        }
+        inst.avatars.get_mut(&1).unwrap().pet = 7;
+        for _ in 0..40 {
+            cast(&mut inst);
+            assert!(inst.avatars[&1].pet_catch.is_none());
+        }
+        // Learnt: from the first cast it's at it too, and keeps at it with the
+        // line in (you still there by the water), till you walk off.
+        inst.avatars.get_mut(&1).unwrap().pet_skills = pet_skill::FISH;
+        cast(&mut inst);
+        assert!(inst.avatars[&1].pet_catch.is_some());
+        inst.stop_fishing(1, false);
+        let now0 = inst.clock.now_ms();
+        let due = inst.avatars[&1].pet_catch.as_ref().unwrap().due;
+        inst.pet_catch_tick(due + 1);
+        let c = inst.avatars[&1]
+            .pet_catch
+            .as_ref()
+            .expect("still at it, line in");
+        assert!(c.due > due, "and on to the next");
+        let tile = inst.avatars[&1].tile;
+        place(&mut inst, 1, (tile.0 + PET_STAY as u16 + 2, tile.1));
+        let due = inst.avatars[&1].pet_catch.as_ref().map_or(now0, |c| c.due);
+        inst.pet_catch_tick(due + 1);
+        assert!(
+            inst.avatars[&1].pet_catch.is_none(),
+            "walked off: it follows"
+        );
+        place(&mut inst, 1, (5, 4));
+        // Its catches: common ones straight out, rare ones flopping till hit
+        // (a tier II pet: the epic ones too).
+        inst.avatars.get_mut(&1).unwrap().pet_skills = pet_skill::FISH | pet_skill::FISH2;
+        let (mut pulled, mut landed) = (0, 0);
+        let mut now = inst.clock.now_ms();
+        for _ in 0..200 {
+            if pulled > 0 && landed > 0 {
+                break;
+            }
+            cast(&mut inst);
+            let a1 = inst.avatars.get_mut(&1).unwrap();
+            a1.pet_catch = Some(PetCatch {
+                due: now,
+                water: (5, 6),
+                magnet: false,
+                flop: None,
+            });
+            inst.pet_catch_tick(now + 1);
+            let flopping = |inst: &Instance| {
+                inst.avatars[&1]
+                    .pet_catch
+                    .as_ref()
+                    .is_some_and(|c| c.flop.is_some())
+            };
+            if !flopping(&inst) {
+                pulled += 1;
+                continue;
+            }
+            // Flopping: hit it till it's landed.
+            for _ in 0..10 {
+                now += 300;
+                inst.pet_fish_hit(1, now);
+                if !flopping(&inst) {
+                    landed += 1;
+                    break;
+                }
+            }
+            now += 1000;
+        }
+        assert!(pulled > 0 && landed > 0, "{pulled} {landed}");
+        inst.flush();
+        a.pump();
+        let kinds: Vec<u8> = a
+            .log
+            .iter()
+            .filter_map(|m| match m {
+                ServerMsg::FishEvent { kind, .. } if *kind >= fish_event::PET_PULL => Some(*kind),
+                _ => None,
+            })
+            .collect();
+        for k in [
+            fish_event::PET_PULL,
+            fish_event::PET_FLOP,
+            fish_event::PET_HIT,
+            fish_event::PET_CAUGHT,
+        ] {
+            assert!(kinds.contains(&k), "{k}: {kinds:?}");
+        }
+        // Its tier caps what it brings up: rare at tier I, epic at II, legendary at III.
+        assert_eq!(pet_fish_most(pet_skill::FISH), 2);
+        assert_eq!(pet_fish_most(pet_skill::FISH | pet_skill::FISH2), 3);
+        assert_eq!(
+            pet_fish_most(pet_skill::FISH | pet_skill::FISH2 | pet_skill::FISH3),
+            4
+        );
+        // A tier I pet: nothing rarer than rare, however many it brings up.
+        let fish = inst
+            .economy
+            .as_ref()
+            .unwrap()
+            .catalog()
+            .unwrap()
+            .fish
+            .clone();
+        let rarity = |item: u32| fish.iter().find(|f| f.id == item).map_or(0, |f| f.rarity);
+        inst.flush();
+        a.pump();
+        a.log.clear();
+        inst.avatars.get_mut(&1).unwrap().pet_skills = pet_skill::FISH;
+        for _ in 0..150 {
+            cast(&mut inst);
+            inst.avatars.get_mut(&1).unwrap().pet_catch = Some(PetCatch {
+                due: now,
+                water: (5, 6),
+                magnet: false,
+                flop: None,
+            });
+            inst.pet_catch_tick(now + 1);
+            now += 50;
+        }
+        inst.flush();
+        a.pump();
+        let caught: Vec<u32> = a
+            .log
+            .iter()
+            .filter_map(|m| match m {
+                ServerMsg::FishEvent { kind, item, .. }
+                    if *kind == fish_event::PET_PULL || *kind == fish_event::PET_FLOP =>
+                {
+                    Some(*item)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(caught.len() > 50, "{}", caught.len());
+        assert!(caught.iter().all(|&i| rarity(i) <= 2), "{caught:?}");
+        // Not hit at all: back in it jumps.
+        inst.avatars.get_mut(&1).unwrap().pet_catch = Some(PetCatch {
+            due: 0,
+            water: (5, 6),
+            magnet: false,
+            flop: Some(Flop {
+                item: 2,
+                at: (5, 5),
+                until: now,
+                hits: 0,
+                need: 3,
+                reach: 1,
+            }),
+        });
+        inst.pet_catch_tick(now + GRACE_MS + 1);
+        assert!(
+            inst.avatars[&1]
+                .pet_catch
+                .as_ref()
+                .is_some_and(|c| c.flop.is_none())
+        );
     }
 }
