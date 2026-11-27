@@ -20,6 +20,7 @@
 // the crowd throws gifts in, a disaster strikes (lava, meteors or lions: the
 // spectators' choice), and late in a round the ring of fire closes.
 
+import { GlideDelay } from "../net/glide";
 import { Container, Graphics, Sprite, type Texture } from "pixi.js";
 import * as arenafx from "../ambient/arenafx";
 import * as sfx from "../ambient/sfx";
@@ -190,7 +191,7 @@ const TEAM_CSS = ["#3fa9ff", "#ff4f6a"];
 const BOT_NAMES = ["Maximus", "Brutalia", "Crixus", "Spartaka"];
 /** The bots' looks: gladiators in red and gold, blue, crimson, green. */
 const BOT_LOOKS = [0, 1, 2, 3].map((k) => encodeLook({ hue: [40, 210, 355, 120][k], skin: (k * 3 + 1) % 4, hair: (k * 5 + 3) % 8, hat: k % 2, hatHue: [40, 210, 0, 120][k], style: 0, accessory: 0, outfit: (k % 2) * 2 }));
-/** Others are drawn this far behind the server's clock, to glide between its ticks. */
+/** Others are drawn this far behind the server's clock to start with, to glide between its ticks (then by how the connection is: net/glide.ts). */
 const RENDER_DELAY_MS = 150;
 const MOVE_EVERY_MS = 50;
 const STICK_R = 56;
@@ -609,6 +610,8 @@ export class ArenaShow {
   /** The sand's corner (map tiles), and the walled ring round it. */
   private ox: number;
   private oy: number;
+  /** How far behind the others are drawn. */
+  private behind = new GlideDelay(RENDER_DELAY_MS);
   private arenaObj: MapObject;
   private state: State | null = null;
   private snaps: { t: number; ps: Map<number, { x: number; y: number; aim: number }> }[] = [];
@@ -646,6 +649,9 @@ export class ArenaShow {
   };
   private bots = new Map<number, Avatar>();
   private gear = new Map<number, Graphics>();
+  /** Whether the gear's drawn this frame (far off: one in four), and the count for that. */
+  private gearNow = true;
+  private farTick = 0;
   /** The Goliath's dash: its afterimages, where it's been a moment, when it last dashed. */
   private ghosts = new Map<number, Graphics[]>();
   private giantPath = new Map<number, { x: number; y: number; t: number }[]>();
@@ -741,6 +747,9 @@ export class ArenaShow {
   private parade: { start: number; from: Map<number, { x: number; y: number; face: 1 | -1 }>; order: number[]; cues: Set<string>; acc: number; nextClap: number } | null = null;
   private petals: Petal[] = [];
   private petalsG = new Graphics();
+  /** When the lying petals were last drawn, and whether any of them are fading. */
+  private petalsAt = 0;
+  private petalsFading = false;
   /** Those lying out on the carpet (over it: it is a flat object of its own). */
   private petalsOutG = new Graphics();
   private carpetY = Infinity;
@@ -1387,7 +1396,7 @@ export class ArenaShow {
     const s = this.state;
     const p = this.mine();
     if (s && p) {
-      const at = this.serverNow() - RENDER_DELAY_MS;
+      const at = this.serverNow() - this.behind.ms;
       let best: { a: number; d: number } | null = null;
       for (const q of s.fighters) {
         if (q.id === p.id || q.flags & FLAG.DOWN) continue;
@@ -1571,6 +1580,7 @@ export class ArenaShow {
     const ps = new Map<number, { x: number; y: number; aim: number }>();
     for (const f of s.fighters) ps.set(f.id, { x: f.x / 100, y: f.y / 100, aim: fromU16(f.aim) });
     this.snaps.push({ t: s.now, ps });
+    this.behind.heard(s.now, this.serverNow());
     if (this.snaps.length > 10) this.snaps.shift();
     this.state = s;
     // Ourselves: the server's word when it moved us (a new round, a refused
@@ -2210,10 +2220,11 @@ export class ArenaShow {
     // The amphitheatre's scenery (its fires, Caesar, the gates, the crowd)
     // is only drawn while any of it's in view: off the screen, nobody sees it
     // move, and it picks up where it is when it's back.
-    const v = this.scene.viewRect();
-    const ao = this.arenaObj;
-    const M = 16;
-    const inView = this.capturing || this.watching || (ao.x + ao.w + M > v.x0 && ao.x - M < v.x1 && ao.y + ao.h + M > v.y0 && ao.y - M < v.y1);
+    const ao = this.bowlObj ?? this.arenaObj;
+    const inView = this.capturing || this.watching || this.scene.sees(ao.x - 3, ao.y - 6, ao.x + ao.w + 3, ao.y + ao.h + 4, 8);
+    // (Far off down the cinematic view, the fighters' gear is specks: drawn a quarter as often.)
+    this.gearNow = this.capturing || this.watching || !this.scene.farFrom(ao.x, ao.y, ao.x + ao.w, ao.y + ao.h) || this.farTick++ % 4 === 0;
+    this.shown = inView;
     if (inView) {
       this.drawFires(wallNow, dt);
       this.drawCaesar(wallNow);
@@ -2258,7 +2269,7 @@ export class ArenaShow {
       }
     }
     // The fighters: placed, posed, armed.
-    const at = serverNow - RENDER_DELAY_MS;
+    const at = serverNow - this.behind.ms;
     const seen = new Set<number>();
     const stopped = wallNow < this.stopUntil;
     if (live && s) {
@@ -2278,7 +2289,7 @@ export class ArenaShow {
             this.me.x = m.x;
             this.me.y = m.y;
           }
-          this.paradeGear(f, m, avatar, wallNow);
+          if (this.gearNow) this.paradeGear(f, m, avatar, wallNow);
           continue;
         }
         // (Ourselves: run ahead in the fight; but mid-stomp or held, as the server has us, gliding.)
@@ -2303,7 +2314,7 @@ export class ArenaShow {
         this.held.set(f.id, pos);
         const prev = self ? null : this.glide(f.id, at - 80);
         const moving = self ? Math.hypot(this.me.vx, this.me.vy) > 0.6 : !!prev && Math.hypot(pos.x - prev.x, pos.y - prev.y) > 0.04;
-        const since = serverNow - (s.now - f.actMs) - (self ? 0 : RENDER_DELAY_MS * 0.5);
+        const since = serverNow - (s.now - f.actMs) - (self ? 0 : this.behind.ms * 0.5);
         const pose = this.pose(f, since, serverNow, self);
         const t = this.toTile(pos.x, pos.y);
         const whirl = f.act === ACT.SPIN;
@@ -2323,7 +2334,9 @@ export class ArenaShow {
         avatar.setFade(f.flags & FLAG.DOWN ? 0.7 : 1);
         this.posed.add(f.id);
         // (Their gear, ring and glow: drawn while the ring's in view.)
-        if (inView) this.drawGear(f, pos, since, serverNow, avatar, pose, moving);
+        if (inView) {
+          if (this.gearNow) this.drawGear(f, pos, since, serverNow, avatar, pose, moving);
+        }
         else {
           const gg = this.gear.get(f.id);
           if (gg?.visible) gg.visible = false;
@@ -3360,7 +3373,7 @@ export class ArenaShow {
       this.missiles = [];
       return;
     }
-    const at = this.serverNow() - RENDER_DELAY_MS;
+    const at = this.serverNow() - this.behind.ms;
     this.missiles = this.missiles.filter((m) => {
       const speed = Math.hypot(m.vx, m.vy);
       let todo = speed * dt;
@@ -3551,7 +3564,7 @@ export class ArenaShow {
         snd.claps(near * 0.6);
         if (Math.random() < 0.4) sfx.crowdRoar(near * (0.3 + Math.random() * 0.3));
       }
-      if (c) {
+      if (c && this.shown) {
         // Petals showered down on the champion, more ahead of them: a path to walk.
         const rate = t < GATHER ? 0 : t < SALUTE ? 70 : t < ARRIVE ? 45 : 60;
         pr.acc += rate * dt;
@@ -3590,7 +3603,7 @@ export class ArenaShow {
         }
       }
       // A rain cloud over each of the rest.
-      for (const id of pr.order) {
+      for (const id of this.shown ? pr.order : []) {
         const h = this.held.get(id);
         if (!h) continue;
         const x = Math.round(this.wx(h.x));
@@ -3604,11 +3617,12 @@ export class ArenaShow {
       }
     }
     // The petals: fluttering down, then lying a good while (fading at last).
-    this.petalsG.clear();
-    this.petalsOutG.clear();
     const FADE_AT = 24_000;
+    const before = this.petals.length;
     this.petals = this.petals.filter((p) => !p.landed || wallNow - p.landed < FADE_AT + 3000);
     if (this.petals.length > 900) this.petals.splice(0, this.petals.length - 900);
+    // (Those lying on the sand lie still: drawn again only when one lands or goes, and a few times a second as they fade.)
+    let lay = this.petals.length !== before || this.petalsFading && wallNow - this.petalsAt > 200;
     for (const p of this.petals) {
       if (!p.landed) {
         p.z += p.vz * dt;
@@ -3616,6 +3630,7 @@ export class ArenaShow {
         if (p.z <= 0) {
           p.z = 0;
           p.landed = wallNow;
+          lay = true;
         } else {
           // Turning as it falls: broad, then edge on.
           const w = Math.abs(Math.sin(wallNow / 140 + p.ph)) > 0.5 ? 3 : 1;
@@ -3623,7 +3638,16 @@ export class ArenaShow {
           continue;
         }
       }
+    }
+    if (!lay) return;
+    this.petalsAt = wallNow;
+    this.petalsFading = false;
+    this.petalsG.clear();
+    this.petalsOutG.clear();
+    for (const p of this.petals) {
+      if (!p.landed) continue;
       const age = wallNow - p.landed;
+      if (age >= FADE_AT) this.petalsFading = true;
       const alpha = age < FADE_AT ? 0.95 : Math.max(0, 0.95 * (1 - (age - FADE_AT) / 3000));
       const x = Math.round(this.wx(p.x));
       const y = Math.round(this.wy(p.y));
@@ -3951,7 +3975,11 @@ export class ArenaShow {
     const g = new Graphics();
     g.zIndex = z;
     this.scene.sorted.addChild(g);
-    for (const c of [g, glow, night]) if (c) this.scene.standOn(c, foot);
+    for (const c of [g, glow, night]) {
+      if (!c) continue;
+      this.scene.standOn(c, foot);
+      this.scene.standsOnTop(c, x);
+    }
     this.fires.push({ x, y, glow, night, phase: Math.random() * 10, s, g });
   }
 
@@ -3960,6 +3988,11 @@ export class ArenaShow {
    * tongues of flame licking up off it (white-hot, yellow, orange, red, then
    * smoke), sparks drifting high, and its warm light breathing with it.
    */
+  /** Whether any of the amphitheatre's in view. */
+  private shown = true;
+  private firesAt = 0;
+  private firesDt = 0;
+
   private drawFires(wallNow: number, dt: number) {
     if (!this.fires.length) return;
     // (Only the fires on screen, or nearly: off it they'd be thousands of
@@ -3977,6 +4010,12 @@ export class ArenaShow {
       }
       return;
     }
+    // (Thirty pictures of them a second: pixel flames, no less lively.)
+    this.firesDt += dt;
+    if (wallNow - this.firesAt < 31) return;
+    dt = this.firesDt;
+    this.firesDt = 0;
+    this.firesAt = wallNow;
     this.firesShown = true;
     const t = wallNow / 1000;
     for (const f of this.fires) {

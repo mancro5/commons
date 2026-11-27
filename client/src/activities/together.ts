@@ -19,10 +19,14 @@ export const TOGETHER: Record<number, { icon: string; offer: string; verb: strin
   8: { icon: "⛳", offer: "Golf 1v1", verb: "a 1v1 round of mini golf", done: "play" },
   // Treat Catch (petduo.ts): only with both your pets out on a walk.
   9: { icon: "🐾", offer: "Pet game: Treat Catch", verb: "a game of Treat Catch with your pets", done: "play" },
+  // Bounce Buddies (petbounce.ts): the same.
+  10: { icon: "🐾", offer: "Pet game: Bounce Buddies", verb: "a game of Bounce Buddies with your pets", done: "play" },
 };
 
 /** `together::PET_DUO`: Treat Catch, the two of you and your pets. */
 export const PET_DUO = 9;
+/** `together::PET_BOUNCE`: Bounce Buddies, the same. */
+export const PET_BOUNCE = 10;
 
 /** `together::GOLF`: a mini golf 1v1. */
 export const GOLF = 8;
@@ -56,7 +60,7 @@ export class OfferCard {
     const yes = document.createElement("button");
     yes.type = "button";
     yes.className = "primary-sm";
-    yes.textContent = kind === FOLLOW ? "Sure, come along" : kind === BOAT ? "Climb aboard 🚣" : kind === 1 ? "Hug back" : kind === 2 ? "Slap it ✋" : kind === 6 ? "Let's play ✊" : kind === 8 ? "You're on ⛳" : "Dance!";
+    yes.textContent = kind === FOLLOW ? "Sure, come along" : kind === BOAT ? "Climb aboard 🚣" : kind === 1 ? "Hug back" : kind === 2 ? "Slap it ✋" : kind === 6 ? "Let's play ✊" : kind === 8 ? "You're on ⛳" : kind === PET_DUO || kind === PET_BOUNCE ? "Let's play 🐾" : "Dance!";
     yes.onclick = () => {
       accept();
       this.hide();

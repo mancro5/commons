@@ -2,7 +2,7 @@
 // Do not edit by hand.
 /* eslint-disable */
 
-export const PROTOCOL_VERSION = 66;
+export const PROTOCOL_VERSION = 67;
 export const CELL_TILES = 16;
 
 export class Writer {
@@ -642,6 +642,10 @@ export type ClientMsg =
   | { t: "PetGoal"; x: number; y: number; kind: number }
   | { t: "PetDuoMove"; x: number }
   | { t: "PetDuoCatch"; treat: number }
+  | { t: "PetBounceTap"; n: number; q: number }
+  | { t: "PetBounceAt"; x: number }
+  | { t: "PetBounceStar"; n: number; k: number }
+  | { t: "PetBounceAgain"; on: boolean }
   ;
 
 export function encodeClientMsg(m: ClientMsg): Uint8Array {
@@ -1068,6 +1072,24 @@ export function encodeClientMsg(m: ClientMsg): Uint8Array {
       w.u8(91);
       w.u16(m.treat);
       break;
+    case "PetBounceTap":
+      w.u8(92);
+      w.u16(m.n);
+      w.u8(m.q);
+      break;
+    case "PetBounceAt":
+      w.u8(93);
+      w.u16(m.x);
+      break;
+    case "PetBounceStar":
+      w.u8(94);
+      w.u16(m.n);
+      w.u8(m.k);
+      break;
+    case "PetBounceAgain":
+      w.u8(95);
+      w.bool(m.on);
+      break;
   }
   return w.finish();
 }
@@ -1347,6 +1369,18 @@ export function decodeClientMsg(b: Uint8Array): ClientMsg {
     case 91:
       m = { t: "PetDuoCatch", treat: r.u16() };
       break;
+    case 92:
+      m = { t: "PetBounceTap", n: r.u16(), q: r.u8() };
+      break;
+    case 93:
+      m = { t: "PetBounceAt", x: r.u16() };
+      break;
+    case 94:
+      m = { t: "PetBounceStar", n: r.u16(), k: r.u8() };
+      break;
+    case 95:
+      m = { t: "PetBounceAgain", on: r.bool() };
+      break;
     default:
       throw new Error(`protocol: unknown ClientMsg tag ${tag}`);
   }
@@ -1436,6 +1470,13 @@ export type ServerMsg =
   | { t: "PetDuoMove"; id: number; x: number }
   | { t: "PetDuoCatch"; id: number; treat: number }
   | { t: "PetDuoOver"; score: number; friendship: number; level: number; counted: boolean; xp: number }
+  | { t: "PetBounce"; a: number; b: number; seed: number; start: number; best: number }
+  | { t: "PetBounceTap"; id: number; n: number; q: number }
+  | { t: "PetBounceAt"; id: number; x: number }
+  | { t: "PetBounceStar"; id: number; n: number; k: number; hearts: number }
+  | { t: "PetBounceBeat"; n: number; height: number; hearts: number; combo: number; score: number }
+  | { t: "PetBounceOver"; score: number; bounces: number; height: number; best: number; record: boolean; friendship: number; level: number; counted: boolean; xp: number }
+  | { t: "PetBounceAgain"; id: number; on: boolean }
   ;
 
 export function encodeServerMsg(m: ServerMsg): Uint8Array {
@@ -2028,6 +2069,57 @@ export function encodeServerMsg(m: ServerMsg): Uint8Array {
       w.bool(m.counted);
       w.u16(m.xp);
       break;
+    case "PetBounce":
+      w.u8(83);
+      w.u32(m.a);
+      w.u32(m.b);
+      w.u32(m.seed);
+      w.u32(m.start);
+      w.u32(m.best);
+      break;
+    case "PetBounceTap":
+      w.u8(84);
+      w.u32(m.id);
+      w.u16(m.n);
+      w.u8(m.q);
+      break;
+    case "PetBounceAt":
+      w.u8(85);
+      w.u32(m.id);
+      w.u16(m.x);
+      break;
+    case "PetBounceStar":
+      w.u8(86);
+      w.u32(m.id);
+      w.u16(m.n);
+      w.u8(m.k);
+      w.u8(m.hearts);
+      break;
+    case "PetBounceBeat":
+      w.u8(87);
+      w.u16(m.n);
+      w.u16(m.height);
+      w.u8(m.hearts);
+      w.u16(m.combo);
+      w.u32(m.score);
+      break;
+    case "PetBounceOver":
+      w.u8(88);
+      w.u32(m.score);
+      w.u16(m.bounces);
+      w.u16(m.height);
+      w.u32(m.best);
+      w.bool(m.record);
+      w.u16(m.friendship);
+      w.u8(m.level);
+      w.bool(m.counted);
+      w.u16(m.xp);
+      break;
+    case "PetBounceAgain":
+      w.u8(89);
+      w.u32(m.id);
+      w.bool(m.on);
+      break;
   }
   return w.finish();
 }
@@ -2279,6 +2371,27 @@ export function decodeServerMsg(b: Uint8Array): ServerMsg {
       break;
     case 82:
       m = { t: "PetDuoOver", score: r.u16(), friendship: r.u16(), level: r.u8(), counted: r.bool(), xp: r.u16() };
+      break;
+    case 83:
+      m = { t: "PetBounce", a: r.u32(), b: r.u32(), seed: r.u32(), start: r.u32(), best: r.u32() };
+      break;
+    case 84:
+      m = { t: "PetBounceTap", id: r.u32(), n: r.u16(), q: r.u8() };
+      break;
+    case 85:
+      m = { t: "PetBounceAt", id: r.u32(), x: r.u16() };
+      break;
+    case 86:
+      m = { t: "PetBounceStar", id: r.u32(), n: r.u16(), k: r.u8(), hearts: r.u8() };
+      break;
+    case 87:
+      m = { t: "PetBounceBeat", n: r.u16(), height: r.u16(), hearts: r.u8(), combo: r.u16(), score: r.u32() };
+      break;
+    case 88:
+      m = { t: "PetBounceOver", score: r.u32(), bounces: r.u16(), height: r.u16(), best: r.u32(), record: r.bool(), friendship: r.u16(), level: r.u8(), counted: r.bool(), xp: r.u16() };
+      break;
+    case 89:
+      m = { t: "PetBounceAgain", id: r.u32(), on: r.bool() };
       break;
     default:
       throw new Error(`protocol: unknown ServerMsg tag ${tag}`);

@@ -7,6 +7,9 @@
 //   node scripts/dev.mjs --bots 50  # more bots
 //   node scripts/dev.mjs --bots 0   # nobody but you
 //   node scripts/dev.mjs --no-voice # without the voice server (no phone calls)
+//   node scripts/dev.mjs --fast     # for playing together: the game built (a fifteenth of the
+//                                   # download, and nobody's game reloads when a file changes;
+//                                   # changes show once it's started again)
 //
 // LiveKit: `livekit-server` from PATH if you have it, else tools/livekit/,
 // where the pinned release is downloaded the first time.
@@ -30,6 +33,7 @@ process.env.COMMONS_GROWTH_STAGE_SECS ??= "60";
 // just on this machine.
 process.env.ZONE_PUBLIC_URL ??= "/ws";
 
+const fast = args.includes("--fast");
 const voice = !args.includes("--no-voice");
 const botsIdx = args.indexOf("--bots");
 const bots = botsIdx >= 0 ? Number(args[botsIdx + 1] ?? 50) : 20;
@@ -62,6 +66,15 @@ function run(tag, cmd, cmdArgs, opts = {}) {
   pipe(child.stderr, process.stderr);
   child.on("exit", (code) => console.log(`${prefix}exited (${code})`));
   children.push(child);
+  // The game's servers ahead of everything else this machine's doing (the
+  // game being played on it, say): a tick's late for everyone.
+  if (path.isAbsolute(cmd) && tag !== "bots" && child.pid) {
+    try {
+      os.setPriority(child.pid, os.constants.priority.PRIORITY_ABOVE_NORMAL);
+    } catch {
+      // not allowed: as it is
+    }
+  }
   return child;
 }
 
@@ -109,7 +122,18 @@ run("api", exe("api"), []);
 run("orch", exe("orchestrator"), []);
 run("zone", exe("zone"), []);
 run("soc", exe("social"), []);
-run("web", "npm", ["run", "dev"], { cwd: path.join(root, "client") });
+if (fast) {
+  console.log("building the game…");
+  // (Built small, but still the dev game: signing in with just a name.)
+  const web = { cwd: path.join(root, "client"), env: { ...process.env, NODE_ENV: "development" } };
+  const built = spawnSync("npx", ["vite", "build", "--mode", "development"], { ...web, stdio: ["ignore", "ignore", "inherit"], shell: process.platform === "win32" });
+  if (built.status !== 0) {
+    console.log("the game didn't build");
+    for (const c of children) c.kill();
+    process.exit(built.status ?? 1);
+  }
+  run("web", "npx", ["vite", "preview"], web);
+} else run("web", "npm", ["run", "dev"], { cwd: path.join(root, "client") });
 if (bots > 0) {
   // Bots join once the zone server answers, however long startup takes.
   const startBots = async () => {

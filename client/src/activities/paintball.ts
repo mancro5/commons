@@ -18,6 +18,7 @@
 // feed, streak calls (Double Splat, On Fire, Shutdown), match point, a
 // countdown, and the results at the end.
 
+import { GlideDelay } from "../net/glide";
 import { Container, Graphics, Sprite, type Texture } from "pixi.js";
 import * as sfx from "../ambient/sfx";
 import type { EntityInfo, ServerMsg } from "../net/protocol.gen";
@@ -533,6 +534,8 @@ export class PaintballShow {
   private ox: number;
   private oy: number;
   private state: State | null = null;
+  /** How far behind the others are drawn. */
+  private behind = new GlideDelay(RENDER_DELAY_MS);
   private snaps: { t: number; ps: Map<number, { x: number; y: number; aim: number }> }[] = [];
   /** Us, run ahead of the server. */
   private me = {
@@ -560,6 +563,8 @@ export class PaintballShow {
   };
   private bots = new Map<number, Avatar>();
   private gear = new Map<number, Gear>();
+  private farTick = 0;
+  private fxDt = 0;
   /** Paint on each player (until they're out). */
   private balls: LiveBall[] = [];
   private particles: Particle[] = [];
@@ -1046,7 +1051,7 @@ export class PaintballShow {
     const s = this.state;
     const p = this.mine();
     if (!s || !p) return raw;
-    const at = this.serverNow() - RENDER_DELAY_MS;
+    const at = this.serverNow() - this.behind.ms;
     let best: { diff: number; d: number } | null = null;
     for (const q of s.players) {
       if (q.team === p.team || q.flags & (FLAG.OUT | FLAG.HIDDEN)) continue;
@@ -1118,6 +1123,7 @@ export class PaintballShow {
     for (const p of s.players) ps.set(p.id, { x: p.x / 100, y: p.y / 100, aim: (p.aim / 65536) * Math.PI * 2 });
     if (!before || before.status !== s.status) this.snaps = [];
     this.snaps.push({ t: s.now, ps });
+    this.behind.heard(s.now, this.serverNow());
     if (this.snaps.length > 10) this.snaps.shift();
     this.state = s;
     // Ourselves: take the server's word when it moved us (respawn, a refused
@@ -1479,10 +1485,14 @@ export class PaintballShow {
         this.bots.set(id, a);
       }
     }
-    // Everyone on the field: placed, posed, geared.
-    const at = serverNow - RENDER_DELAY_MS;
+    // Everyone on the field: placed, posed, geared (their gear, the pads and the rest drawn while the field's in view).
+    const g0 = this.grounds;
+    const inView = !g0 || this.capturing || this.spectating || this.scene.sees(g0.x0 - 2, g0.y0 - 2, g0.x1 + 2, g0.y1 + 2, 6);
+    // (Far off down the cinematic view, the players' gear is specks: drawn a quarter as often.)
+    const gearNow = !g0 || this.capturing || this.spectating || !this.scene.farFrom(g0.x0, g0.y0, g0.x1, g0.y1) || this.farTick++ % 4 === 0;
+    const at = serverNow - this.behind.ms;
     const seen = new Set<number>();
-    this.bars.clear();
+    if (gearNow) this.bars.clear();
     if (live && s) {
       for (const q of s.players) {
         const avatar = this.bots.get(q.id) ?? this.avatarOf(q.id);
@@ -1502,7 +1512,7 @@ export class PaintballShow {
         const myTeam = p?.team ?? -1;
         const fade = out ? 0 : hidden ? (q.team === myTeam ? 0.45 : 0.06) : self && this.field.inHedge(pos.x, pos.y) ? 0.6 : 1;
         avatar.setFade(fade);
-        this.drawGear(q, pos, avatar, out ? 0 : fade, serverNow);
+        if (inView && gearNow) this.drawGear(q, pos, avatar, out ? 0 : fade, serverNow);
       }
     }
     for (const [id, g] of this.gear) {
@@ -1522,9 +1532,19 @@ export class PaintballShow {
     for (const a of this.bots.values()) a.update(serverNow, wallNow);
     this.glows.flush();
     this.flyBalls(dt, s);
-    this.drawFx(wallNow, dt);
-    this.drawPads(wallNow);
-    this.drawObjectives(wallNow);
+    // (The balls and splashes: only while the yard's in view, and far off, a quarter as often.)
+    this.fxDt += dt;
+    if (inView && gearNow) {
+      this.drawFx(wallNow, Math.min(0.1, this.fxDt));
+      this.fxDt = 0;
+    } else if (!inView && this.fxDt < 1) {
+      this.fx.clear();
+      this.fxDt = 1;
+    }
+    if (inView) {
+      this.drawPads(wallNow);
+      this.drawObjectives(wallNow);
+    }
     this.updateHud(serverNow, wallNow);
     this.updateSpec();
   }
@@ -1837,7 +1857,7 @@ export class PaintballShow {
       return;
     }
     const me = this.selfId();
-    const at = this.serverNow() - RENDER_DELAY_MS;
+    const at = this.serverNow() - this.behind.ms;
     // Where each player is drawn (to stop balls on them, for the look; the server says if it counts).
     const bodies = s.players
       .filter((p) => !(p.flags & (FLAG.OUT | FLAG.DASHING)))
@@ -2102,7 +2122,7 @@ export class PaintballShow {
     void this.vignette.offsetWidth;
     this.vignette.classList.add("hit");
     // An arrow at the screen's edge toward where it came from.
-    const src = this.glide(by, this.serverNow() - RENDER_DELAY_MS);
+    const src = this.glide(by, this.serverNow() - this.behind.ms);
     const ang = Math.atan2(src.y - y, src.x - x);
     this.dirEl.style.setProperty("--a", `${ang}rad`);
     this.dirEl.style.setProperty("--c", this.cssOf(by));

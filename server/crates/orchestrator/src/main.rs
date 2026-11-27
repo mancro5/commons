@@ -9,6 +9,7 @@
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
+use axum::serve::ListenerExt;
 use axum::{Json, Router};
 use commons_common::token::{self, AccessClaims, JOIN_TTL_SECS, JoinClaims, ServiceClaims};
 use commons_common::{config, telemetry};
@@ -333,7 +334,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/join", post(join))
         .with_state(state)
         .merge(telemetry::routes(prom));
-    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    // (Small messages go out at once, not held back to be sent together.)
+    let listener = tokio::net::TcpListener::bind(&bind).await?.tap_io(|tcp| {
+        let _ = tcp.set_nodelay(true);
+    });
     tracing::info!(%bind, "orchestrator listening");
     axum::serve(listener, app).await?;
     Ok(())

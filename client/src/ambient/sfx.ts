@@ -183,9 +183,18 @@ export function mode(d: Float32Array, sr: number, t0: number, hz: number, tau: n
   const start = Math.floor(t0 * sr);
   const end = Math.min(d.length, start + Math.floor(tau * 7 * sr));
   const ph = Math.random() * Math.PI * 2;
+  // (A phasor turning and shrinking a step a sample: the same decaying sine,
+  // without working out a sine and an exponential for every one.)
+  const w = (2 * Math.PI * hz) / sr;
+  const k = Math.exp(-1 / (tau * sr));
+  const [c, n] = [Math.cos(w) * k, Math.sin(w) * k];
+  let x = Math.cos(ph) * amp;
+  let y = Math.sin(ph) * amp;
   for (let i = start; i < end; i++) {
-    const t = (i - start) / sr;
-    d[i] += amp * Math.exp(-t / tau) * Math.sin(ph + 2 * Math.PI * hz * t);
+    d[i] += y;
+    const q = x * c - y * n;
+    y = x * n + y * c;
+    x = q;
   }
 }
 
@@ -201,21 +210,45 @@ export function hit(d: Float32Array, sr: number, t0: number, tau: number, amp: n
   const bright = tone > 0.5;
   const k = bright ? 0.02 + (tone - 0.5) * 0.8 : 0.03 + tone * 0.4;
   let lp = 0;
+  let e = amp;
+  const fall = Math.exp(-1 / (sr * tau));
   for (let i = start; i < end; i++) {
     const n = Math.random() * 2 - 1;
     lp += k * (n - lp);
     const s = bright ? n - lp : lp * 2;
-    d[i] += amp * Math.exp(-(i - start) / sr / tau) * s;
+    d[i] += e * s;
+    e *= fall;
   }
 }
 
-/** A few variants of each sound, rendered once on first use. */
+/**
+ * A few variants of each sound: the first made when it's first played, the
+ * rest one at a time when there's a moment (all at once, in the middle of a
+ * fight, was a hitch).
+ */
 const variants = new Map<string, AudioBuffer[]>();
+/** Things to make when there's a moment, one at a time. */
+const todo: (() => void)[] = [];
+let doing = false;
+function later(f: () => void) {
+  todo.push(f);
+  if (doing) return;
+  doing = true;
+  const idle = (g: () => void) => (typeof requestIdleCallback === "function" ? requestIdleCallback(g, { timeout: 1500 }) : window.setTimeout(g, 60));
+  const step = () => {
+    todo.shift()?.();
+    if (todo.length) idle(step);
+    else doing = false;
+  };
+  idle(step);
+}
+
 export function pick(key: string, make: () => AudioBuffer, n = 4): AudioBuffer {
   let v = variants.get(key);
   if (!v) {
-    v = Array.from({ length: n }, make);
-    variants.set(key, v);
+    const list = (v = [make()]);
+    variants.set(key, list);
+    for (let i = 1; i < n; i++) later(() => list.push(make()));
   }
   return v[Math.floor(Math.random() * v.length)];
 }

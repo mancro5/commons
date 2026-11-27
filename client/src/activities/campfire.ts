@@ -54,6 +54,10 @@ export class Campfire {
 
   /** Animates the flames; shows the question while you sit by the fire. */
   update(wallNow: number, seatedHere: boolean) {
+    this.question(wallNow, seatedHere);
+    // (Thirty pictures a second: pixel flames, no less lively.)
+    if (wallNow - this.drawnAt < 31) return;
+    this.drawnAt = wallNow;
     const g = this.flames.clear();
     const t = wallNow / 90;
     const glow = 0.9 + Math.sin(wallNow / 160) * 0.1;
@@ -68,7 +72,12 @@ export class Campfire {
     }
     const spark = Math.floor(wallNow / 250) % 6;
     g.rect(-3 + spark * 2, -18 - spark * 3, 1, 1).fill(0xffe39a);
+  }
 
+  private drawnAt = 0;
+
+  /** The question on its card, while you sit by the fire. */
+  private question(_now: number, seatedHere: boolean) {
     if (!seatedHere) {
       if (!this.card.hidden) this.card.hidden = true;
       return;

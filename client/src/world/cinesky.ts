@@ -8,6 +8,7 @@
 
 import { Container, Graphics, Sprite, Texture, TilingSprite } from "pixi.js";
 import { hash } from "./art";
+import { GLOW } from "./cinelens";
 
 export type Air = "clear" | "cloudy" | "rain" | "mist" | "snow";
 
@@ -235,11 +236,12 @@ function moon(): Texture {
 }
 
 const RIDGES: { make: () => Texture; base: number; air: number; slide: number; scale: number; /** Where it stands, from the horizon (0) to where the land's drawn from (1). */ foot: number }[] = [
+  // (All of it beyond the furthest building there is to see: nothing stands lower on the picture than what's behind it.)
   // (Furthest first: how much of the air's colour is over it, and how little it slides as you walk.)
-  { make: peaks, base: 0x86ace0, air: 0.42, slide: 0.9, scale: 0.9, foot: 0.12 },
-  { make: () => hills(83, 34, 0), base: 0x6ea4bd, air: 0.45, slide: 2, scale: 0.9, foot: 0.3 },
-  { make: () => hills(91, 22, 3), base: 0x5f9a7c, air: 0.34, slide: 3.6, scale: 0.8, foot: 0.62 },
-  { make: treeline, base: 0x5f9a55, air: 0.3, slide: 7, scale: 0.75, foot: 1.12 },
+  { make: peaks, base: 0x86ace0, air: 0.42, slide: 0.9, scale: 0.9, foot: 0.1 },
+  { make: () => hills(83, 34, 0), base: 0x6ea4bd, air: 0.45, slide: 2, scale: 0.9, foot: 0.22 },
+  { make: () => hills(91, 22, 3), base: 0x5f9a7c, air: 0.34, slide: 3.6, scale: 0.8, foot: 0.33 },
+  { make: treeline, base: 0x5f9a55, air: 0.3, slide: 7, scale: 0.75, foot: 0.45 },
 ];
 
 interface Mote {
@@ -290,7 +292,8 @@ export class CineSky {
   private shafts: Sprite[] = [];
   private motes: Mote[] = [];
 
-  constructor() {
+  /** `glows`: the renderer knows the glows' blend (cinelens.ts). */
+  constructor(glows = false) {
     this.gradCv = canvas(1, 256);
     const gt = Texture.from(this.gradCv[0]);
     gt.source.scaleMode = "linear";
@@ -331,14 +334,14 @@ export class CineSky {
     for (let i = 0; i < 5; i++) {
       const s = new Sprite(st);
       s.anchor.set(0.5, 0);
-      s.blendMode = "add";
+      s.blendMode = glows ? GLOW : "add";
       this.front.addChild(s);
       this.shafts.push(s);
     }
     for (let i = 0; i < 46; i++) {
       const s = new Sprite(this.glowTex);
       s.anchor.set(0.5);
-      s.blendMode = "add";
+      s.blendMode = glows ? GLOW : "add";
       this.front.addChild(s);
       this.motes.push({ s, x: (hash(i, 1, 63) % 1000) / 1000, y: (hash(i, 2, 63) % 1000) / 1000, h: (hash(i, 3, 63) % 1000) / 1000, seed: hash(i, 4, 63) % 1000 });
     }

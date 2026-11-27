@@ -46,6 +46,7 @@ export class FountainFx {
   private water: Sprite;
   /** The fountain's box in world pixels (with its overhang): to skip it out of view. */
   private box: { x0: number; y0: number; x1: number; y1: number };
+  private drawnAt = 0;
   private glow: Sprite;
   private bowlGlow: Sprite;
   /** Where the still drawing's top-left is, in world pixels. */
@@ -116,6 +117,9 @@ export class FountainFx {
     const seen = b.x1 > v.x0 * TILE && b.x0 < v.x1 * TILE && b.y1 > v.y0 * TILE && b.y0 < v.y1 * TILE;
     if (this.root.visible !== seen) this.root.visible = seen;
     if (!seen) return;
+    // (Thirty pictures of it a second: it's pixels moving a pixel at a time.)
+    if (now - this.drawnAt < 31) return;
+    this.drawnAt = now;
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     const { cx, cy, ix, iy } = this;

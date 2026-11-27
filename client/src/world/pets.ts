@@ -4,6 +4,7 @@
 // the world: walking, sitting, sleeping, blinking, wagging, hopping for
 // joy, drooping when it's sad, and the thought bubble saying what it wants.
 
+import type { Ride } from "./petride";
 import { Container, Graphics, Sprite, type Texture } from "pixi.js";
 import { TILE, toTexture } from "./art";
 import type { TileXY } from "./motion";
@@ -296,7 +297,7 @@ export class PetSprite {
     this.bubble.anchor.set(0, 1);
     this.bubble.position.set(6, -PET_H + 4);
     this.bubble.visible = false;
-    this.view.addChild(this.sparkle, this.fx, this.boardG, this.body, this.bubble);
+    this.view.addChild(this.shade, this.sparkle, this.fx, this.boardG, this.body, this.bubble);
     for (let i = 0; i < 3; i++) {
       const h = new Sprite(heartTexture());
       h.anchor.set(0.5, 1);
@@ -348,9 +349,70 @@ export class PetSprite {
   }
   private yanking: { at: number; ux: number; uy: number } | null = null;
 
+  /** Skating after its walker, the line they rode (world/petride.ts): how, this frame; null: not. */
+  ride: Ride | null = null;
+  /** Come down off a ramp, from this high (px): its walker's client has it heard. */
+  onLand: ((px: number) => void) | null = null;
+  private shade = new Graphics();
+  private puffAt = -1e9;
+
+  /** Skating: on its board, tipped with the ramp it's on, through the airs and the flips and down again. */
+  private drawRide(now: number, r: Ride) {
+    this.lastPos = { ...this.pos };
+    const flying = r.air > 2.5;
+    const c = Math.cos(r.spin);
+    const facing = (c >= 0 ? r.facing : -r.facing) as 1 | -1;
+    this.facing = r.facing;
+    const pose: PetPose = r.bail || r.low || r.grind || r.air > 26 ? "sit" : "stand";
+    if (r.landed > 8) {
+      this.puffAt = now;
+      this.onLand?.(r.landed);
+    }
+    // Squashed a moment as it lands; stretched a little going up.
+    const since = now - this.puffAt;
+    const squash = since < 150 ? 1 - 0.16 * (1 - since / 150) : 1;
+    this.drawBoard(now, r.speed > 14, r.bail);
+    const wag = this.sad || r.bail ? 0 : Math.sin(now / 60);
+    this.body.texture = petTexture(this.code, pose, 0, r.bail ? (this.sad ? "sad" : "blink") : flying || r.speed > 60 ? "happy" : "open", false, wag);
+    // Turned round its wheels on a slope; head over heels, round its middle.
+    const turn = r.tilt + r.flip;
+    const mid = r.flip ? 13 : 0;
+    const fx = -mid * Math.sin(turn);
+    const fy = -mid + mid * Math.cos(turn);
+    const wide = Math.max(0.35, Math.abs(c));
+    this.boardG.position.set(fx, fy);
+    this.boardG.rotation = turn;
+    this.boardG.scale.x = wide;
+    const up = r.bail ? 0 : BOARD_H + (flying ? 1 : r.speed > 14 ? Math.round(Math.max(0, Math.sin(now / 70)) * 0.6) : 0);
+    this.body.anchor.set(0.5, 1);
+    this.body.rotation = turn;
+    this.body.scale.set(facing * wide, squash);
+    this.body.position.set(fx + up * Math.sin(turn), fy - up * Math.cos(turn));
+    this.bubble.visible = false;
+    this.drawSparkle(now);
+    this.drawFishing(now);
+    for (const h of this.hearts) h.visible = false;
+    // Its shadow on whatever's under it, and the dust as it lands.
+    const g = this.shade.clear();
+    const w = Math.max(4, 11 - r.air * 0.05);
+    g.ellipse(0, Math.round(r.air) + 1, w, Math.max(1.2, 2.6 - r.air * 0.012)).fill({ color: 0x000000, alpha: Math.max(0.08, 0.26 - r.air * 0.0018) });
+    if (since < 320) {
+      const k = since / 320;
+      for (const side of [-1, 1]) for (let i = 0; i < 3; i++) g.rect(Math.round(side * (7 + k * (9 + i * 4))), Math.round(r.air - k * (3 + i * 2)), 2, 2).fill({ color: 0xd8d2c4, alpha: 0.8 * (1 - k) });
+    }
+    this.view.position.set(Math.round(r.x), Math.round(r.y - r.z));
+    this.view.zIndex = r.y;
+  }
+
   /** Draws the pet at `pos` this frame. */
   draw(now: number, moving: boolean, sitting = false) {
     if (this.careLook) return this.drawCare(now);
+    if (this.ride) return this.drawRide(now, this.ride);
+    this.shade.clear();
+    this.body.scale.y = 1;
+    this.boardG.scale.x = 1;
+    this.boardG.position.set(0, 0);
+    this.boardG.rotation = 0;
     // Ground covered since the last frame (a jump through a door doesn't count).
     if (this.lastPos) {
       const d = Math.hypot(this.pos.x - this.lastPos.x, this.pos.y - this.lastPos.y) * TILE;
@@ -619,6 +681,8 @@ export class PetSprite {
   private drawCare(now: number) {
     const c = this.careLook!;
     this.boardG.clear();
+    this.shade.clear();
+    this.body.scale.y = 1;
     this.lastPos = { ...this.pos };
     this.body.texture = petTexture(this.code, c.pose, c.phase ?? 0, c.face, false, c.wag ?? 0);
     this.body.scale.x = c.facing;
@@ -707,6 +771,8 @@ export interface FollowWays {
    * to exactly once it's there (and caught up to, after it's been off somewhere).
    */
   heel?: Heel | null;
+  /** Its walker's on their skateboard: where along their line it is (`petride.ts`). */
+  ride?: Ride | null;
 }
 
 export class Follower {
@@ -720,6 +786,10 @@ export class Follower {
   private walkerAt: TileXY | null = null;
   /** At its spot at their heels, keeping to it (as on everyone's screen). */
   private onHeel = false;
+  /** On their line, skating it (caught up to it). */
+  private onLine = false;
+  /** How far off it it was as it got on (px), closing up. */
+  private off = { x: 0, y: 0 };
 
   constructor(code: number, at: TileXY) {
     this.pet = new PetSprite(code, { x: at.x - 1, y: at.y });
@@ -743,6 +813,33 @@ export class Follower {
       this.onHeel = false;
       return;
     }
+    // Skating after them: up the ramps they went up, the same airs (it swings in onto
+    // their line from wherever it was; from right across the park, it's ridden to first).
+    const ride = ways.goal || this.pet.careLook || this.pet.tricking ? null : ways.ride;
+    if (ride) {
+      const to = { x: (ride.x - TILE / 2) / TILE, y: (ride.y - TILE + 4) / TILE };
+      if (this.onLine || Math.hypot(to.x - p.x, to.y - p.y) < 6) {
+        if (!this.onLine) this.off = { x: (p.x - to.x) * TILE, y: (p.y - to.y) * TILE };
+        this.onLine = true;
+        const k = Math.exp(-dt * 3.2);
+        this.off.x *= k;
+        this.off.y *= k;
+        ride.x += this.off.x;
+        ride.y += this.off.y;
+        this.onHeel = false;
+        this.speed = ride.speed / TILE;
+        this.still = now;
+        this.pet.pos = { x: (ride.x - TILE / 2) / TILE, y: (ride.y - TILE + 4) / TILE };
+        this.pet.act = "idle";
+        this.pet.ride = ride;
+        this.pet.board(true, now);
+        this.pet.draw(now, true);
+        return;
+      }
+      ways = { board: true, goal: to };
+    }
+    this.onLine = false;
+    this.pet.ride = null;
     this.pet.board(!!ways.board, now);
     // At its spot at their heels: kept to exactly, as everyone sees it (walking
     // when they walk, dozing off as long after they stopped for all of them).

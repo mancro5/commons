@@ -270,12 +270,16 @@ export function vehicleCanvas(code: number, frame: 0 | 1 = 0): HTMLCanvasElement
 
 const textures = new Map<string, Texture>();
 
+/** The vehicles' pictures (their chrome shines: shinefx.ts). */
+export const vehicleTextures = new WeakSet<Texture>();
+
 export function vehicleTexture(code: number, frame: 0 | 1 = 0): Texture {
   const key = `${code & ~TEST_RIDE}:${frame}`;
   let t = textures.get(key);
   if (!t) {
     t = toTexture(code === BOAT_CAPTAIN ? rowboatCanvas(frame) : vehicleCanvas(code, frame));
     textures.set(key, t);
+    vehicleTextures.add(t);
   }
   return t;
 }

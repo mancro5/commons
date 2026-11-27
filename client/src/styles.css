@@ -11403,6 +11403,78 @@ button.pb-lobby-close {
   margin: 0 auto;
 }
 
+/* Bounce Buddies: how it went, over the game; and the button to ask for one. */
+.petbounce-stage {
+  position: relative;
+}
+.petbounce-canvas {
+  display: block;
+  width: min(100%, calc((100vh - 300px) * 16 / 9)) !important;
+  height: auto !important;
+  margin: 0 auto;
+}
+.petbounce-result {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: max-content;
+  max-width: 92%;
+  height: max-content;
+  margin: auto;
+  padding: 12px 22px 14px;
+  background: #fff9ec;
+  border: 3px solid #3b2f3f;
+  border-radius: 14px;
+  text-align: center;
+}
+.petbounce-result[hidden] {
+  display: none;
+}
+.petbounce-result p {
+  margin: 0;
+}
+.petbounce-result p:empty {
+  display: none;
+}
+.petbounce-line {
+  font-weight: 700;
+}
+.petbounce-line.record {
+  color: #c2541a;
+}
+.petbounce-score {
+  font-size: 40px;
+  line-height: 1;
+  font-weight: 700;
+}
+.petbounce-how,
+.petbounce-friend {
+  font-size: 13px;
+}
+.panel .petbounce-again {
+  margin-top: 6px;
+  padding: 8px 22px;
+  font-size: 17px;
+  font-weight: 700;
+}
+.panel .petbounce-again.ready {
+  animation: petbounce-ready 0.7s ease-in-out infinite alternate;
+}
+@keyframes petbounce-ready {
+  to {
+    transform: scale(1.06);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel .petbounce-again.ready {
+    animation: none;
+  }
+}
+
 /* ---- Pages (ui/pager.ts): a menu too long to fit, a page a section, its
    tabs along the top and ‹ › to step through them, no long scroll. ---- */
 .panel-pages {

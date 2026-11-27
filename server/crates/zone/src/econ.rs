@@ -460,6 +460,29 @@ impl EconomyClient {
             .await
     }
 
+    /// A game of Bounce Buddies between `a`'s pet and `b`'s: their friendship, their reward, their best.
+    pub async fn pet_bounce(
+        &self,
+        a: &str,
+        b: &str,
+        score: u32,
+    ) -> Result<serde_json::Value, CallError> {
+        let body = serde_json::json!({ "a": a, "b": b, "score": score });
+        self.call(reqwest::Method::POST, "/internal/pets/bounce", Some(&body))
+            .await
+    }
+
+    /// The best those two have done together at it.
+    pub async fn pet_bounce_best(&self, a: &str, b: &str) -> Result<serde_json::Value, CallError> {
+        let body = serde_json::json!({ "a": a, "b": b, "score": 0 });
+        self.call(
+            reqwest::Method::POST,
+            "/internal/pets/bounce/best",
+            Some(&body),
+        )
+        .await
+    }
+
     /// A gladiator match won as class `kit`: the day's mission paid, if it's the day's class.
     pub async fn daily_arena(&self, player: &str, kit: u8) -> Result<serde_json::Value, CallError> {
         let body = serde_json::json!({ "player": player, "kit": kit });

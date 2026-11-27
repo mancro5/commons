@@ -13,7 +13,7 @@ pub mod wire;
 pub use wire::{DecodeError, Wire, push_framed, split_frame};
 
 /// Bumped on any incompatible message change.
-pub const PROTOCOL_VERSION: u16 = 66;
+pub const PROTOCOL_VERSION: u16 = 67;
 
 /// Spatial-hash cell size in tiles (spec §3).
 pub const CELL_TILES: u16 = 16;
@@ -352,6 +352,14 @@ message_enum! {
         /// for your partner to see; and you caught treat `treat`.
         90 PetDuoMove { x: u16 }
         91 PetDuoCatch { treat: u16 }
+        /// Bounce Buddies (`PetBounce`): your press for landing `n`, how close to
+        /// it you were (`pet_bounce`: 0 missed, 1 good, 2 great, 3 perfect; `OFF`: not on the plank).
+        92 PetBounceTap { n: u16, q: u8 }
+        /// Your pet's across at `x` (0–1000), up there; caught star `k` of flight `n`.
+        93 PetBounceAt { x: u16 }
+        94 PetBounceStar { n: u16, k: u8 }
+        /// You'd like another game (`on`), or you're done with it.
+        95 PetBounceAgain { on: bool }
     }
 }
 
@@ -596,6 +604,21 @@ message_enum! {
         /// The game's over: the two of you caught `score`; your pets are friends
         /// to `friendship` (level `level`); `counted`: today's games still grow it.
         82 PetDuoOver { score: u16, friendship: u16, level: u8, counted: bool, xp: u16 }
+        /// A game of Bounce Buddies (`together::PET_BOUNCE`), `a` and `b` and their
+        /// pets (`a`'s flies first): its stars from `seed`, from instance time
+        /// `start`; `best` is their best score together.
+        83 PetBounce { a: u32, b: u32, seed: u32, start: u32, best: u32 }
+        /// Your partner's press, steering and star (`PetBounceTap` and so on; `hearts`: left now).
+        84 PetBounceTap { id: u32, n: u16, q: u8 }
+        85 PetBounceAt { id: u32, x: u16 }
+        86 PetBounceStar { id: u32, n: u16, k: u8, hearts: u8 }
+        /// Landing `n`, the two presses put together: how high the next flight
+        /// goes, and how the game stands.
+        87 PetBounceBeat { n: u16, height: u16, hearts: u8, combo: u16, score: u32 }
+        /// It's over: `record` if it beat their best together (`best`, now).
+        88 PetBounceOver { score: u32, bounces: u16, height: u16, best: u32, record: bool, friendship: u16, level: u8, counted: bool, xp: u16 }
+        /// Your partner would like another game, or (`on` not) they're done.
+        89 PetBounceAgain { id: u32, on: bool }
     }
 }
 
@@ -711,7 +734,9 @@ pub mod together {
     pub const GOLF: u8 = 8;
     /// Treat Catch, the two of you and your pets out on a walk (`PetDuo`).
     pub const PET_DUO: u8 = 9;
-    pub const MAX: u8 = PET_DUO;
+    /// Bounce Buddies, the two of you and your pets on a seesaw (`PetBounce`).
+    pub const PET_BOUNCE: u8 = 10;
+    pub const MAX: u8 = PET_BOUNCE;
 }
 
 /// The Lake's rowboats: hired at the boat hire by the pier, rowed by their
@@ -972,6 +997,37 @@ pub mod pet_duo {
     pub const WINDOW_MS: u32 = 1_200;
     /// How many treats there are in a game.
     pub const TREATS: u16 = ((MS - LEAD_MS) / GAP_MS) as u16;
+}
+
+/// Bounce Buddies (`together::PET_BOUNCE`): how long till the first flight,
+/// how long that lasts (ms), each after it `QUICKER_MS` quicker down to
+/// `FLIGHT_MIN_MS`; how high the pets go to start with, and at most (a
+/// tenth of a metre each).
+pub mod pet_bounce {
+    pub const LEAD_MS: u32 = 4_000;
+    pub const FLIGHT_MS: u32 = 1_500;
+    pub const QUICKER_MS: u32 = 12;
+    pub const FLIGHT_MIN_MS: u32 = 900;
+    pub const HEIGHT0: u16 = 70;
+    pub const HEIGHT_MAX: u16 = 9_990;
+    pub const HEARTS: u8 = 3;
+    /// Every so many great landings on end, the points count once more over, up to this.
+    pub const COMBO_STEP: u16 = 4;
+    pub const TIMES_MAX: u16 = 5;
+    /// The stars of a flight, what each is worth; every so many flights, one's a heart.
+    pub const STARS: u8 = 3;
+    pub const STAR_PTS: u16 = 2;
+    pub const HEART_EVERY: u16 = 10;
+    /// `PetBounceTap.q`: came down beside the plank.
+    pub const OFF: u8 = 9;
+    /// A press may come this long before its landing, and is waited for this
+    /// long after; a star counts this far out of its flight (ms).
+    pub const EARLY_MS: u32 = 600;
+    pub const LATE_MS: u32 = 650;
+    pub const SLACK_MS: u32 = 500;
+    /// How long another game can be asked for after one (ms); the most landings in one.
+    pub const AGAIN_MS: u32 = 60_000;
+    pub const BOUNCES_MAX: u16 = 2_000;
 }
 
 /// A pet's skills (`pets.skills`, the API's `pets::SKILLS`), a bit each:

@@ -245,6 +245,9 @@ impl Instance {
         if kind == together::PET_DUO {
             return self.pet_duo_start(from, id, now);
         }
+        if kind == together::PET_BOUNCE {
+            return self.pet_bounce_start(from, id, now);
+        }
         // `from`'s boat: climb aboard.
         if kind == together::BOAT {
             return self.board(from, id, now);

@@ -273,16 +273,16 @@ export function clubObject(o: MapObject): { c: HTMLCanvasElement; overhang: numb
         px(ctx, "#8a6a45", 24, top + 40, w - 48, h - 56);
         px(ctx, "#a07a50", 28, top + 44, w - 56, h - 64);
         for (let x = 24; x <= w - 24; x += 48) {
-          px(ctx, O, x - 2, top + 30, 4, 20);
-          px(ctx, "#c9a46a", x - 1, top + 31, 2, 18);
+          px(ctx, O, x - 2, top + 22, 4, 18);
+          px(ctx, "#c9a46a", x - 1, top + 23, 2, 17);
         }
-        px(ctx, "#f2ead8", 24, top + 34, w - 48, 1);
+        px(ctx, "#f2ead8", 24, top + 26, w - 48, 1);
         for (let i = 0; i < 4; i++) {
           px(ctx, O, 60, ft - 40 - i * 7, 90, 6);
           px(ctx, "#c99a62", 61, ft - 39 - i * 7, 88, 4);
         }
-        px(ctx, O, w / 2 - 3, top + 6, 6, 60);
-        px(ctx, P_WOOD, w / 2 - 2, top + 7, 4, 58);
+        px(ctx, O, w / 2 - 3, top + 6, 6, 34);
+        px(ctx, P_WOOD, w / 2 - 2, top + 7, 4, 33);
         px(ctx, O, w / 2 - 70, top - 30, 140, 40);
         px(ctx, "#fff8e3", w / 2 - 68, top - 28, 136, 36);
         text(ctx, "FOR RENT", w / 2, top - 18, "#8f3a2b", 130, 2);

@@ -827,6 +827,8 @@ export class GolfArt {
     if (entrance) this.arch = this.drawArch(entrance.x, entrance.y);
   }
 
+  private drawnAt = 0;
+
   /** Something stood at its foot (world px). */
   private stand(g: Graphics | Sprite, foot: number) {
     g.zIndex = foot;
@@ -965,7 +967,15 @@ export class GolfArt {
   /** Each frame: the flags wave, the windmill turns, the gates slide (by the shared clock `t`, s). */
   update(t: number, greens: Green[]) {
     const now = performance.now();
+    // (Its flags and sails redrawn thirty times a second: as smooth, half the work.)
+    if (now - this.drawnAt < 31) return;
+    this.drawnAt = now;
+    const me = this.scene.focusTile;
     for (const s of this.stands) {
+      // (Out of view, or far off down the cinematic view where they're specks: it picks up where the clock is when it's back.)
+      const tx = s.ox / TILE;
+      const ty = s.oy / TILE;
+      if (!this.scene.sees(tx - 2, ty - 2, tx + 14, ty + 14, 6) || Math.hypot(tx + 6 - me.x, ty + 6 - me.y) > 44) continue;
       const g = greens[s.hole.n - 1];
       // The flag: a pole and a pennant rippling.
       const lift = s.green.liftAt(...s.hole.cup);

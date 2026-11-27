@@ -14,10 +14,17 @@
 import { type Application, Container, type Filter, Graphics, Matrix, MeshPlane, Rectangle, RenderTexture, Sprite, Texture, UPDATE_PRIORITY } from "pixi.js";
 import { onSettings, settings } from "../settings";
 import { BOWL_BLOCK, bowlArt, bowlGeom, bowlWallBlock } from "./amphitheatre";
-import { TILE, bakeChunk, decorTexture, hash, newTagTexture, objectTexture } from "./art";
+import { TILE, bakeChunk, decorTexture, giantTexture, hash, lampTexture, newTagTexture, objectTexture, warmTrees } from "./art";
+import { bigTrees } from "./bigtrees";
+import { TREE_SWING, treeSwingCanvas } from "./treeart";
+let treeSwingTexture: Texture | null = null;
+import { Grass } from "./grass";
+import { WaterFx } from "./waterfx";
+import { LAND_SHRINK, type Patch, footing, grove, woods } from "./farland";
+import { lampAt } from "./lampart";
 import { RUNS } from "./yardart";
 import type { Relief } from "./skateart";
-import { CineLens } from "./cinelens";
+import { CineLens, LIGHT, learnLight } from "./cinelens";
 import { type Air, CineSky, mix, skyAt } from "./cinesky";
 import { itemTexture } from "./items";
 import { BASIN_WATER } from "./relief";
@@ -62,23 +69,40 @@ const MIST: [number, number][] = [
   [55, 0.18],
   [66, 0.24],
   [86, 0.2],
-  [112, 0.22],
+  [112, 0.24],
+  [132, 0.3],
+  [150, 0.4],
 ];
 /** From how far (tiles) things fade into the distance, and over how many. (Buildings go over to their small copies.) */
 const FADE_FROM = 60;
 const FADE_OVER = 24;
 /** The skyline's small copies: how far (tiles) they're seen, fading over the last of it. */
 const SKY_FAR = 170;
-const SKY_OVER = 40;
+const SKY_OVER = 18;
+/** What a far building stands among comes in from here (tiles), over this; the far woods, as their trees fade; how many of those at once. */
+const FOOT_FROM = 34;
+const FOOT_OVER = 12;
+const WOODS_FROM = 60;
+const WOODS_OVER = 14;
+const WOODS_MAX = 170;
+/** Behind a great tree (in the flat and the 3D view) you're seen through it: how faint it goes. */
+const BEHIND_ALPHA = 0.42;
 /** How long something newly come into range takes to fade in. */
 const BORN_MS = 700;
 /** In the cinematic view, what stands is drawn right up to the lens (it's slid out of the picture by then), not passed over well before it. */
 const CINE_NEAR = 0.06;
-/** A building stood between you and the lens: all there this far (tiles) to one side of you, all gone this near. */
-const ASIDE = 1.15;
-const IN_THE_WAY = 0.35;
+/** A building's side, in this many slices, front to back: each sorts at its own depth. */
+const SLICES = 4;
+/** A building stood between you and the lens: it clears with its edge this near (tiles) to one side of you (nearer the lens, this much further off: it'd be most of the picture), and is back once it's this much more (never left half there). */
+const IN_THE_WAY = 0.42;
+const BY_THE_LENS = 1.7;
+const ASIDE = 0.3;
+/** How long it takes to. */
+const CLEAR_MS = 320;
 /** Little things between you and the lens (a lamp, a bush): how faint they go. (Big ones, and walls, go altogether.) */
 const FRONT_ALPHA = 0.3;
+/** How far off (tiles, in the cinematic view) things still get their shadows, shine and reflections. */
+const FAR_FX = 42;
 /** Lying flat on the ground (a blanket, the dance floor) rather than standing up. */
 const lying = new WeakSet<Container>();
 /**
@@ -134,6 +158,21 @@ const RELIEF_STEP = 4;
 /** How much ground (px) one cell of a laid thing's grid spans. */
 const LAY_STEP = 64;
 
+/** The ground a built-up piece covers (rows, from its own top), and how high it gets. */
+function reliefExtent(r: Relief): { y0: number; y1: number; up: number } {
+  let y0 = 0;
+  let y1 = 1;
+  let up = 0;
+  const [gy, z] = r.edgeGy && r.edgeZ ? [r.edgeGy, r.edgeZ] : [r.gy, r.z];
+  for (let i = 0; i < gy.length; i++) {
+    if (Number.isNaN(gy[i])) continue;
+    if (gy[i] < y0) y0 = gy[i];
+    if (gy[i] > y1) y1 = gy[i];
+    if (z[i] > up) up = z[i];
+  }
+  return { y0, y1, up: up + 8 };
+}
+
 /** A mesh laid on the ground in 3D, `n` vertices a side. */
 function groundMesh(texture: Texture, n: number): MeshPlane {
   const m = new MeshPlane({ texture, verticesX: n, verticesY: n });
@@ -181,6 +220,14 @@ const HEDGE = "#6f8d62";
 const ROOF_DARK = "#17110c";
 /** Part stands and part lies: what's drawn above this many px stands up, the rest is floor. */
 const STANDS_ABOVE: Record<string, number> = { stall: 30 };
+/** A club lot nobody's built on: dug earth, flat, only its stakes and its sign standing (this much of its picture). */
+const LOT_STANDS = 110;
+const emptyLot = (o: MapObject) => o.kind === "club_house" && !o.club;
+/** A building that stands as a solid block, its footprint deep; one that's seen from far off. */
+/** What has fires burning on it (the arena's gates and pillars). */
+const BEARERS = new Set(["arena_gate", "arena_gate_w", "arena_gate_e", "arena_pillar", "arena_court"]);
+const isSolid = (o: MapObject) => SOLID.has(o.kind) && !emptyLot(o);
+const isSkyline = (o: MapObject) => SKYLINE.has(o.kind) && !emptyLot(o);
 const FLAT = new Set(["blanket", "lilypad", "mushrooms", "wildflowers", "daisies", "clover", "pebbles", "bones"]);
 /** Decor that sways in the wind. */
 const SWAY = new Set(["tree", "pine", "apple_tree", "bush", "tallgrass", "reeds", "willow", "willow_curtain", "pine_secret", "fern", "palm", "dry_shrub"]);
@@ -229,11 +276,15 @@ export function setWideZoom(on: boolean) {
   wide = on;
 }
 const ZOOM_KEY = "commons.zoom";
+/** The cinematic view has a zoom of its own: each step this many times nearer, up to so many in. */
+const CINE_ZOOM_KEY = "commons.zoom.cine";
+const CINE_STEP = 1.32;
+const CINE_IN_MOST = 2.5;
 
-function loadZoom(): number {
+function loadZoom(key = ZOOM_KEY): number {
   try {
     // (In quarter steps: the wheel zooms finely.)
-    return Math.round((Number(localStorage.getItem(ZOOM_KEY)) || 0) * 4) / 4;
+    return Math.round((Number(localStorage.getItem(key)) || 0) * 4) / 4;
   } catch {
     return 0;
   }
@@ -252,7 +303,11 @@ interface Chunk {
   /** When it was baked (it fades in, far off). */
   born: number;
   props: Sprite[];
-  sway: { s: Sprite; x: number; y: number; phase: number }[];
+  sway: { s: Sprite; x: number; y: number; phase: number; k: number }[];
+  /** The great trees in it. */
+  big: Sprite[];
+  /** Whether there's water in it (worked out when the water's first wanted). */
+  water?: boolean;
 }
 
 interface Placed {
@@ -273,6 +328,8 @@ interface Placed {
   parts: Texture[];
   /** A building's: its small copy, for far away (cinematic view), and its sides. */
   far: Sprite | null;
+  /** …and what it stands among, from there. */
+  foot: Sprite | null;
   sides: Sides | null | undefined;
   walls: MeshPlane[] | null;
 }
@@ -301,6 +358,10 @@ export class Scene {
    */
   private zoom = loadZoom();
   private zoomTo = this.zoom;
+  private cineZoom = loadZoom(CINE_ZOOM_KEY);
+  private cineZoomTo = this.cineZoom;
+  /** Who the camera was last told to follow. */
+  private followed: TileXY | null = null;
   private locked: { w: number; h: number; flat?: boolean } | null = null;
   private zoomAt = performance.now();
   private cam: TileXY = { x: 0, y: 0 };
@@ -339,6 +400,55 @@ export class Scene {
   private loaded: Range | null = null;
   /** 0 calm … 1 blustery; set by the weather. */
   wind = 0.3;
+  /** The grass (the city's). */
+  grass: Grass | null = null;
+  /** Realistic water (the shaders), made when they're first on. */
+  private water: WaterFx | null | undefined = undefined;
+  private waterShown = false;
+
+  /** The air outdoors now (for what reflects the sky). */
+  get airKind(): Air {
+    return this.air.kind;
+  }
+
+  /** Realistic water, on or off; the hour, how dark, the time. */
+  waterOn(on: boolean, hour: number, dark: number, now: number) {
+    if (on && this.water === undefined) this.water = WaterFx.on(this.map);
+    const w = this.water;
+    if (!w) return;
+    this.waterShown = on;
+    if (on) {
+      // Every stretch of ground with water in it that's loaded (and none that's gone).
+      for (const c of this.chunks.values()) {
+        if (c.water === undefined) c.water = w.has(c.ground.position.x / TILE, c.ground.position.y / TILE, c.ground.texture.width / TILE, c.ground.texture.height / TILE);
+        if (c.water) w.attach(c, c.ground.position.x, c.ground.position.y, c.ground.texture.width, c.ground.texture.height, c.ground.texture, (m) => this.ground.addChild(m));
+      }
+    }
+    const sky = skyAt(hour, this.air.kind);
+    const rgb = (c: number): [number, number, number] => [((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255];
+    // The sun: across from east (-1) to west (1), and how high.
+    const sunX = Math.max(-1, Math.min(1, (hour - 12.5) / 6));
+    const cam = this.view3d ? this.camera() : null;
+    w.update({
+      t: now / 1000,
+      wind: this.wind,
+      sky: rgb(mix(sky.horizon, sky.mid, 0.35)),
+      high: rgb(sky.zenith),
+      sun: Math.max(0, 1 - dark * 1.3) * (this.open ? 1 : 0.3),
+      night: dark,
+      camY: cam ? cam.fy : (this.focus.y + 0.5) * TILE,
+      tilt: this.view3d ? 0.35 + this.cine * 0.65 : 0,
+      sunX,
+      sunUp: 1 - Math.abs(sunX),
+      show: on,
+    });
+  }
+
+  /** In the cinematic view, the first row of a building's picture that's its walls (its roof's laid back); else 0. */
+  wallTop(s: Sprite): number {
+    const p = this.cine > 0.5 && this.open ? this.solidOf.get(s) : undefined;
+    return p?.sides?.split ?? 0;
+  }
   /** No zooming far out (the labyrinth). */
   closeView = false;
   /** The 3D view (⚙️ settings): on, and what it changed this frame. */
@@ -353,16 +463,19 @@ export class Scene {
   private lens: CineLens | null = null;
   private mist: Sprite[] = [];
   /** The air outdoors, for the sky: the light's hour, how dark, the weather. */
-  private air: { hour: number; dark: number; kind: Air } = { hour: 13, dark: 0, kind: "clear" };
+  private air: { hour: number; dark: number; kind: Air; tint: number } = { hour: 13, dark: 0, kind: "clear", tint: 0xffffff };
+  /** The night's lights (daynight.ts); whether the renderer can light the world by depth; the lights as they're drawn in it this frame. */
+  private nightLights: Container | null = null;
+  private canLight = false;
+  private lamps: Sprite[] = [];
+  private lampsUsed = 0;
+  private flames: Graphics[] = [];
+  private flamesUsed = 0;
   /** How faint what's in the lens's way has gone (easing). */
   private fronts = new WeakMap<Container, number>();
   private frontAt = 0;
   private frontStep = 1;
-  /** The big things drawn this frame, where they are on screen, and their depth. */
-  private hiders: { x0: number; x1: number; y0: number; y1: number; foot: number }[] = [];
-  /** Their sides: on screen, which wall (world px across), and how high it is. */
-  private sideHiders: { x0: number; x1: number; wall: number; h: number }[] = [];
-  private glimmer = new WeakMap<Container, number>();
+  private frontMs = 0;
   private ground3d = new Container();
   /** Who the 3D camera looks at (tile), not held back at the map's edge. */
   private focus: TileXY = { x: 0, y: 0 };
@@ -372,6 +485,7 @@ export class Scene {
   private feet = new WeakMap<Container, number>();
   private asIs = new WeakSet<Container>();
   private saved: Saved[] = [];
+  private savedN = 0;
   private worldAt = { x: 0, y: 0, s: 1 };
   /** Where each thing was last drawn in 3D (for tapping an avatar). */
   private drawn3d = new WeakMap<Container, { x: number; y: number; sx: number; sy: number }>();
@@ -407,6 +521,7 @@ export class Scene {
           this.besideRaised.set(at, Math.min(this.besideRaised.get(at) ?? Infinity, o.y * TILE + 0.5));
         }
     }
+    this.canLight = learnLight(app.renderer);
     this.ground3d.visible = false;
     this.world.addChild(this.ground, this.ground3d, this.marker, this.sorted);
     this.flatLayers.add(this.marker);
@@ -422,8 +537,16 @@ export class Scene {
     this.placed = map.objects
       // Drawn elsewhere, or invisible.
       .filter((o) => o.kind !== "grove_slot" && o.kind !== "nook" && o.kind !== "spot" && o.kind !== "sk_park" && o.kind !== "minigolf" && o.kind !== "pet_mat" && o.kind !== "forage" && o.kind !== "arena" && o.kind !== "yard_stand" && o.kind !== "yard" && o.kind !== "pb_grounds" && !(map.name === "Home" && o.kind === "arcade_cabinet") && o.kind !== "boat_lake" && (!o.kind.startsWith("lab_") || o.kind === "lab_exit" || o.kind === "lab_heart"))
-      .map((o) => ({ o, x0: o.x - 1, y0: o.y - 4, x1: o.x + o.w, y1: o.y + o.h, sprite: null, art: null, hiddenAt: 0, parts: [], extras: [], far: null, sides: undefined, walls: null }));
+      .map((o) => ({ o, x0: o.x - 1, y0: o.y - 4, x1: o.x + o.w, y1: o.y + o.h, sprite: null, art: null, hiddenAt: 0, parts: [], extras: [], far: null, foot: null, sides: undefined, walls: null }));
     this.skyline = this.placed.filter((p) => SKYLINE.has(p.o.kind));
+    if (map.streets) {
+      warmTrees(bigTrees(map).values());
+      this.patches = woods(map);
+      this.grass = Grass.on(map, app.renderer, this.sorted, (c) => {
+        this.asIs.add(c);
+        this.fxSkip.add(c);
+      });
+    }
     this.resize();
   }
 
@@ -494,13 +617,27 @@ export class Scene {
     return (y) => (half * Math.max(d * 0.3, d - (y - this.focus.y) * cam.cos)) / d;
   }
 
+  /** A great tree you're behind: seen through, so you don't lose yourself (the cinematic view has its own way). */
+  private seeThrough(big: Sprite[], dt: number) {
+    for (const s of big) {
+      let want = 1;
+      if (this.cine === 0) {
+        const px = (this.focus.x + 0.5) * TILE;
+        const py = (this.focus.y + 1) * TILE;
+        const up = s.position.y - py;
+        if (up > 6 && up < s.texture.height - 4 && Math.abs(px - s.position.x) < s.texture.width * 0.42) want = BEHIND_ALPHA;
+      }
+      if (s.alpha !== want) s.alpha = Math.abs(want - s.alpha) < 0.01 ? want : s.alpha + (want - s.alpha) * Math.min(1, dt * 9);
+    }
+  }
+
   /** Draws a placed object (and what's on show on it). */
   private show(p: (typeof this.placed)[number]) {
     // A fountain: its basin lies on the ground, its pedestal stands in the middle of it.
     const fountain = p.o.kind === "fountain";
     p.art ??= objectTexture(fountain ? { ...p.o, kind: "fountain_basin" } : p.o);
     const { texture, overhang, left } = p.art;
-    const cut = STANDS_ABOVE[p.o.kind];
+    const cut = emptyLot(p.o) ? LOT_STANDS : STANDS_ABOVE[p.o.kind];
     const s = new Sprite(cut ? this.artPart(p, 0, cut) : texture);
     s.position.set(p.o.x * TILE - left, p.o.y * TILE - overhang);
     if (p.art.relief) {
@@ -515,8 +652,9 @@ export class Scene {
     p.sprite = s;
     this.bornAt.set(s, performance.now());
     this.own.add(s);
-    if (SOLID.has(p.o.kind)) this.solidOf.set(s, p);
-    if (SKYLINE.has(p.o.kind)) this.keepFar(p);
+    if (isSolid(p.o)) this.solidOf.set(s, p);
+    if (BEARERS.has(p.o.kind)) this.bearers.set(s, p);
+    if (isSkyline(p.o)) this.keepFar(p);
     // The shop inside the skatepark's van sorts behind its seller, but in 3D stands where the van does.
     if (p.o.kind === "sk_shop_back") this.feet.set(s, (p.o.y + 4) * TILE - 1);
     if (fountain) {
@@ -535,6 +673,10 @@ export class Scene {
       const floor = new Sprite(this.artPart(p, cut, texture.height - cut));
       floor.position.set(s.position.x, s.position.y + cut);
       floor.zIndex = s.zIndex;
+      if (emptyLot(p.o)) {
+        floor.zIndex = p.o.y * TILE + 1;
+        s.zIndex = s.position.y + cut;
+      }
       lying.add(floor);
       this.sorted.addChild(floor);
       p.extras.push(floor);
@@ -584,6 +726,57 @@ export class Scene {
     this.fxSkip.add(s);
     this.sorted.addChild(s);
     p.far = s;
+    // What it stands among: so it's seen to stand there, not to hang in the haze.
+    const at = (p.o.y + p.o.h) * TILE;
+    const q = new Sprite(footing(p.o.w * TILE, hash(p.o.x, p.o.y, 31)));
+    q.anchor.set(0.5, 33 / 40);
+    q.scale.set(LAND_SHRINK);
+    q.position.set((p.o.x + p.o.w / 2) * TILE, at + 2);
+    q.zIndex = at + 0.4;
+    this.keepLand(q, FOOT_FROM, FOOT_OVER);
+    p.foot = q;
+  }
+
+  /** Where each bit of the far land comes in from (tiles), and over how many. */
+  private landFrom = new WeakMap<Container, [number, number]>();
+  private keepLand(s: Sprite, from: number, over: number) {
+    s.visible = false;
+    this.landFrom.set(s, [from, over]);
+    this.farSprites.add(s);
+    this.fxSkip.add(s);
+    this.sorted.addChild(s);
+  }
+
+  /** The map's woods, further off than their trees are drawn, and the pictures of those in sight. */
+  private patches: Patch[] = [];
+  private groves: Sprite[] = [];
+  private grovesAt = "";
+  private updateGroves(on: boolean, wedge: ((y: number) => number) | null) {
+    const key = on && wedge ? `${Math.round(this.focus.x / 2)},${Math.round(this.focus.y / 2)},${Math.round(this.camera().z * 10)}` : "";
+    if (key === this.grovesAt) return;
+    this.grovesAt = key;
+    let n = 0;
+    if (on && wedge) {
+      for (const w of this.patches) {
+        const ahead = this.focus.y - w.y;
+        if (ahead < WOODS_FROM - 4 || ahead > SKY_FAR + 2 || Math.abs(w.x - this.focus.x) > wedge(w.y) + 8) continue;
+        if (n >= WOODS_MAX) break;
+        let s = this.groves[n];
+        if (!s) {
+          s = new Sprite();
+          s.anchor.set(0.5, 39 / 42);
+          this.keepLand(s, WOODS_FROM, WOODS_OVER);
+          this.groves.push(s);
+        }
+        n++;
+        s.texture = grove(w.thick, w.v).texture;
+        s.scale.set(LAND_SHRINK * (w.v & 1 ? -1 : 1), LAND_SHRINK);
+        s.position.set((w.x + 0.5) * TILE, (w.y + 1) * TILE);
+        s.zIndex = (w.y + 1) * TILE;
+        s.visible = true;
+      }
+    }
+    for (let i = n; i < this.groves.length; i++) this.groves[i].visible = false;
   }
 
   /**
@@ -596,14 +789,18 @@ export class Scene {
     let next: Placed | null = null;
     let nextD = Infinity;
     const wedge = on ? this.wedge() : null;
+    this.updateGroves(on, wedge);
     for (const p of this.skyline) {
       const ahead = this.focus.y - (p.o.y + p.o.h);
       const half = wedge ? wedge(p.o.y) + 24 : 0;
+      // (A club lot's built on one day, and let again another.)
+      if (emptyLot(p.o)) continue;
       const seen = on && ahead > 20 && ahead < SKY_FAR && p.x1 > this.focus.x - half && p.x0 < this.focus.x + half;
       if (p.far) {
         const born = p.sprite ? (this.bornAt.get(p.sprite) ?? 0) : Infinity;
         const show = seen && (!p.sprite || ahead > FADE_FROM - 4 || now - born < BORN_MS + 100);
         if (p.far.visible !== show) p.far.visible = show;
+        if (p.foot) p.foot.visible = seen && ahead > FOOT_FROM;
       } else if (on && ahead > 0 && ahead < SKY_FAR) {
         const d = ahead + Math.max(0, Math.abs(p.o.x - this.focus.x) - half) * 2;
         if (d < nextD) {
@@ -642,6 +839,9 @@ export class Scene {
   private dropArt(p: (typeof this.placed)[number]) {
     for (const m of p.walls ?? []) m.destroy();
     p.walls = null;
+    this.roofs.delete(p);
+    this.wallParts.get(p)?.destroy();
+    this.wallParts.delete(p);
     if (p.sides) dropSides(p.sides);
     p.sides = undefined;
     p.art?.texture.destroy(true);
@@ -657,6 +857,8 @@ export class Scene {
     this.dropArt(p);
     p.far?.destroy({ texture: true, textureSource: true });
     p.far = null;
+    p.foot?.destroy();
+    p.foot = null;
     if (shown) this.show(p);
   }
 
@@ -669,12 +871,14 @@ export class Scene {
     const ground = new Sprite(bakeChunk(x0, y0, w, h, (x, y) => groundAt(map, x, y)));
     ground.position.set(x0 * TILE, y0 * TILE);
     this.ground.addChild(ground);
-    const chunk: Chunk = { ground, mesh: null, born: performance.now(), props: [], sway: [] };
+    const chunk: Chunk = { ground, mesh: null, born: performance.now(), props: [], sway: [], big: [] };
+    const giants = bigTrees(map);
     for (let y = y0; y < y0 + h; y++) {
       for (let x = x0; x < x0 + w; x++) {
         const kind = map.decor_legend[map.decor[y * map.width + x]];
         if (kind === "none") continue;
-        const tex = decorTexture(kind === "bench" ? benchPiece(map, x, y) : kind === "bench_v" ? benchVPiece(map, x, y) : RUNS.has(kind) ? fencePiece(map, x, y, kind) : kind, hash(x, y, 5));
+        const great = giants.get(y * map.width + x);
+        const tex = great ? giantTexture(great) : kind === "lamp" ? lampTexture(lampAt(map, x, y)) : decorTexture(kind === "bench" ? benchPiece(map, x, y) : kind === "bench_v" ? benchVPiece(map, x, y) : RUNS.has(kind) ? fencePiece(map, x, y, kind) : kind, hash(x, y, 5));
         if (!tex) continue;
         const s = new Sprite(tex);
         s.anchor.set(0.5, 1);
@@ -705,7 +909,9 @@ export class Scene {
         if (WALLS.has(kind) && wallRun(map, x, y)) standingWalls.set(s, (kind === "home_wall_cap" ? decorTexture("home_wall", hash(x, y, 5)) : tex) ?? tex);
         this.sorted.addChild(s);
         chunk.props.push(s);
-        if (SWAY.has(kind)) chunk.sway.push({ s, x, y, phase: hash(x, y, 13) % 628 });
+        if (SWAY.has(kind)) chunk.sway.push({ s, x, y, phase: hash(x, y, 13) % 628, k: great ? 0.3 : 1 });
+        if (great) chunk.big.push(s);
+        if (great === "swing") this.hangTreeSwing(x, y, chunk);
         if (kind === "swing") this.hangSwing(s, x, y, chunk);
       }
     }
@@ -734,6 +940,21 @@ export class Scene {
     ropes.position.set(x * TILE + TILE / 2, foot - (oak ? 128 : 74));
     this.standOn(ropes, foot);
     this.swings.set(y * this.map.width + x, { ropes, len });
+  }
+
+  /** A great tree's rope swing, hung from its bough east of the trunk at (x, y): sat on at the tile east of it. */
+  private hangTreeSwing(x: number, y: number, chunk: Chunk) {
+    const foot = y * TILE + TILE - 2;
+    treeSwingTexture ??= Texture.from(treeSwingCanvas());
+    treeSwingTexture.source.scaleMode = "nearest";
+    const ropes = new Sprite(treeSwingTexture);
+    ropes.anchor.set(0.5, 0);
+    ropes.position.set(x * TILE + TILE / 2 + TREE_SWING.dx, foot - TREE_SWING.up);
+    ropes.zIndex = foot + 0.1;
+    this.standOn(ropes, foot);
+    this.sorted.addChild(ropes);
+    chunk.props.push(ropes);
+    this.swings.set(y * this.map.width + x + 1, { ropes, len: TREE_SWING.len });
   }
 
   /** The swings, by tile index: what swings, and how far its seat hangs below the pivot. */
@@ -775,9 +996,47 @@ export class Scene {
     this.fxSkip.add(c);
   }
 
+  /** How far back from its feet a building goes (world px; in the tilted views: flat, it's a picture), for its shadow to fall from its back. */
+  depthOf(c: Container): number {
+    const p = this.view3d ? this.solidOf.get(c) : undefined;
+    return p ? p.o.h * TILE - 4 : 0;
+  }
+
   /** Where `c` stands on the ground (world px): its feet, as the 3D view has them. */
   groundOf(c: Container): number {
     return this.footOf(c);
+  }
+
+  /**
+   * Whether tiles (x0, y0)–(x1, y1) are far off down the cinematic view
+   * (`tiles` or more from you): what's there is small enough to be drawn less often.
+   */
+  farFrom(x0: number, y0: number, x1: number, y1: number, tiles = 36): boolean {
+    if (this.cine === 0) return false;
+    const dx = Math.max(x0 - this.focus.x, 0, this.focus.x - x1);
+    const dy = Math.max(y0 - this.focus.y, 0, this.focus.y - y1);
+    return Math.hypot(dx, dy) > tiles;
+  }
+
+  /** Who the camera's on (tiles). */
+  get focusTile(): TileXY {
+    return this.focus;
+  }
+
+  /** The screen, as a filter's area. */
+  get screenArea() {
+    return this.app.screen;
+  }
+
+  /** The screen's size (px). */
+  get size(): { w: number; h: number } {
+    return { w: this.app.screen.width, h: this.app.screen.height };
+  }
+
+  /** Whether any of tiles (x0, y0)–(x1, y1), and what stands up to `tall` tiles on them, is in view. */
+  sees(x0: number, y0: number, x1: number, y1: number, tall = 4): boolean {
+    const v = this.viewRect();
+    return x1 + 2 > v.x0 && x0 - 2 < v.x1 && y1 + 2 > v.y0 && y0 - tall < v.y1;
   }
 
   /** Whether the 3D view is on now. */
@@ -795,11 +1054,21 @@ export class Scene {
    * reflections): every visible picture that stands up, not what lies flat.
    */
   standing(): Sprite[] {
-    const out: Sprite[] = [];
+    // (Asked for by the shadows, the shine and the night's cut-outs: looked over once a frame.)
+    // (Anything let go of since, out of it.)
+    if (this.standingAt === this.ticks) {
+      if (this.standingNow.some((c) => c.destroyed || !c.texture)) this.standingNow = this.standingNow.filter((c) => !c.destroyed && !!c.texture);
+      return this.standingNow;
+    }
+    this.standingAt = this.ticks;
+    const out = (this.standingNow = [] as Sprite[]);
+    const far = this.cine > 0 ? this.focus.y * TILE - FAR_FX * TILE : -Infinity;
     for (const c of this.sorted.children) {
-      if (!(c instanceof Sprite) || c instanceof MeshPlane || !c.visible || c.alpha < 0.3 || !c.renderable) continue;
-      if (lying.has(c) || this.flatLayers.has(c) || this.asIs.has(c) || standingWalls.has(c) || this.fxSkip.has(c) || c.zIndex >= 1e7) continue;
+      // (The quickest ruled out first: most of what's loaded is out of the picture.)
+      if (c.culled || !c.visible || c.zIndex < far || c.zIndex >= 1e7 || c.alpha < 0.3 || !c.renderable) continue;
+      if (!(c instanceof Sprite) || c instanceof MeshPlane) continue;
       if (c.texture.height * Math.abs(c.scale.y) < 10) continue;
+      if (lying.has(c) || this.flatLayers.has(c) || this.asIs.has(c) || standingWalls.has(c) || this.fxSkip.has(c)) continue;
       out.push(c);
     }
     return out;
@@ -811,8 +1080,13 @@ export class Scene {
    * ground though they sort as it does. (In 3D, a ramp's built up as a mesh
    * of its own, and its picture's put away: then it's not one of these.)
    */
+  /** The frame's count, and what's standing in it. */
+  private ticks = 0;
+  private standingAt = -1;
+  private standingNow: Sprite[] = [];
+
   occluders(): Sprite[] {
-    const out = this.standing();
+    const out = this.standing().filter((q) => !q.culled);
     for (const p of this.placed) if (p.sprite && RAISED.has(p.o.kind) && p.sprite.visible && p.sprite.renderable) out.push(p.sprite);
     return out;
   }
@@ -836,6 +1110,7 @@ export class Scene {
   }
 
   private unload(key: number, c: Chunk) {
+    this.water?.detach(c);
     // Ground textures are baked per chunk; decor textures are shared and cached.
     c.mesh?.destroy();
     c.ground.destroy({ texture: true, textureSource: true });
@@ -846,6 +1121,10 @@ export class Scene {
   /** Frees the baked chunk and object textures, then everything else. */
   destroy() {
     this.offSettings();
+    this.grass?.destroy();
+    this.grass = null;
+    this.water?.destroy();
+    this.water = null;
     this.sky?.destroy();
     this.sky = null;
     this.world.filters = [];
@@ -881,11 +1160,13 @@ export class Scene {
   resize() {
     const res = this.app.renderer.resolution;
     const [lo, hi] = this.zoomRange();
-    const step = this.locked ? this.lockedStep(this.locked) : this.stepAt(Math.max(lo, Math.min(hi, this.zoom)));
+    // (Watching the arena it may go closer: `zoomFine`.)
+    const step = this.locked ? this.lockedStep(this.locked) : this.stepAt(Math.max(lo, Math.min(hi + 2, this.zoom)));
     // Settled on a whole step, the art is pixel-perfect; between steps (gliding, pinching) it's smooth.
     this.scale = step / res;
     this.world.scale.set(this.scale);
-    this.follow(this.cam);
+    // (Whoever it was following: not where that came to at the old zoom, held in from the map's edges.)
+    this.follow(this.followed ?? this.cam);
   }
 
   /** The default zoom, in device pixels per art pixel. */
@@ -917,9 +1198,43 @@ export class Scene {
     return from + (to - from) * Math.min(1, f - i);
   }
 
+  /** How far the cinematic view's zoom may go, in steps from its usual: out only as far as it makes a difference. */
+  private cineRange(): [number, number] {
+    const out = Math.log(this.cineLeast() / this.cineUsual()) / Math.log(CINE_STEP);
+    const lo = Math.min(0, Math.ceil(out * 4) / 4);
+    return [this.closeView ? Math.max(-0.5, lo) : lo, CINE_IN_MOST];
+  }
+
+  /** Its usual zoom (CSS px per art px), the least, and what it is now. */
+  private cineUsual(): number {
+    return (this.baseStep() / this.app.renderer.resolution) * (this.open ? CINE_OUT : CINE_IN).zoom;
+  }
+
+  private cineLeast(): number {
+    return Math.min(this.cineUsual(), Math.min(CINE_ZOOM_MIN, this.app.screen.height / 300));
+  }
+
+  private cineScale(): number {
+    const [lo, hi] = this.cineRange();
+    return Math.max(this.cineLeast(), this.cineUsual() * Math.pow(CINE_STEP, Math.max(lo, Math.min(hi, this.cineZoom))));
+  }
+
+  /** Zooms the cinematic view by `by` steps. */
+  private cineBy(by: number, whole: boolean, save: boolean): boolean {
+    const [lo, hi] = this.cineRange();
+    // (From within its range, whatever was kept: a turn of the wheel always does something.)
+    const at = Math.max(lo, Math.min(hi, this.cineZoomTo));
+    const next = Math.max(lo, Math.min(hi, whole ? Math.round(at) + by : at + by));
+    if (next === this.cineZoomTo) return false;
+    this.cineZoomTo = next;
+    if (save) this.saveZoom();
+    return true;
+  }
+
   /** Glides a step in (+1) or out (−1). Returns whether it will change. */
   zoomBy(dir: number): boolean {
     if (this.locked) return false;
+    if (this.cinematic) return this.cineBy(Math.sign(dir), true, true);
     const [lo, hi] = this.zoomRange();
     const next = Math.max(lo, Math.min(hi, Math.round(this.zoomTo) + Math.sign(dir)));
     if (next === this.zoomTo) return false;
@@ -935,8 +1250,10 @@ export class Scene {
    */
   zoomFine(dir: number, closer = true, save = false): boolean {
     if (this.locked) return false;
+    if (this.cinematic) return this.cineBy(Math.sign(dir) * 0.25, false, save);
     const [lo, hi] = this.zoomRange();
-    const next = Math.max(lo, Math.min(hi + (closer ? 2 : 0), this.zoomTo + Math.sign(dir) * 0.25));
+    const most = hi + (closer ? 2 : 0);
+    const next = Math.max(lo, Math.min(most, Math.max(lo, Math.min(most, this.zoomTo)) + Math.sign(dir) * 0.25));
     if (next === this.zoomTo) return false;
     this.zoomTo = next;
     if (save) this.saveZoom();
@@ -978,11 +1295,18 @@ export class Scene {
 
   /** The zoom now (for a pinch to start from). */
   get zoomLevel(): number {
-    return this.zoom;
+    return this.cinematic ? this.cineZoom : this.zoom;
   }
 
   /** A pinch: zoom straight to `from` scaled by `ratio` (how far the fingers spread). */
   pinch(from: number, ratio: number) {
+    if (this.locked) return;
+    if (this.cinematic) {
+      const [lo, hi] = this.cineRange();
+      this.cineZoom = this.cineZoomTo = Math.max(lo, Math.min(hi, from + Math.log(Math.max(0.05, ratio)) / Math.log(CINE_STEP)));
+      this.loaded = null;
+      return;
+    }
     const [lo, hi] = this.zoomRange();
     const base = this.baseStep();
     this.zoom = this.zoomTo = Math.max(lo, Math.min(hi, (base + from) * ratio - base));
@@ -991,13 +1315,15 @@ export class Scene {
 
   /** The pinch let go: settle on the nearest quarter step. */
   pinchEnd() {
-    this.zoomTo = Math.round(this.zoom * 4) / 4;
+    if (this.cinematic) this.cineZoomTo = Math.round(this.cineZoom * 4) / 4;
+    else this.zoomTo = Math.round(this.zoom * 4) / 4;
     this.saveZoom();
   }
 
   private saveZoom() {
     try {
       localStorage.setItem(ZOOM_KEY, String(this.zoomTo));
+      localStorage.setItem(CINE_ZOOM_KEY, String(this.cineZoomTo));
     } catch {
       // storage unavailable
     }
@@ -1019,6 +1345,17 @@ export class Scene {
   /** Visible area in tiles at the zoom now (inclusive bounds, may exceed the map). */
   viewRect(): { x0: number; y0: number; x1: number; y1: number } {
     const { width, height } = this.app.screen;
+    // (Asked for a dozen times a frame: worked out again only when the camera's moved.)
+    const v0 = this.viewAt;
+    if (v0.w === width && v0.h === height && v0.fx === this.focus.x && v0.fy === this.focus.y && v0.cx === this.cam.x && v0.cy === this.cam.y && v0.s === this.scale && v0.cine === this.cine && v0.z === this.cineZoom && v0.v3 === this.view3d) return v0.r;
+    const r = this.viewRectNow(width, height);
+    this.viewAt = { w: width, h: height, fx: this.focus.x, fy: this.focus.y, cx: this.cam.x, cy: this.cam.y, s: this.scale, cine: this.cine, z: this.cineZoom, v3: this.view3d, r };
+    return r;
+  }
+
+  private viewAt = { w: -1, h: -1, fx: 0, fy: 0, cx: 0, cy: 0, s: 0, cine: 0, z: 0, v3: false, r: { x0: 0, y0: 0, x1: 0, y1: 0 } };
+
+  private viewRectNow(width: number, height: number): { x0: number; y0: number; x1: number; y1: number } {
     if (this.view3d) {
       // What the tilted camera sees: a wedge, wide in the distance.
       const pts = [this.unproject(0, 0), this.unproject(width, 0), this.unproject(0, height), this.unproject(width, height)];
@@ -1042,6 +1379,7 @@ export class Scene {
    * that far above the map too: the wall shows whole, clear of the HUD.
    */
   follow(p: TileXY) {
+    this.followed = { x: p.x, y: p.y };
     // The 3D camera keeps you in view right up to the edge (the map just ends, out there).
     this.focus = { x: Math.max(0, Math.min(this.map.width - 1, p.x)), y: Math.max(0, Math.min(this.map.height - 1, p.y)) };
     const { width, height } = this.app.screen;
@@ -1186,8 +1524,18 @@ export class Scene {
   }
 
   /** The air outdoors now, for the cinematic view's sky and mist. */
-  setAir(hour: number, dark: number, kind: Air) {
-    this.air = { hour, dark, kind };
+  setAir(hour: number, dark: number, kind: Air, tint: number) {
+    this.air = { hour, dark, kind, tint };
+  }
+
+  /** The layer the night's lights are on. */
+  lightsAre(c: Container) {
+    this.nightLights = c;
+  }
+
+  /** The lights are drawn into the world by depth, and the night with them (the cinematic view, outdoors): not over it all. */
+  get depthLit(): boolean {
+    return this.canLight && this.view3d && this.cine > 0 && this.open;
   }
 
   /** The setting, unless the view's locked flat (it must be the same for everyone). */
@@ -1204,7 +1552,11 @@ export class Scene {
           if (b) s.zIndex = b.behind;
         }
       }
-      for (const p of this.skyline) if (p.far) p.far.visible = false;
+      for (const p of this.skyline) {
+        if (p.far) p.far.visible = false;
+        if (p.foot) p.foot.visible = false;
+      }
+      this.updateGroves(false, null);
       this.cine = 0;
       this.cineOff();
     }
@@ -1228,7 +1580,7 @@ export class Scene {
     const k = this.cine * this.cine * (3 - 2 * this.cine);
     const of = (a: number, b: number) => a + (b - a) * k;
     const tilt = of(USUAL.tilt, to.tilt);
-    const z = of(this.scale, Math.max(this.scale * to.zoom, Math.min(CINE_ZOOM_MIN, height / 300)));
+    const z = this.cine > 0 ? of(this.scale, this.cineScale()) : this.scale;
     return {
       ox: width / 2,
       oy: height / 2 + of(USUAL.down, to.down) * height,
@@ -1260,13 +1612,17 @@ export class Scene {
   /** Lays `m` (a grid `n` vertices a side) over world rectangle (x0, y0)–(x1, y1). */
   private layMesh(m: MeshPlane, n: number, x0: number, y0: number, x1: number, y1: number, cam: ReturnType<Scene["camera"]>) {
     const pos = m.geometry.positions;
+    // (Worked out in place, a row at a time: thousands of these a frame, nothing made of them.)
+    const limit = cam.fy + (cam.d * (1 - NEAR)) / cam.cos - 1;
     let k = 0;
     for (let j = 0; j < n; j++) {
-      const wy = y0 + ((y1 - y0) * j) / (n - 1);
+      const wy = Math.min(y0 + ((y1 - y0) * j) / (n - 1), limit);
+      const dy = wy - cam.fy;
+      const s = (cam.d / (cam.d - dy * cam.cos)) * cam.z;
+      const sy = cam.oy + dy * cam.sin * s;
       for (let i = 0; i < n; i++) {
-        const p = this.projectMesh(x0 + ((x1 - x0) * i) / (n - 1), wy, cam);
-        pos[k++] = p.x;
-        pos[k++] = p.y;
+        pos[k++] = cam.ox + (x0 + ((x1 - x0) * i) / (n - 1) - cam.fx) * s;
+        pos[k++] = sy;
       }
     }
     m.geometry.getBuffer("aPosition").update();
@@ -1285,15 +1641,36 @@ export class Scene {
   }
 
   private save(c: Container) {
-    this.saved.push({ c, x: c.position.x, y: c.position.y, sx: c.scale.x, sy: c.scale.y, visible: c.visible, alpha: c.alpha });
+    // (The same records used over, frame after frame.)
+    const s = this.saved[this.savedN];
+    if (s) {
+      s.c = c;
+      s.x = c.position.x;
+      s.y = c.position.y;
+      s.sx = c.scale.x;
+      s.sy = c.scale.y;
+      s.visible = c.visible;
+      s.alpha = c.alpha;
+    } else this.saved.push({ c, x: c.position.x, y: c.position.y, sx: c.scale.x, sy: c.scale.y, visible: c.visible, alpha: c.alpha });
+    this.savedN++;
   }
 
   /**
    * Draws `c` where the tilted camera sees it, its foot at ground depth
    * `footY`: standing up facing you, or lying flat (foreshortened).
    */
+  /** Where `place` puts things (one, used over: a thousand a frame, nothing left to sweep up after). */
+  private pp = { x: 0, y: 0, s: 0 };
+
   private place(c: Container, footY: number, flat: boolean, cam: ReturnType<Scene["camera"]>) {
-    const p = this.project(c.position.x, footY, cam);
+    const dy = footY - cam.fy;
+    const den = cam.d - dy * cam.cos;
+    const p = den < cam.d * cam.near ? null : this.pp;
+    if (p) {
+      p.s = (cam.d / den) * cam.z;
+      p.x = cam.ox + (c.position.x - cam.fx) * p.s;
+      p.y = cam.oy + dy * cam.sin * p.s;
+    }
     this.save(c);
     if (!p) {
       c.visible = false;
@@ -1309,7 +1686,8 @@ export class Scene {
       }
     }
     if (this.cine > 0) {
-      const f = this.farFade(c, footY, cam) * (this.own.has(c) || !this.cleared.length ? 1 : this.onSolid(c.position.x, footY));
+      const on = this.onTop.get(c);
+      const f = this.farFade(c, footY, cam) * (on !== undefined ? this.onSolid(on, footY, true) : this.own.has(c) || !this.cleared.length ? 1 : this.onSolid(c.position.x, footY));
       if (f < 0.01) {
         c.visible = false;
         return;
@@ -1330,18 +1708,22 @@ export class Scene {
       const h = c.texture.height * Math.abs(c.scale.y);
       const left = c.position.x - c.anchor.x * w;
       const top = c.position.y - c.anchor.y * h;
-      c.alpha *= this.frontFade(c, left, left + w, top, top + h, footY, cam);
+      const ff = this.frontFade(c, left, left + w, top, top + h, footY, cam);
+      c.alpha *= ff;
       if (c.alpha < 0.01) c.visible = false;
+      // (A gate cleared out of your way: the fires on it go with it.)
+      const gate = ff < 0.99 ? this.bearers.get(c) : undefined;
+      if (gate) this.cleared.push({ x0: gate.o.x * TILE - (gate.art?.left ?? 0), x1: gate.o.x * TILE - (gate.art?.left ?? 0) + c.texture.width, back: gate.o.y * TILE - 8, foot: footY + 2, v: ff, only: true });
     }
-    // (Big things, houses: they hide the lights behind them, drawn over the world.)
-    if (this.cine > 0 && !flat && c instanceof Sprite && c.texture.height > 4 * TILE && c.visible && c.alpha > 0.6) {
-      const w = c.texture.width * Math.abs(c.scale.x);
-      const h = c.texture.height * Math.abs(c.scale.y);
-      const x0 = c.position.x - c.anchor.x * w;
-      const y0 = c.position.y - c.anchor.y * h;
-      this.hiders.push({ x0: x0 + w * 0.02, x1: x0 + w * 0.98, y0: y0 + h * 0.12, y1: y0 + h, foot: footY });
-    }
-    this.drawn3d.set(c, { x: c.position.x, y: c.position.y, sx: c.scale.x, sy: c.scale.y });
+  }
+
+  /** What has fires (or lamps) on it, by its picture; and those, where across they stand (world px). */
+  private bearers = new WeakMap<Container, Placed>();
+  private onTop = new WeakMap<Container, number>();
+
+  /** `c` burns (or shines) on whatever stands at `x` (world px): when that clears out of your way, it goes with it. */
+  standsOnTop(c: Container, x: number) {
+    this.onTop.set(c, x);
   }
 
   /** `c` (hidden this frame) drawn instead as a mesh with `texture`, its corners at world rectangle (x0, y0)–(x1, y1). */
@@ -1380,6 +1762,17 @@ export class Scene {
   private layRelief(s: Sprite, r: Relief, cam: ReturnType<Scene["camera"]>) {
     // (Upright furniture: two points across, one at every row's edge down.)
     const upright = !!r.edgeGy && !!r.edgeZ;
+    {
+      // (Out of the picture: put away.)
+      const x = s.position.x - s.anchor.x * r.w;
+      const y = this.reliefTop.get(s) ?? s.position.y;
+      const e = (r.extent ??= reliefExtent(r));
+      if (this.unseen(x, y + e.y0, x + r.w, y + e.y1, e.up, cam)) {
+        this.save(s);
+        s.visible = false;
+        return;
+      }
+    }
     const step = r.step ?? RELIEF_STEP;
     const nx = upright ? 2 : Math.ceil(r.w / step) + 1;
     const ny = upright ? r.h + 1 : Math.ceil(r.h / step) + 1;
@@ -1417,15 +1810,22 @@ export class Scene {
       // Square to the camera across (as anything standing is: no shearing,
       // seen from the side), built up and back down its rows.
       const cx = x0 + r.w / 2;
-      for (let j = 0; j < ny; j++) {
-        const p = this.project(cx, ground0 + r.edgeGy![j], cam) ?? { ...this.projectMesh(cx, ground0 + r.edgeGy![j], cam), s: cam.z };
-        const y = p.y - r.edgeZ![j] * p.s;
-        pos[k++] = p.x - (r.w / 2) * p.s;
-        pos[k++] = y;
-        pos[k++] = p.x + (r.w / 2) * p.s;
-        pos[k++] = y;
+      // (Where it was for this camera already: nothing to lay again.)
+      if (!this.already(m, x0, ground0)) {
+        const lim = cam.fy + (cam.d * (1 - NEAR)) / cam.cos - 1;
+        for (let j = 0; j < ny; j++) {
+          // (In place: asked of every piece of furniture's every row, every frame.)
+          const dy = Math.min(ground0 + r.edgeGy![j], lim) - cam.fy;
+          const ps = (cam.d / (cam.d - dy * cam.cos)) * cam.z;
+          const px = cam.ox + (cx - cam.fx) * ps;
+          const y = cam.oy + dy * cam.sin * ps - r.edgeZ![j] * ps;
+          pos[k++] = px - (r.w / 2) * ps;
+          pos[k++] = y;
+          pos[k++] = px + (r.w / 2) * ps;
+          pos[k++] = y;
+        }
+        m.geometry.getBuffer("aPosition").update();
       }
-      m.geometry.getBuffer("aPosition").update();
       // A solid piece: its side toward the camera, from its front edge back
       // to where its top ends (so it's a box, not a front and a lid).
       if (r.side) {
@@ -1461,8 +1861,14 @@ export class Scene {
       s.visible = false;
       return;
     }
+    const same = this.already(m, x0, ground0);
     if (r.walls) this.standSkirts(s, r.walls, x0, ground0, m, cam);
     if (r.posts) this.standPosts(s, r.posts, x0, ground0, m, cam);
+    if (same) {
+      this.save(s);
+      s.visible = false;
+      return;
+    }
     for (let j = 0; j < ny; j++) {
       const row = Math.min(r.h - 1, Math.round((j * (r.h - 1)) / (ny - 1)));
       for (let i = 0; i < nx; i++) {
@@ -1470,9 +1876,18 @@ export class Scene {
         const at = row * r.w + col;
         const wx = x0 + (i * r.w) / (nx - 1);
         const wy = ground0 + r.gy[at];
-        const p = this.project(wx, wy, cam) ?? { ...this.projectMesh(wx, wy, cam), s: cam.z };
-        pos[k++] = p.x;
-        pos[k++] = p.y - r.z[at] * p.s;
+        // (In place: no point made for each.)
+        const dy = wy - cam.fy;
+        const den = cam.d - dy * cam.cos;
+        if (den < cam.d * cam.near) {
+          const p = this.projectMesh(wx, wy, cam);
+          pos[k++] = p.x;
+          pos[k++] = p.y - r.z[at] * cam.z;
+          continue;
+        }
+        const ps = (cam.d / den) * cam.z;
+        pos[k++] = cam.ox + (wx - cam.fx) * ps;
+        pos[k++] = cam.oy + dy * cam.sin * ps - r.z[at] * ps;
       }
     }
     m.geometry.getBuffer("aPosition").update();
@@ -1501,9 +1916,49 @@ export class Scene {
         this.sorted.addChild(m);
         return m;
       });
+      // Its ends, across: the triangle side of a ramp rising east or west.
+      const nx = Math.min(96, Math.ceil(walls.w / 4) + 1);
+      for (const [z, k] of [[walls.north, 0], [walls.south, 1]] as const) {
+        const m = new MeshPlane({ texture: concrete(), verticesX: nx, verticesY: 2 });
+        m.autoResize = false;
+        m.tint = k ? 0xc8c1b4 : 0xa9a296;
+        const uv = m.geometry.uvs;
+        for (let i = 0; i < nx; i++) {
+          const x = Math.round((walls.w * i) / (nx - 1));
+          uv[i * 2] = uv[(nx + i) * 2] = x / 64;
+          uv[i * 2 + 1] = 1 - z[x] / 64;
+          uv[(nx + i) * 2 + 1] = 1;
+        }
+        m.geometry.getBuffer("aUV").update();
+        this.sorted.addChild(m);
+        ms.push(m);
+      }
       this.skirts.set(s, ms);
     }
     const limit = cam.fy + (cam.d * (1 - NEAR)) / cam.cos - 1;
+    // (Only where it rises across: a level edge, a box's front, is in its picture already.)
+    const nx = Math.min(96, Math.ceil(walls.w / 4) + 1);
+    for (const [z, k] of [[walls.north, 0], [walls.south, 1]] as const) {
+      const m = ms[2 + k];
+      if (!m) continue;
+      const y = y0 + (k ? d : 0);
+      const lo = z.reduce((a, b) => Math.min(a, b), Infinity);
+      const hi = z.reduce((a, b) => Math.max(a, b), 0);
+      m.visible = top.visible && hi > 1 && hi - lo > 1 && (k ? cam.fy > y : cam.fy < y) && y < limit;
+      if (!m.visible) continue;
+      m.zIndex = k ? Math.max(top.zIndex, y) + 0.06 : top.zIndex - 0.05;
+      m.alpha = top.alpha;
+      const p = this.project(x0, y, cam)!;
+      const pos = m.geometry.positions;
+      for (let i = 0; i < nx; i++) {
+        const x = Math.round((walls.w * i) / (nx - 1));
+        const sx = p.x + (x0 + x - x0) * p.s;
+        pos[i * 2] = pos[(nx + i) * 2] = sx;
+        pos[i * 2 + 1] = p.y - z[x] * p.s;
+        pos[(nx + i) * 2 + 1] = p.y;
+      }
+      m.geometry.getBuffer("aPosition").update();
+    }
     [walls.west, walls.east].forEach((z, k) => {
       const m = ms[k];
       const x = k ? x0 + walls.w : x0;
@@ -1621,6 +2076,9 @@ export class Scene {
   private standSides(p: Placed, cam: ReturnType<Scene["camera"]>) {
     const s = p.sprite!;
     if (p.sides === undefined) {
+      // (Worked out one a frame at most: they're slow, and a street of new ones at once would stutter.)
+      if (this.sidesAt === this.frontAt) return;
+      this.sidesAt = this.frontAt;
       const c = p.art && pictureOf(p.art.texture);
       p.sides = c ? sidesOf(c) : null;
     }
@@ -1630,7 +2088,7 @@ export class Scene {
     const top = p.o.y * TILE - p.art!.overhang;
     const foot = this.footOfPlaced(p);
     const deep = p.o.h * TILE - 4;
-    const n = 13;
+    const n = SLICES * 3 + 1;
     const k = sd.rows.length;
     const limit = cam.fy + (cam.d * (1 - cam.near)) / cam.cos - 1;
     const fade = this.solidFade(p, foot, cam) * this.farFade(s, foot, cam) * this.cine;
@@ -1644,54 +2102,137 @@ export class Scene {
       const t = i / (n - 1);
       return deep * (t * 0.45 + t * t * 0.55);
     };
+    // How far back each row of it is at column `i`: up its roof, in from both ends toward the ridge.
+    const ridge = deep / 2;
+    const depthAt = (i: number, f: number) => f * ridge + along(i) * (1 - f);
     if (!p.walls) {
-      p.walls = [sd.left, sd.right].map((tex) => {
-        const m = new MeshPlane({ texture: tex, verticesX: n, verticesY: k });
+      p.walls = [];
+      for (const tex of [sd.left, sd.right]) {
+        for (let sl = 0; sl < SLICES; sl++) {
+          const m = new MeshPlane({ texture: tex, verticesX: 4, verticesY: k });
+          m.autoResize = false;
+          const uv = m.geometry.uvs;
+          sd.rows.forEach((row, j) => {
+            for (let i = 0; i < 4; i++) {
+              uv[(j * 4 + i) * 2] = depthAt(sl * 3 + i, row.f) / sd.span;
+              uv[(j * 4 + i) * 2 + 1] = (row.y + 0.5) / sd.h;
+            }
+          });
+          m.geometry.getBuffer("aUV").update();
+          this.sorted.addChild(m);
+          p.walls.push(m);
+        }
+      }
+      // Its roof's front, sloping back from the eaves to the ridge (the picture's own, from the top down to its eaves).
+      if (sd.split) {
+        const ys = [0, ...sd.rows.filter((q) => q.f > 0).map((q) => q.y), sd.split].filter((y, i, a) => i === 0 || y > a[i - 1]);
+        // (Its whole picture: the sprite's is only the walls of it, by now.)
+        const pic = sd.roof ?? p.art!.texture;
+        const m = new MeshPlane({ texture: pic, verticesX: 2, verticesY: ys.length });
         m.autoResize = false;
         const uv = m.geometry.uvs;
-        sd.rows.forEach((row, j) => {
-          for (let i = 0; i < n; i++) {
-            uv[(j * n + i) * 2] = along(i) / sd.span;
-            uv[(j * n + i) * 2 + 1] = (row.y + 0.5) / sd.h;
+        const tw = pic.width;
+        ys.forEach((y, j) => {
+          for (let i = 0; i < 2; i++) {
+            uv[(j * 2 + i) * 2] = i;
+            uv[(j * 2 + i) * 2 + 1] = y / pic.height;
           }
         });
         m.geometry.getBuffer("aUV").update();
         this.sorted.addChild(m);
-        return m;
-      });
+        this.roofs.set(p, { m, ys, w: tw });
+        p.walls.push(m);
+      }
     }
-    const mid = sd.rows[Math.floor(k * 0.75)];
     // (Seen from where its innermost part, the roof's end, starts to show: hidden behind the front till then, so it comes in from nothing.)
     const inL = sd.rows.reduce((m, r) => Math.max(m, r.l), 0);
     const inR = sd.rows.reduce((m, r) => Math.min(m, r.r), Infinity);
+    const wall = sd.rows[sd.rows.length - 1];
     const at = this.project(cam.fx, Math.min(foot, limit), cam)!;
     const far = this.project(cam.fx, back, cam)!;
-    p.walls.forEach((m, right) => {
-      const x = x0 + (right ? mid.r : mid.l);
+    // (Each depth back along it seen once.)
+    const seen = new Map<number, { x: number; y: number; s: number }>();
+    const view = (z: number) => {
+      const key = Math.round(z * 4);
+      let q = seen.get(key);
+      if (!q) seen.set(key, (q = this.project(cam.fx, Math.min(foot - z, limit), cam)!));
+      return q;
+    };
+    for (let right = 0; right < 2; right++) {
+      const x = x0 + (right ? wall.r : wall.l);
       const a = cam.ox + (x - cam.fx) * at.s;
       const b = cam.ox + (x - cam.fx) * far.s;
       // (Only the side toward you, and only while any of it's in the picture.)
-      m.visible = (right ? cam.fx > x0 + inR : cam.fx < x0 + inL) && Math.max(a, b) > -60 && Math.min(a, b) < cam.ox * 2 + 60;
-      if (!m.visible) return;
-      m.alpha = fade;
-      m.tint = s.tint;
-      if (fade > 0.6 && (right ? cam.fx > x : cam.fx < x)) this.sideHiders.push({ x0: Math.min(a, b), x1: Math.max(a, b), wall: x, h: foot - top - sd.rows[0].y });
-      // (In at its back: what's beside it, nearer, is drawn over it; what's behind it, under.)
-      m.zIndex = p.o.y * TILE + 1;
-      const pos = m.geometry.positions;
-      // (Each depth back along it seen once, for every row of it.)
-      for (let i = 0; i < n; i++) {
-        const q = this.project(cam.fx, Math.min(foot - along(i), limit), cam)!;
+      const shown = (right ? cam.fx > x0 + inR : cam.fx < x0 + inL) && Math.max(a, b) > -60 && Math.min(a, b) < cam.ox * 2 + 60;
+      for (let sl = 0; sl < SLICES; sl++) {
+        const m = p.walls[right * SLICES + sl];
+        m.visible = shown && foot - along(sl * 3 + 3) < limit;
+        if (!m.visible) continue;
+        m.alpha = fade;
+        m.tint = s.tint;
+        // (In at its back: what's beside it, nearer, is drawn over it; what's behind it, under.)
+        m.zIndex = foot - along(sl * 3 + 3) + 1;
+        const pos = m.geometry.positions;
         for (let j = 0; j < k; j++) {
           const row = sd.rows[j];
-          const wx = x0 + (right ? row.r - 0.5 : row.l + 0.5);
-          const at2 = (j * n + i) * 2;
-          pos[at2] = cam.ox + (wx - cam.fx) * q.s;
-          pos[at2 + 1] = q.y - (foot - top - row.y) * q.s;
+          for (let i = 0; i < 4; i++) {
+            const q = view(depthAt(sl * 3 + i, row.f));
+            const at2 = (j * 4 + i) * 2;
+            // (A little in behind its front's edge: no crack of sky between them.)
+            // (Up the roof, further in under its ragged edge: the front roof's drawn over it.)
+            const tuck = row.f > 0 || row.y <= sd.split ? 4 : 1.5;
+            pos[at2] = cam.ox + (x0 + (right ? row.r - tuck : row.l + tuck) - cam.fx) * q.s;
+            pos[at2 + 1] = q.y - (foot - top - row.y) * q.s;
+          }
         }
+        m.geometry.getBuffer("aPosition").update();
       }
-      m.geometry.getBuffer("aPosition").update();
-    });
+    }
+    const roof = this.roofs.get(p);
+    if (roof) {
+      const m = roof.m;
+      m.visible = s.visible && s.alpha > 0.01;
+      if (m.visible) {
+        m.alpha = s.alpha;
+        m.tint = s.tint;
+        // (Over its sides, under whoever stands in front of it.)
+        m.zIndex = foot + 0.5;
+        const pos = m.geometry.positions;
+        const span = sd.split - sd.top;
+        roof.ys.forEach((y, j) => {
+          const f = Math.min(1, (sd.split - y) / Math.max(1, span));
+          const q = view(f * ridge);
+          for (let i = 0; i < 2; i++) {
+            pos[(j * 2 + i) * 2] = cam.ox + (x0 + i * roof.w - cam.fx) * q.s;
+            pos[(j * 2 + i) * 2 + 1] = q.y - (foot - top - y) * q.s;
+          }
+        });
+        m.geometry.getBuffer("aPosition").update();
+      }
+    }
+  }
+
+  /** The buildings' sloping roofs (the cinematic view), and the wall part of each picture, under them. */
+  private roofs = new WeakMap<Placed, { m: MeshPlane; ys: number[]; w: number }>();
+  private wallParts = new WeakMap<Placed, Texture>();
+  private swapped: { s: Sprite; t: Texture }[] = [];
+  /** When a building's sides were last worked out (the frame's time). */
+  private sidesAt = -1;
+
+  /** A building with a sloping roof: just its walls stood up (its roof's laid back by `standSides`). */
+  private wallOnly(p: Placed, s: Sprite) {
+    // (Its sides not worked out yet: `standSides` does, soon.)
+    const sd = p.sides;
+    if (!sd?.split || s.texture !== p.art?.texture) return;
+    let t = this.wallParts.get(p);
+    if (!t) {
+      t = part(s.texture, 0, sd.split, s.texture.width, s.texture.height - sd.split);
+      this.wallParts.set(p, t);
+    }
+    this.save(s);
+    this.swapped.push({ s, t: s.texture });
+    s.texture = t;
+    s.position.y += sd.split;
   }
 
   private footOfPlaced(p: Placed): number {
@@ -1718,6 +2259,11 @@ export class Scene {
     const h = s.texture.height * s.scale.y;
     const x0 = s.position.x - s.anchor.x * w;
     const y0 = s.position.y - s.anchor.y * h;
+    if (this.unseen(Math.min(x0, x0 + w), Math.min(y0, y0 + h), Math.max(x0, x0 + w), Math.max(y0, y0 + h), 0, cam)) {
+      this.save(s);
+      s.visible = false;
+      return;
+    }
     this.lay(s, s.texture, null, x0, y0, x0 + w, y0 + h, cam);
   }
 
@@ -1727,6 +2273,13 @@ export class Scene {
     if (!c.visible || b.maxX <= b.minX || b.maxY <= b.minY) {
       const l = this.laid.get(c);
       if (l) l.mesh.visible = false;
+      return;
+    }
+    if (this.unseen(b.minX, b.minY, b.maxX, b.maxY, 0, cam)) {
+      const l = this.laid.get(c);
+      if (l) l.mesh.visible = false;
+      this.save(c);
+      c.visible = false;
       return;
     }
     // (Sized up in steps, so a layer that grows a little doesn't need a new texture every frame.)
@@ -1753,7 +2306,7 @@ export class Scene {
     const foot = this.feet.get(c);
     if (foot !== undefined) return foot;
     if (c.position.x !== 0 || c.position.y !== 0) return c.zIndex;
-    const b = c.getLocalBounds();
+    const b = c instanceof Graphics && !c.children.length ? c.context.bounds : c.getLocalBounds();
     return b.maxY > b.minY ? Math.max(b.minY, Math.min(b.maxY + TILE, c.zIndex)) : c.zIndex;
   }
 
@@ -1784,13 +2337,24 @@ export class Scene {
   private layFace(m: MeshPlane, at: (u: number, v: number) => [number, number, number], cam: ReturnType<Scene["camera"]>, n = WALL_VERTS) {
     const pos = m.geometry.positions;
     const limit = cam.fy + (cam.d * (1 - NEAR)) / cam.cos - 1;
+    // (Every face is flat, its corners all there is to it: the rest's between them.)
+    const [ax, ay, ah] = at(0, 0);
+    const [bx, by, bh] = at(1, 0);
+    const [cx, cy, ch] = at(0, 1);
+    const [dx, dy, dh] = at(1, 1);
     let k = 0;
     for (let j = 0; j < n; j++) {
+      const v = j / (n - 1);
       for (let i = 0; i < n; i++) {
-        const [wx, wy, h] = at(i / (n - 1), j / (n - 1));
-        const p = this.project(wx, Math.min(wy, limit), cam)!;
-        pos[k++] = p.x;
-        pos[k++] = p.y - h * p.s;
+        const u = i / (n - 1);
+        const top = 1 - v;
+        const wx = (ax * (1 - u) + bx * u) * top + (cx * (1 - u) + dx * u) * v;
+        const wy = Math.min((ay * (1 - u) + by * u) * top + (cy * (1 - u) + dy * u) * v, limit);
+        const h = (ah * (1 - u) + bh * u) * top + (ch * (1 - u) + dh * u) * v;
+        const off = wy - cam.fy;
+        const s = (cam.d / (cam.d - off * cam.cos)) * cam.z;
+        pos[k++] = cam.ox + (wx - cam.fx) * s;
+        pos[k++] = cam.oy + off * cam.sin * s - h * s;
       }
     }
     m.geometry.getBuffer("aPosition").update();
@@ -1894,11 +2458,51 @@ export class Scene {
       }
       this.bowlFaces = faces;
     }
+    const bo = p.o;
+    const bx = (bo.x - 2) * TILE;
+    if (this.unseen(bx, (bo.y - 4) * TILE, bx + (bo.w + 4) * TILE, (bo.y + bo.h + 2) * TILE, 200, cam)) {
+      for (const f of this.bowlFaces) f.m.visible = false;
+      return;
+    }
+    // (Its walls between you and the lens, any of them over you: all of those clear, together.)
+    const clear = this.bowlClear(this.bowlFaces, cam);
     for (const f of this.bowlFaces) {
       f.m.alpha = this.cine > 0 ? this.farFade(p.sprite, f.foot, cam) : 1;
+      if (clear < 1 && f.foot > cam.fy + TILE) f.m.alpha *= 1 + (clear - 1) * this.cine;
       f.m.zIndex = f.foot;
-      this.layFace(f.m, f.at, cam, f.n);
+      // (Each by its corners first: only those in the picture are bent to it.)
+      const [ax, ay, az] = f.at(0, 0);
+      const [ex, ey] = f.at(1, 1);
+      f.m.visible = f.m.alpha > 0.01 && !this.unseen(Math.min(ax, ex) - 8, Math.min(ay, ey) - 8, Math.max(ax, ex) + 8, Math.max(ay, ey) + 8, az + 16, cam);
+      if (f.m.visible && !this.already(f.m)) this.layFace(f.m, f.at, cam, f.n);
     }
+  }
+
+  /** How much of the arena's walls in front of you there is now, clearing (or coming back) over a moment. */
+  private bowlFront = 1;
+  private bowlClear(faces: NonNullable<Scene["bowlFaces"]>, cam: ReturnType<Scene["camera"]>): number {
+    if (this.cine === 0) return (this.bowlFront = 1);
+    let over = false;
+    for (const f of faces) {
+      if (f.foot < cam.fy + TILE) continue;
+      const [ax, , h] = f.at(0, 0);
+      const [bx] = f.at(1, 1);
+      if (h < 24) continue;
+      const l = this.project(Math.min(ax, bx), f.foot, cam);
+      const q = this.project(Math.max(ax, bx), f.foot, cam);
+      // (Right up at the lens: in the way, if it's anywhere before you.)
+      if (!l || !q) {
+        over ||= f.foot - cam.fy < cam.d / cam.cos && Math.abs((ax + bx) / 2 - cam.fx) < TILE * 2;
+        continue;
+      }
+      if (q.x > cam.ox - 18 * cam.z && l.x < cam.ox + 18 * cam.z && l.y - h * l.s < cam.oy - 6 * cam.z && l.y > cam.oy - 36 * cam.z) {
+        over = true;
+        break;
+      }
+    }
+    const step = this.frontMs / CLEAR_MS;
+    this.bowlFront = over ? Math.max(0, this.bowlFront - step) : Math.min(1, this.bowlFront + step);
+    return this.bowlFront;
   }
 
   /** A wall tile as a box: the side that faces the camera, its south end, its top. */
@@ -1978,6 +2582,7 @@ export class Scene {
   private tilt() {
     try {
       this.tiltNow();
+      if (!this.view3d) this.cull();
     } catch (e) {
       if (!this.tiltFailed) console.error("3D view failed; drawing flat", e);
       this.tiltFailed = true;
@@ -1987,6 +2592,126 @@ export class Scene {
 
   private tiltFailed = false;
 
+  /**
+   * What's out of the picture isn't handed to the renderer (the map's loaded
+   * well past the edges of the screen: most of it can't be seen). By each
+   * thing's own `culled`, which nothing else uses: what's shown and hidden by
+   * the game is as it was. Generous: a little past the edges is drawn.
+   */
+  private cull() {
+    const { width, height } = this.app.screen;
+    const k = this.world.scale.x;
+    const M = 72;
+    const x0 = -this.world.position.x / k - M;
+    const y0 = -this.world.position.y / k - M;
+    const x1 = x0 + width / k + M * 2;
+    const y1 = y0 + height / k + M * 2;
+    for (const c of this.sorted.children) {
+      if (!c.visible) continue;
+      let off = false;
+      const p = c.position;
+      if (c instanceof Sprite) {
+        if (!c.children.length) {
+          // (Whichever way it's anchored, flipped or leaning: within its own size of where it is.)
+          const w = c.texture.width * Math.abs(c.scale.x) + 8;
+          const h = c.texture.height * Math.abs(c.scale.y) + 8;
+          const r = c.rotation ? Math.max(w, h) : 0;
+          const hx = Math.max(w, r);
+          const hy = Math.max(h, r);
+          off = p.x + hx < x0 || p.x - hx > x1 || p.y + hy < y0 || p.y - hy > y1;
+        }
+      } else if (c.rotation || c instanceof MeshPlane || this.asIs.has(c)) {
+        off = false;
+      } else if (c instanceof Graphics && !c.children.length) {
+        off = Scene.outOf(c, c.context.bounds, x0, y0, x1, y1);
+      } else {
+        off = Scene.outOf(c, c.getLocalBounds(), x0, y0, x1, y1);
+      }
+      if (c.culled !== off) c.culled = off;
+    }
+  }
+
+  /** Whether `c`, its own bounds `b`, is wholly outside (x0, y0)–(x1, y1). */
+  private static outOf(c: Container, b: { minX: number; minY: number; maxX: number; maxY: number }, x0: number, y0: number, x1: number, y1: number): boolean {
+    // (Nothing drawn in it: its bounds are inside out.)
+    if (!(b.maxX > b.minX)) return true;
+    const ax = c.position.x + (b.minX - c.pivot.x) * c.scale.x;
+    const bx = c.position.x + (b.maxX - c.pivot.x) * c.scale.x;
+    const ay = c.position.y + (b.minY - c.pivot.y) * c.scale.y;
+    const by = c.position.y + (b.maxY - c.pivot.y) * c.scale.y;
+    return Math.max(ax, bx) < x0 || Math.min(ax, bx) > x1 || Math.max(ay, by) < y0 || Math.min(ay, by) > y1;
+  }
+
+  // ---- what the tilted camera can't see, or saw last frame ----
+
+  /** This frame's camera's number: the same as the last's while it hasn't moved (what's laid needn't be laid again). */
+  private camId = 0;
+  private camWas = "";
+  private laidAt = new WeakMap<MeshPlane, { cam: number; x: number; y: number }>();
+
+  /** Whether `m` (the thing at `x`, `y`) is where this camera sees it already; noted as so. */
+  private already(m: MeshPlane, x = 0, y = 0): boolean {
+    const l = this.laidAt.get(m);
+    if (l && l.cam === this.camId && l.x === x && l.y === y) return true;
+    if (l) {
+      l.cam = this.camId;
+      l.x = x;
+      l.y = y;
+    } else this.laidAt.set(m, { cam: this.camId, x, y });
+    return false;
+  }
+
+  /** Whether ground (x0, y0)–(x1, y1), and `up` px over it, is wholly out of the tilted picture. */
+  private unseen(x0: number, y0: number, x1: number, y1: number, up: number, cam: ReturnType<Scene["camera"]>): boolean {
+    // (All of it behind the lens: held at its edge, it would be drawn right across the picture.)
+    if (y0 > cam.fy + (cam.d * (1 - NEAR)) / cam.cos) return true;
+    // (Worked out in place: asked of every piece of ground and wall, every frame.)
+    const limit = cam.fy + (cam.d * (1 - NEAR)) / cam.cos - 1;
+    const row = (wy: number) => {
+      const dy = Math.min(wy, limit) - cam.fy;
+      const k = (cam.d / (cam.d - dy * cam.cos)) * cam.z;
+      return [k, cam.oy + dy * cam.sin * k] as const;
+    };
+    const [s0, y0s] = row(y0);
+    const [s1, y1s] = row(y1);
+    const M = 24;
+    const { width, height } = this.app.screen;
+    const ax = cam.ox + (x0 - cam.fx) * s0;
+    const bx = cam.ox + (x1 - cam.fx) * s0;
+    const cx = cam.ox + (x0 - cam.fx) * s1;
+    const dx = cam.ox + (x1 - cam.fx) * s1;
+    if (Math.max(bx, dx) < -M || Math.min(ax, cx) > width + M) return true;
+    if (y1s < -M) return true;
+    // (What stands on it reaches up the screen: at its front, where it's drawn biggest.)
+    const s = ((dx - cx) / Math.max(1, x1 - x0)) * up;
+    return Math.min(y0s, y1s - s) > height + M;
+  }
+
+  /** A standing (or small flat) picture out of the tilted picture: left where it is, not drawn. */
+  private outOfSight(c: Sprite, cam: ReturnType<Scene["camera"]>): boolean {
+    const w = c.texture.width * Math.abs(c.scale.x) + 8;
+    const h = c.texture.height * Math.abs(c.scale.y) + 8;
+    // (Big ones, and those that may be laid out: by their own.)
+    if (w > 220 || h > 260 || c.children.length || c.zIndex >= 1e7) return false;
+    const foot = this.feet.get(c) ?? c.zIndex;
+    const deep = Math.max(foot, c.position.y + h);
+    const den = cam.d - (deep - cam.fy) * cam.cos;
+    // (Right up by the lens: left to what draws it.)
+    if (den < cam.d * 0.12) return false;
+    const s = (cam.d / den) * cam.z;
+    const x = cam.ox + (c.position.x - cam.fx) * s;
+    if (x + w * s < -80 || x - w * s > cam.ox * 2 + 80) {
+      // (Nearer the middle the further off it is: out of it by its back too.)
+      const far = (cam.d / (cam.d - (Math.min(foot, c.position.y - h) - cam.fy) * cam.cos)) * cam.z;
+      const fx = cam.ox + (c.position.x - cam.fx) * far;
+      return fx + w * far < -80 || fx - w * far > cam.ox * 2 + 80;
+    }
+    // (Its foot, and all of it above, below the bottom of the screen.)
+    const near = Math.min(foot, c.position.y - h);
+    const y = cam.oy + (Math.min(foot, c.position.y) - cam.fy) * cam.sin * s;
+    return near > cam.fy && y - (h * 2 + Math.abs(foot - c.position.y)) * s > this.app.screen.height + 40;
+  }
+
   private tiltNow() {
     if (!this.view3d || !this.world.visible) return;
     const cam = this.camera();
@@ -1995,12 +2720,19 @@ export class Scene {
     w.position.set(0, 0);
     w.scale.set(1);
     const now = performance.now();
-    this.frontStep = Math.min(1, (now - this.frontAt) / 260);
+    const key = `${cam.ox},${cam.oy},${cam.z},${cam.d},${cam.fx},${cam.fy},${cam.sin}`;
+    if (key !== this.camWas) {
+      this.camWas = key;
+      this.camId++;
+    }
+    this.frontMs = Math.min(100, now - this.frontAt);
+    this.frontStep = Math.min(1, this.frontMs / 260);
     this.frontAt = now;
-    this.hiders.length = 0;
-    this.sideHiders.length = 0;
     this.cleared.length = 0;
+    this.lampsUsed = 0;
+    this.flamesUsed = 0;
 
+    this.grass?.look(cam);
     // The ground, chunk by chunk, in true perspective.
     this.ground.visible = false;
     this.ground3d.visible = true;
@@ -2014,7 +2746,10 @@ export class Scene {
       }
       // (Far off, it fades out into the land, and in as it comes.)
       c.mesh.alpha = this.cine === 0 ? 1 : 1 - this.cine * (1 - Math.min(1, (now - c.born) / BORN_MS) * Math.max(0, Math.min(1, (104 - (cam.fy - y0) / TILE) / 24)));
-      this.layMesh(c.mesh, CHUNK_VERTS, x0, y0, x0 + g.texture.width, y0 + g.texture.height, cam);
+      c.mesh.visible = !this.unseen(x0, y0, x0 + g.texture.width, y0 + g.texture.height, 0, cam);
+      if (c.mesh.visible && !this.already(c.mesh)) this.layMesh(c.mesh, CHUNK_VERTS, x0, y0, x0 + g.texture.width, y0 + g.texture.height, cam);
+      // (Its water, over it: the same shape.)
+      if (c.water && this.waterShown) this.water?.tilted(c, c.mesh, x0, y0, g.texture.width, g.texture.height);
     }
 
     // Standing things stand up; flat things lie down. (Sorted by foot, so
@@ -2024,10 +2759,24 @@ export class Scene {
     // true perspective, as the ground is, so they stay put on it.
     this.pruneLaid();
     // (Which buildings are in your way, before what's on them is drawn.)
-    if (this.cine > 0 && this.open) for (const p of this.skyline) if (p.sprite && SOLID.has(p.o.kind)) this.solidFade(p, this.footOfPlaced(p), cam);
+    if (this.cine > 0 && this.open) for (const p of this.skyline) if (p.sprite && isSolid(p.o)) this.solidFade(p, this.footOfPlaced(p), cam);
     for (const c of this.flatLayers) if (c.destroyed) this.flatLayers.delete(c);
-    for (const c of [...this.sorted.children]) {
-      if (c instanceof MeshPlane || this.asIs.has(c)) continue;
+    // (Meshes made along the way go on the end: not looked at.)
+    const all = this.sorted.children;
+    for (let i = 0, n = all.length; i < n; i++) {
+      const c = all[i];
+      if (!c || c instanceof MeshPlane) continue;
+      // (Shapes with nothing drawn; what's out of the picture: nothing to place.)
+      if (!c.visible) continue;
+      let off = false;
+      if (c instanceof Sprite) off = !this.reliefs.has(c) && !this.farSprites.has(c) && this.outOfSight(c, cam);
+      else if (c instanceof Graphics) off = c.context.instructions.length === 0 && !c.children.length;
+      if (c.culled !== off) c.culled = off;
+      if (off) {
+        this.drawn3d.delete(c);
+        continue;
+      }
+      if (this.asIs.has(c)) continue;
       // (A fence beside a ramp: in front of it seen from its own side, behind it from the other.)
       const b = this.besides.get(c);
       if (b) {
@@ -2042,10 +2791,15 @@ export class Scene {
       else if (lying.has(c) && c instanceof Sprite && (Math.abs(c.width) > LAY_TILES * TILE || Math.abs(c.height) > LAY_TILES * TILE)) this.laySprite(c, cam);
       else if (c.zIndex === 0 && c.position.x === 0 && c.position.y === 0) this.placeWhole(c, cam);
       else if (lying.has(c)) this.place(c, c.position.y, true, cam);
-      else this.place(c, this.footOf(c), false, cam);
+      else {
+        // (A building's roof slopes back: drawn by `standSides`.)
+        const solid = this.cine > 0 && this.open && c instanceof Sprite ? this.solidOf.get(c) : undefined;
+        if (solid && c instanceof Sprite && this.cine > 0.5 && cam.fy - solid.o.y * TILE < (FADE_FROM + FADE_OVER) * TILE) this.wallOnly(solid, c);
+        this.place(c, this.footOf(c), false, cam);
+      }
     }
     this.standBowl(cam);
-    if (this.cine > 0 && this.open) for (const p of this.skyline) if (p.sprite && SOLID.has(p.o.kind) && cam.fy - p.o.y * TILE < (FADE_FROM + FADE_OVER) * TILE) this.standSides(p, cam);
+    if (this.cine > 0 && this.open) for (const p of this.skyline) if (p.sprite && isSolid(p.o) && cam.fy - p.o.y * TILE < (FADE_FROM + FADE_OVER) * TILE) this.standSides(p, cam);
     this.layers3d = this.layers3d.filter((l) => !l.c.destroyed);
     const inLayer = new Set(this.layers3d.map((l) => l.c));
     for (const c of w.children) {
@@ -2054,9 +2808,18 @@ export class Scene {
       else if (c.position.x === 0 && c.position.y === 0) this.placeWhole(c, cam);
       else this.place(c, c.position.y, false, cam);
     }
+    const lit = this.depthLit;
     for (const { c, whole, stand } of this.layers3d) {
       if (!c.visible) continue;
       this.save(c);
+      // The night's lights, and what glows over the night (fireflies, the campfire): into the world, each at its depth.
+      if (lit && (c === this.nightLights || (whole && c.parent === this.app.stage))) {
+        const rest = this.lightUp(c, whole, cam);
+        if (!rest) {
+          c.visible = false;
+          continue;
+        }
+      }
       c.position.set(0, 0);
       c.scale.set(1);
       if (whole) {
@@ -2068,20 +2831,18 @@ export class Scene {
         if (!k.visible || !k.renderable) continue;
         const foot = this.feet.get(k);
         if (this.asIs.has(k)) continue;
+        // (A fire's glow on the world's own overlay: at its depth too.)
+        if (lit && foot !== undefined && this.lamp(k, foot, false, 1, null, cam)) {
+          this.save(k);
+          k.visible = false;
+          continue;
+        }
         if (this.flatLayers.has(k)) this.layFlat(k, cam);
         else if (foot !== undefined) {
           this.place(k, foot, false, cam);
-          // (Drawn over the world, out along the ground: the town's houses hide it.)
-          if (this.cine > 0) this.glim(k, foot, cam);
         } else if (k.position.x === 0 && k.position.y === 0) this.placeWhole(k, cam);
         else {
-          const y = k.position.y;
-          this.place(k, y, !stand, cam);
-          // (A pool of lamplight far off along the ground, the same, and it fades with distance.)
-          if (this.cine > 0) {
-            k.alpha *= 1 - this.cine * Math.max(0, Math.min(1, (cam.fy - y) / TILE / 12 - 1));
-            this.glim(k, y, cam);
-          }
+          this.place(k, k.position.y, !stand, cam);
         }
       }
     }
@@ -2098,10 +2859,94 @@ export class Scene {
     }
   }
 
+  /**
+   * A layer of lights (`whole`: things that glow, drawn as one otherwise)
+   * into the world, each at its depth. Whether any of it's left to draw over
+   * the world as before (something that can't be: made of several parts).
+   */
+  private lightUp(c: Container, whole: boolean, cam: ReturnType<Scene["camera"]>): boolean {
+    let rest = false;
+    for (const k of c.children) {
+      if (!k.visible || !k.renderable || this.asIs.has(k)) continue;
+      const foot = this.feet.get(k);
+      // (Drawn in world coordinates with no foot: no depth to go by, over the world it is.)
+      if (foot === undefined && k.position.x === 0 && k.position.y === 0) {
+        rest ||= whole;
+        continue;
+      }
+      // (A firefly hovers a little way up.)
+      const at = foot ?? (whole ? k.position.y + 12 : k.position.y);
+      if (!this.lamp(k, at, foot === undefined && !whole, c.alpha, LIGHT, cam)) rest ||= whole;
+    }
+    return rest;
+  }
+
+  /**
+   * `k`, a light (a picture, or drawn shapes) standing at depth `foot`, or
+   * (`flat`) a pool of it on the ground there, drawn in the world at its
+   * depth this frame, with `blend` (null: its own). False: it can't be.
+   */
+  private lamp(k: Container, foot: number, flat: boolean, alpha: number, blend: typeof LIGHT | null, cam: ReturnType<Scene["camera"]>): boolean {
+    const pic = k instanceof Sprite;
+    if (!(pic || k instanceof Graphics) || k.children.length) return false;
+    const p = this.project(k.position.x, foot, cam);
+    if (!p) return true;
+    let a = k.alpha * alpha;
+    const away = (cam.fy - foot) / TILE;
+    // (A pool far off along the ground is only a sliver: it goes first.)
+    if (flat) a *= 1 - this.cine * Math.max(0, Math.min(1, away / 14 - 1));
+    if (this.cleared.length) {
+      const on = this.onTop.get(k);
+      a *= this.onSolid(on ?? k.position.x, foot, on !== undefined);
+    }
+    if (a < 0.01 || away > SKY_FAR) return true;
+    const sy = flat ? p.s * cam.sin : p.s;
+    let tall = 0;
+    if (pic) {
+      const w = k.texture.width * Math.abs(k.scale.x) * p.s;
+      const left = p.x - k.anchor.x * w;
+      if (left > cam.ox * 2 || left + w < 0) return true;
+      tall = k.texture.height * Math.abs(k.scale.y);
+    }
+    let g: Sprite | Graphics;
+    if (pic) {
+      g = this.lamps[this.lampsUsed] ?? this.newLamp(this.lamps, new Sprite());
+      this.lampsUsed++;
+      const q = g as Sprite;
+      if (q.texture !== k.texture) q.texture = k.texture;
+      q.anchor.copyFrom(k.anchor);
+    } else {
+      g = this.flames[this.flamesUsed] ?? this.newLamp(this.flames, new Graphics());
+      this.flamesUsed++;
+      const q = g as Graphics;
+      if (q.context !== (k as Graphics).context) q.context = (k as Graphics).context;
+    }
+    g.position.set(p.x, p.y + (k.position.y - foot - (this.lifts.get(k) ?? 0)) * sy);
+    g.scale.set(k.scale.x * p.s, k.scale.y * sy);
+    g.rotation = k.rotation;
+    g.skew.copyFrom(k.skew);
+    g.tint = k.tint;
+    g.alpha = Math.min(1, a);
+    g.blendMode = blend ?? k.blendMode;
+    // (Just over what it's on: a lamp's post, a building's front. A pool
+    // lights what stands in it: in over all of that.)
+    g.zIndex = foot + (flat ? Math.min(90, tall * 0.5) : 4.5);
+    g.visible = true;
+    return true;
+  }
+
+  private newLamp<T extends Sprite | Graphics>(pool: T[], g: T): T {
+    this.asIs.add(g);
+    this.fxSkip.add(g);
+    this.sorted.addChild(g);
+    pool.push(g);
+    return g;
+  }
+
   /** Just after the frame is drawn: everything back where the game left it. */
   private level() {
-    if (!this.saved.length && this.ground.visible) return;
-    for (let i = this.saved.length - 1; i >= 0; i--) {
+    if (!this.savedN && this.ground.visible) return;
+    for (let i = this.savedN - 1; i >= 0; i--) {
       const s = this.saved[i];
       if (s.c.destroyed) continue;
       s.c.position.set(s.x, s.y);
@@ -2109,7 +2954,9 @@ export class Scene {
       s.c.visible = s.visible;
       s.c.alpha = s.alpha;
     }
-    this.saved.length = 0;
+    this.savedN = 0;
+    for (const w of this.swapped) if (!w.s.destroyed) w.s.texture = w.t;
+    this.swapped.length = 0;
     for (const l of this.laid.values()) {
       l.mesh.visible = false;
       if (l.side) l.side.visible = false;
@@ -2117,6 +2964,8 @@ export class Scene {
     for (const box of this.wallBoxes.values()) for (const m of box) m.visible = false;
     for (const f of this.bowlFaces ?? []) f.m.visible = false;
     for (const m of this.mist) m.visible = false;
+    for (const q of this.lamps) q.visible = false;
+    for (const q of this.flames) q.visible = false;
     for (const ms of this.skirts.values()) for (const m of ms) m.visible = false;
     for (const ms of this.runs.values()) for (const m of ms) m.visible = false;
     for (const p of this.skyline) if (p.walls) for (const m of p.walls) m.visible = false;
@@ -2141,7 +2990,7 @@ export class Scene {
       if (hides) want = bottom - top > 80 * z || right - left > 96 * z ? 0 : FRONT_ALPHA;
       if (wallTiles.has(c) && !this.open) want = 0.1;
       const near = (cam.d - ahead * cam.cos) / cam.d;
-      want = Math.min(want, Math.max(0, Math.min(1, (near - 0.1) / 0.16)));
+      want = Math.min(want, Math.max(0, Math.min(1, (near - 0.16) / 0.1)));
     }
     const was = this.fronts.get(c) ?? want;
     const is = was + (want - was) * this.frontStep;
@@ -2157,7 +3006,10 @@ export class Scene {
   private farFade(c: Container, foot: number, cam: ReturnType<Scene["camera"]>): number {
     const away = (cam.fy - foot) / TILE;
     const ramp = (v: number) => Math.max(0, Math.min(1, v));
-    if (this.farSprites.has(c)) return this.cine * ramp((SKY_FAR - away) / SKY_OVER);
+    if (this.farSprites.has(c)) {
+      const from = this.landFrom.get(c);
+      return this.cine * ramp((SKY_FAR - away) / SKY_OVER) * (from ? ramp((away - from[0]) / from[1]) : 1);
+    }
     let f = away > FADE_FROM ? 1 - ramp((away - FADE_FROM) / FADE_OVER) : 1;
     const born = this.bornAt.get(c);
     if (born !== undefined) {
@@ -2170,67 +3022,36 @@ export class Scene {
 
   /**
    * How much of a building to draw: all of it, till it'd stand between you
-   * and the lens (you've gone round behind it); then it clears, by how far
-   * round you've gone (and not all in one go).
+   * and the lens (you've gone round behind it); then it clears, over a
+   * moment.
    */
   private solidFade(p: Placed, foot: number, cam: ReturnType<Scene["camera"]>): number {
-    let want = 1;
-    if (foot > cam.fy + 4) {
-      const x0 = p.o.x * TILE;
-      const x1 = (p.o.x + p.o.w) * TILE;
-      const aside = Math.max(x0 - cam.fx, cam.fx - x1) / TILE;
-      const t = Math.max(0, Math.min(1, (aside - IN_THE_WAY) / (ASIDE - IN_THE_WAY)));
-      want = t * t * (3 - 2 * t);
-    }
     const was = this.solidNow.get(p);
+    let away = false;
+    if (foot > cam.fy + 4) {
+      const aside = Math.max(p.o.x * TILE - cam.fx, cam.fx - (p.o.x + p.o.w) * TILE) / TILE;
+      const by = Math.max(0, Math.min(1, ((foot - cam.fy) / TILE - 2) / 3));
+      away = aside < IN_THE_WAY + BY_THE_LENS * by + (was?.away ? ASIDE : 0);
+    }
+    const want = away ? 0 : 1;
     // (Once a frame, however many of its parts ask.)
     if (was && was.at === this.frontAt) return 1 + (was.v - 1) * this.cine;
-    const v = was ? was.v + (want - was.v) * Math.min(1, this.frontStep * 0.7) : want;
-    this.solidNow.set(p, { v, at: this.frontAt });
+    const step = this.frontMs / CLEAR_MS;
+    const v = was ? (want > was.v ? Math.min(want, was.v + step) : Math.max(want, was.v - step)) : want;
+    this.solidNow.set(p, { v, at: this.frontAt, away });
     if (v < 0.99) this.cleared.push({ x0: p.o.x * TILE, x1: (p.o.x + p.o.w) * TILE, back: p.o.y * TILE + 8, foot, v: 1 + (v - 1) * this.cine });
     return 1 + (v - 1) * this.cine;
   }
 
-  private solidNow = new WeakMap<Placed, { v: number; at: number }>();
+  private solidNow = new WeakMap<Placed, { v: number; at: number; away: boolean }>();
   /** The buildings cleared (or clearing) out of your way this frame, and how much of each is left: what's on them goes with them. */
-  private cleared: { x0: number; x1: number; back: number; foot: number; v: number }[] = [];
+  private cleared: { x0: number; x1: number; back: number; foot: number; v: number; only?: boolean }[] = [];
 
   /** How much of something on a building (its lamps, its smoke) to draw, by how much of the building is. */
-  private onSolid(x: number, foot: number): number {
-    for (const q of this.cleared) if (x > q.x0 && x < q.x1 && foot > q.back && foot < q.foot + 8) return q.v;
+  private onSolid(x: number, foot: number, top = false): number {
+    // (What's cleared out of the way for its fires only: not whoever's walking through it.)
+    for (const q of this.cleared) if ((top || !q.only) && x > q.x0 && x < q.x1 && foot > q.back && foot < q.foot + 8) return q.v;
     return 1;
-  }
-
-  /** Whether something standing at depth `foot`, where it's drawn now, is behind one of the big things. */
-  private hidden(c: Container, foot: number, cam: ReturnType<Scene["camera"]>): boolean {
-    const { x, y } = c.position;
-    for (const h of this.hiders) if (h.foot > foot + TILE && x > h.x0 && x < h.x1 && y > h.y0 && y < h.y1) return true;
-    for (const h of this.sideHiders) {
-      if (x <= h.x0 || x >= h.x1) continue;
-      // (Where the wall is, at that point across the screen: further off than that, it's behind it.)
-      const z = (x - cam.ox) / (h.wall - cam.fx);
-      const wy = cam.fy + (cam.d - (cam.d * cam.z) / z) / cam.cos;
-      if (foot > wy - 6) continue;
-      const ground = cam.oy + (wy - cam.fy) * cam.sin * z;
-      if (y < ground + 4 && y > ground - h.h * z) return true;
-    }
-    return false;
-  }
-
-  /** A light drawn over the world: dimmed away as a building comes between it and you, and back as it goes. */
-  private glim(k: Container, foot: number, cam: ReturnType<Scene["camera"]>) {
-    if (!k.visible) return;
-    // (Off the picture: nothing to draw.)
-    if (k.position.x < -400 || k.position.x > cam.ox * 2 + 400) {
-      k.visible = false;
-      return;
-    }
-    const want = this.hidden(k, foot, cam) ? 0 : 1;
-    const was = this.glimmer.get(k) ?? want;
-    const v = was + (want - was) * Math.min(1, this.frontStep * 1.6);
-    this.glimmer.set(k, v);
-    k.alpha *= v;
-    if (v < 0.02) k.visible = false;
   }
 
   /** The same for something built up in perspective: its sides and its foot (world px), and how tall. */
@@ -2253,7 +3074,7 @@ export class Scene {
     const open = this.open;
     if (open) {
       if (!this.sky) {
-        this.sky = new CineSky();
+        this.sky = new CineSky(this.canLight);
         this.world.addChildAt(this.sky.back, 0);
       }
       // (In front of it all, whatever's been added since.)
@@ -2280,11 +3101,14 @@ export class Scene {
       this.layMist(cam, horizon);
     }
     // The lens: sharp round you, soft in the far distance and right up close.
-    if (settings.quality === "high") {
+    const sharp = settings.quality === "high";
+    if (sharp || this.depthLit) {
       this.lens ??= new CineLens();
+      this.lens.night(this.air.tint, this.depthLit);
       const k = height / 800;
       const head = cam.oy - 58 * cam.z;
-      if (open) this.lens.set(horizon - height * 0.1, Math.min(head, horizon + height * 0.2), cam.oy + height * 0.09, height * 1.02, 0.9 * k * this.cine, 4.5 * k * this.cine, 0.6 * this.cine);
+      if (!sharp) this.lens.set(0, 1, height, height + 1, 0, 0, 0);
+      else if (open) this.lens.set(horizon - height * 0.1, Math.min(head, horizon + height * 0.2), cam.oy + height * 0.09, height * 1.02, 0.9 * k * this.cine, 4.5 * k * this.cine, 0.6 * this.cine);
       else this.lens.set(-height * 0.2, head - height * 0.12, cam.oy + height * 0.12, height * 1.05, 2.2 * k * this.cine, 3.5 * k * this.cine, 0.5 * this.cine);
       if (this.world.filters?.[0] !== this.lens) {
         this.world.filters = [this.lens];
@@ -2377,6 +3201,7 @@ export class Scene {
   }
 
   update() {
+    this.ticks++;
     const now = performance.now();
     // The zoom glides to where it's headed.
     const dt = Math.min(0.1, (now - this.zoomAt) / 1000);
@@ -2385,6 +3210,12 @@ export class Scene {
       const next = this.zoom + (this.zoomTo - this.zoom) * (1 - Math.exp(-dt / 0.085));
       this.zoom = Math.abs(this.zoomTo - next) < 0.01 ? this.zoomTo : next;
       this.resize();
+    }
+    if (this.cineZoom !== this.cineZoomTo) {
+      const next = this.cineZoom + (this.cineZoomTo - this.cineZoom) * (1 - Math.exp(-dt / 0.085));
+      this.cineZoom = Math.abs(this.cineZoomTo - next) < 0.004 ? this.cineZoomTo : next;
+      // (It sees wider, or less wide: what's loaded's looked at again.)
+      if (this.cine > 0) this.loaded = null;
     }
     // The camera swoops down into the cinematic view, and back up out of it.
     const cineTo = this.cinematic ? 1 : 0;
@@ -2405,6 +3236,12 @@ export class Scene {
     this.marker.visible = left > 0;
     this.stream();
     this.updateFar(now);
+    if (this.grass) {
+      // (Zoomed right out it'd be a blur: not grown, then.)
+      const grown = !settings.grass ? 0 : this.view3d ? 1 : Math.max(0, Math.min(1, (this.scale - 0.72) / 0.4));
+      this.grass.field.still = !settings.grassBend;
+      this.grass.update(this.viewRect(), this.focus.x, this.focus.y, this.view3d, grown, settings.quality === "low" ? 0.6 : 1, this.wind, now, dt);
+    }
     // Wind: plants on screen lean gently, each a little out of step.
     const v = this.viewRect();
     const t = now / 1000;
@@ -2413,8 +3250,9 @@ export class Scene {
       for (const p of c.sway) {
         if (p.x < v.x0 - 2 || p.x > v.x1 + 2 || p.y < v.y0 - 2 || p.y > v.y1 + 3) continue;
         const gust = Math.sin(t * 0.7 + p.x * 0.15) * 0.5 + 0.5;
-        p.s.skew.x = Math.sin(t * 1.6 + p.phase / 100) * amp * (0.4 + gust);
+        p.s.skew.x = Math.sin(t * 1.6 + p.phase / 100) * amp * p.k * (0.4 + gust);
       }
+      this.seeThrough(c.big, dt);
     }
   }
 }

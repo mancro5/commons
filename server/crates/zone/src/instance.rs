@@ -22,6 +22,7 @@ mod home;
 mod labyrinth;
 mod lucky;
 mod paintball;
+mod petbounce;
 mod petduo;
 mod petwalk;
 mod pool;
@@ -81,6 +82,18 @@ const MAP_DOTS_EVERY_MS: u32 = 2000;
 const MAP_DOTS_MAX: usize = 400;
 /// A client whose unsent output grows past this is disconnected.
 const MAX_PENDING_OUT: usize = 256 * 1024;
+/// A fight's every move goes to those within this many tiles of it (and all
+/// who are in it, or watching it on a screen); further off, across town,
+/// every other tick's.
+const FIGHT_NEAR: i32 = 40;
+
+/// How many tiles `t` is from a box (x, y, w, h): none, inside it.
+fn apart(t: TilePos, b: (u16, u16, u16, u16)) -> i32 {
+    let (x, y) = (t.0 as i32, t.1 as i32);
+    let (x0, y0) = (b.0 as i32, b.1 as i32);
+    let (x1, y1) = (x0 + b.2 as i32 - 1, y0 + b.3 as i32 - 1);
+    (x0 - x).max(x - x1).max(y0 - y).max(y - y1).max(0)
+}
 const INBOX: usize = 16_384;
 
 pub type ConnId = u64;
@@ -337,6 +350,7 @@ pub struct Instance {
     pet_check_at: u32,
     /// Games of Treat Catch on (`petduo`).
     pet_duos: Vec<petduo::Duo>,
+    pet_bounces: Vec<petbounce::Bounce>,
     /// When everyone's next told where everyone is, for the map (`MapDots`).
     next_map_dots: u32,
     /// Index of the programme last announced on the big screen.
@@ -472,6 +486,7 @@ impl Instance {
             next_activity_report: ACTIVITY_EVERY_MS,
             pet_check_at: 0,
             pet_duos: Vec::new(),
+            pet_bounces: Vec::new(),
             next_map_dots: 0,
             screen_index: None,
             owner,
@@ -615,6 +630,7 @@ impl Instance {
             self.pet_catch_tick(now);
             self.pet_walk_tick(now);
             self.pet_duo_tick(now);
+            self.pet_bounce_tick(now);
             self.rps_tick(now);
             self.pool_tick(now);
             self.bowl_tick(now);
@@ -942,6 +958,7 @@ impl Instance {
         self.rps_leave(id);
         self.golf_duel_leave(id);
         self.pet_duo_leave(id);
+        self.pet_bounce_leave(id);
         self.pool_leave(id);
         self.bowl_leave_all(id);
         self.arena_leave(id);
@@ -1163,6 +1180,22 @@ impl Instance {
             ClientMsg::PetDuoCatch { treat } => {
                 let now = self.clock.now_ms();
                 self.pet_duo_catch(id, treat, now)
+            }
+            ClientMsg::PetBounceTap { n, q } => {
+                let now = self.clock.now_ms();
+                self.pet_bounce_tap(id, n, q, now)
+            }
+            ClientMsg::PetBounceAt { x } => {
+                let now = self.clock.now_ms();
+                self.pet_bounce_at(id, x, now)
+            }
+            ClientMsg::PetBounceStar { n, k } => {
+                let now = self.clock.now_ms();
+                self.pet_bounce_star(id, n, k, now)
+            }
+            ClientMsg::PetBounceAgain { on } => {
+                let now = self.clock.now_ms();
+                self.pet_bounce_again(id, on, now)
             }
             ClientMsg::PetFishHit {} => {
                 let now = self.clock.now_ms();

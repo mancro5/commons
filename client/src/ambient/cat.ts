@@ -67,10 +67,18 @@ export class Cat {
       if (h && Math.abs(h.x) > 0.1) this.facing = h.x > 0 ? 1 : -1;
     }
     this.napping = !moving;
-    this.draw(nowMs, moving);
+    // (Fifteen pictures a second: its walk has two steps, its Zzz drift slowly.)
+    if (nowMs - this.drawnAt > 66 || moving !== this.wasMoving) {
+      this.drawnAt = nowMs;
+      this.wasMoving = moving;
+      this.draw(nowMs, moving);
+    }
     this.sprite.position.set(Math.round(this.pos.x * TILE + TILE / 2), Math.round(this.pos.y * TILE + TILE - 6));
     this.sprite.zIndex = this.pos.y * TILE + TILE - 5;
   }
+
+  private drawnAt = 0;
+  private wasMoving = false;
 
   private draw(now: number, moving: boolean) {
     const g = this.body.clear();

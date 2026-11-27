@@ -42,6 +42,11 @@ const TOSS_MS = 650;
 const TOSS_HEIGHT = 34;
 /** Where a lure would go, while you decide. */
 const PREVIEW = 0xbff8ff;
+
+/** The colour a lure's water glows by night: its own (gold for the golden lure, rose, purple, aqua). */
+function lureGlow(kind: number): number {
+  return kind === LURE.GOLD ? GOLD : kind === LURE.GOLD_MAGNET ? ROSE : kind === LURE.MAGNET ? PURPLE : AQUA;
+}
 /** Full strength out to this far from the middle (tiles), gone by this far. */
 const FADE_IN = 1.3;
 const FADE_OUT = 2.7;
@@ -171,7 +176,7 @@ export class LureShows {
     top.addChild(timer);
     this.scene.world.addChild(top);
     this.scene.layer3d(top, false, true);
-    const glow = this.nightGlow(centre.x, centre.y, kind === LURE.GOLD_MAGNET ? 0xff5fb0 : kind === LURE.MAGNET ? 0xb060ff : 0x5ff0ff);
+    const glow = this.nightGlow(centre.x, centre.y, lureGlow(kind));
     this.lures.set(key, { water, top, timer, shown: "", glimmer, tiles, area: this.reach(at), centre, ends, nextLeap: 0, leaps: [], rings: [], glow, kind, appearAt });
   }
 

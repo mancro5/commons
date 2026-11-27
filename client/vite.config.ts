@@ -24,5 +24,7 @@ export default defineConfig({
     },
     fs: { allow: [".."] }, // maps live in ../assets
   },
+  // (The built game, `scripts/dev.mjs --fast`: on the same port, the backends behind it the same.)
+  preview: { port: Number(process.env.COMMONS_DEV_WEB_PORT ?? 5173), strictPort: true },
   build: { target: "es2022", chunkSizeWarningLimit: 1200 },
 });

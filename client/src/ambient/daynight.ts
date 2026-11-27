@@ -4,6 +4,9 @@
 // light back in on top of it as it gets dark, and a colour grade keeps it all
 // rich (most of all at golden hour). `?hour=21.5` overrides the clock for testing.
 
+import { LightFx } from "../world/lightfx";
+import { giantLights } from "../world/bigtrees";
+import { lampAt, lampLights } from "../world/lampart";
 import { AlphaFilter, type Application, ColorMatrixFilter, Container, Graphics, Sprite, Texture, UPDATE_PRIORITY } from "pixi.js";
 import { settings } from "../settings";
 import { TILE, buildingLanterns } from "../world/art";
@@ -233,6 +236,8 @@ export class DayNight {
   private glow: Texture;
   /** 0 in daylight … 1 at night. */
   dark = 0;
+  /** The night's colour over everything (white by day), outdoors. */
+  tint = 0xffffff;
 
   constructor(
     private app: Application,
@@ -256,6 +261,7 @@ export class DayNight {
     this.lights.filters = [this.lightsPass];
     app.stage.addChild(this.lights);
     scene.layer3d(this.lights, false);
+    scene.lightsAre(this.lights);
     // Once the 3D view has put everything where it's seen, just before it's drawn.
     app.ticker.add(this.cutOut, this, UPDATE_PRIORITY.LOW + 0.5);
     // The whole picture, richer and punchier (see `gradeAt`).
@@ -293,13 +299,19 @@ export class DayNight {
         // than one blown-out spot).
         add(tex, x, foot - 20, 4.2, 3.6, 0.16, foot);
         add(pool, x, foot - 6, 5.2, 3.2, 0.62);
-        add(bulb, x, foot - 38, 0.45, 0.45, 0.8, foot);
+        // (In its glass, wherever that is on this one: lampart.ts.)
+        for (const l of lampLights(lampAt(map, i % map.width, Math.floor(i / map.width)))) add(bulb, x + l.x, foot - l.up + 2, 0.45 * l.size, 0.45 * l.size, 0.8, foot);
       } else {
         // A garden lantern: smaller and more orange.
         add(pool, x, foot - 2, 2.2, 1.4, 0.7);
         add(bulb, x, foot - 32, 0.5, 0.5, 0.9, foot);
       }
     });
+    // The great trees' lanterns, and the light in the old oak's hollow.
+    for (const l of giantLights(map)) {
+      add(tex, l.x, l.y, 0.9, 0.9, 0.34, l.foot);
+      add(bulb, l.x, l.y, 0.32, 0.32, 0.85, l.foot);
+    }
     for (const o of map.objects) {
       // The paintball yard's floodlights: a bank of lamps up top, and the field lit wide below.
       if (o.kind === "pb_floodlight") {
@@ -464,12 +476,17 @@ export class DayNight {
   }
 
   /** A warm light at world position (x, y) that shows after dark. */
-  addLight(x: number, y: number, scale: number) {
+  addLight(x: number, y: number, scale: number, foot?: number) {
     const s = new Sprite(this.glow);
     s.anchor.set(0.5);
     s.scale.set(scale);
     s.position.set(x, y);
     this.lights.addChild(s);
+    // (Up on a lamp: stood there in the tilted views, not laid on the ground.)
+    if (foot !== undefined && this.scene) {
+      this.scene.standOn(s, foot);
+      standingLight(s, foot);
+    }
   }
 
   /**
@@ -494,6 +511,7 @@ export class DayNight {
       }
       if (lit.length) {
         for (const o of this.scene.occluders()) {
+          if (o.destroyed || !o.texture) continue;
           const w = o.texture.width * o.scale.x;
           const h = o.texture.height * o.scale.y;
           const ox0 = Math.min(o.x - o.anchor.x * w, o.x + (1 - o.anchor.x) * w);
@@ -543,12 +561,26 @@ export class DayNight {
 
   /** Always day (the settings can keep night from falling). */
   alwaysDay = false;
-  /** The colour grade over the whole picture (off on the fast setting). */
+  /** The colour grade over the whole picture (off on the fast setting), and the shaders' light after it. */
   setGraded(on: boolean) {
+    const light = settings.shaders !== "off";
+    if (light) this.light ??= new LightFx();
+    const want = [...(on ? [this.grade] : []), ...(light && this.light ? [this.light] : [])];
     const now = this.app.stage.filters;
-    const has = Array.isArray(now) && now.length > 0;
-    if (has !== on) this.app.stage.filters = on ? [this.grade] : [];
+    const have = Array.isArray(now) ? now : [];
+    if (have.length !== want.length || have.some((f, i) => f !== want[i])) this.app.stage.filters = want;
+    if (light && this.light) {
+      const h = this.hour();
+      const golden = Math.max(0, 1 - Math.min(Math.abs(h - 18.6), Math.abs(h - 6.6)) / 1.6);
+      const inside = !!this.neon || this.room || this.indoors;
+      // (The sun rises on the right and sets on the left, as the cinematic sky has it.)
+      const sunX = Math.max(0, Math.min(1, 0.9 - ((h - 5.9) / 13.3) * 0.8));
+      this.light.set(inside ? 0.3 : this.dark, inside ? 0 : golden, inside, settings.bloom, sunX);
+    }
   }
+
+  /** The shaders' light over it all (lightfx.ts). */
+  private light: LightFx | null = null;
 
   /** Under the open sky (not indoors, not a home's rooms): for the shadows. */
   get outdoors(): boolean {
@@ -571,8 +603,9 @@ export class DayNight {
 
   /** Sets the colour grade (only when it has moved enough to notice). */
   private setGrade(sat: number, con: number) {
-    // (The advanced shaders: the warm, deep look of a shader pack.)
-    if (settings.shaders) {
+    // (The vibrant shaders: the warm, deep look of a shader pack. The plain
+    // ones add their light, not colour.)
+    if (settings.shaders === "vibrant") {
       sat += 0.22;
       con += 0.07;
     }
@@ -705,7 +738,7 @@ export class DayNight {
       this.setGrade(0.24, 0.07);
       this.dark = 0;
       // (The advanced shaders: a deeper room, so its lights really light it, and live.)
-      const deep = settings.shaders;
+      const deep = settings.shaders !== "off";
       this.liveLights(deep);
       const level = deep ? Math.min(0.97, 0.84 - dark * 0.52 + this.roomLit * 0.05) : Math.min(1, 0.9 - dark * 0.48 + this.roomLit * 0.07);
       const ch = (v: number) => Math.round(Math.min(1, v) * 255);
@@ -730,7 +763,9 @@ export class DayNight {
     this.dark = dark;
     const { width, height } = this.app.screen;
     this.shade.clear();
-    if (tint !== 0xffffff) this.shade.rect(0, 0, width, height).fill(tint);
+    this.tint = tint;
+    // (The cinematic view's lens does the night's darkening, round its lights.)
+    if (tint !== 0xffffff && !this.scene.depthLit) this.shade.rect(0, 0, width, height).fill(tint);
     this.lights.alpha = Math.min(1, dark * 1.15);
     this.lights.visible = dark > 0.05;
     if (this.lights.visible) {

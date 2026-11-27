@@ -1,3 +1,4 @@
+import "./world/pixitune";
 import { setBetting } from "./activities/arenabets";
 import { TradePanel } from "./ui/trade";
 import { HomeLife } from "./homelife";

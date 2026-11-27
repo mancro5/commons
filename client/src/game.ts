@@ -1,5 +1,7 @@
 // Ties the zone connection, world rendering, avatars, input and HUD together.
 
+import { ShineFx } from "./world/shinefx";
+import { skyAt } from "./world/cinesky";
 import { Labyrinth } from "./labyrinth";
 import { plainName } from "./ui/pixicons";
 import { type Application, type FederatedPointerEvent, Graphics, Sprite, Text } from "pixi.js";
@@ -28,7 +30,8 @@ import { PaintballShow, PB_VIEW } from "./activities/paintball";
 import { CANCELLED, CHOOSING, RpsPicker, beats, pickIcon } from "./activities/rps";
 import { Sky } from "./ambient/sky";
 import { Campfire } from "./activities/campfire";
-import { BOAT, FOLLOW, GOLF, type MoodPicker, type OfferCard, PET_DUO, STOP_FOLLOW, TOGETHER } from "./activities/together";
+import { BOAT, FOLLOW, GOLF, type MoodPicker, type OfferCard, PET_BOUNCE, PET_DUO, STOP_FOLLOW, TOGETHER } from "./activities/together";
+import { PetBouncePanel } from "./activities/petbounce";
 import { PetDuoPanel } from "./activities/petduo";
 import type { BottlesPanel, WishPanel } from "./ui/dream";
 import type { WardrobePanel } from "./ui/wardrobe";
@@ -90,7 +93,8 @@ import type { DirectoryPanel, ShopPanel } from "./ui/mall";
 import type { Minimap } from "./ui/minimap";
 import type { FridgePanel } from "./ui/fridge";
 import type { DailyPanel } from "./ui/daily";
-import { type ActionMenu, type BagPanel, FishermanPanel, GOLD_LURE_ITEM, GOLD_MAGNET_LURE_ITEM, LURE_ITEM, MAGNET_ITEM, MAGNET_LURE_ITEM, type MarketPanel, Panel, ROD_ITEM, type PlaceBanner, type PlotMenu, type ReelGame, isTyping } from "./ui/panels";
+import { type ActionMenu, type BagPanel, FishermanPanel, GOLD_LURE_ITEM, GOLD_MAGNET_LURE_ITEM, LURE_ITEM, MAGNET_ITEM, MAGNET_LURE_ITEM, type MarketPanel, Panel, ROD_ITEM, type PlaceBanner, type PlotMenu, type ReelGame, button, isTyping } from "./ui/panels";
+import { CORNER, inCorner } from "./ui/corner";
 import { Avatar, CAST_SWING_MS, PUMP_MS } from "./world/avatars";
 import { Furniture } from "./world/furniture";
 import type { HomeLife, Look } from "./homelife";
@@ -622,6 +626,7 @@ export class Game {
   private playingCheckAt = 0;
   /** Fish just landed, held up above their anglers. */
   private catches: CatchShows;
+  private namesAt = 0;
   /** What looking after your pet did for it, over its head. */
   private petGains: PetGains;
   /** A catch just announced (and what it brings in): the plain "+1 …" for it would only cover it up. */
@@ -646,6 +651,9 @@ export class Game {
   private goalSent = { kind: 0, x: -1, y: -1, at: 0 };
   /** Treat Catch, with someone and your pets (made the first time). */
   private petDuo: PetDuoPanel | null = null;
+  private petBounce: PetBouncePanel | null = null;
+  private petPlayBtn: HTMLButtonElement | null = null;
+  private petPlayWith = { id: 0, at: 0 };
   /** Pets sent to the water's edge for a catch (by their walker): till when. */
   private petAtWater = new Map<number, number>();
   /** Glimmer lures in the water. */
@@ -659,6 +667,7 @@ export class Game {
   private francy: Francy | null = null;
   /** The stones round Franci's pond, and its frogs. */
   private pond: PondFx | null = null;
+  private shineFx: ShineFx | null = null;
   /** Which fisherman the shop was opened from (they answer when you buy or sell). */
   private shopFrom: "pier" | "franci" = "pier";
   private prizes: PrizePanel | null = null;
@@ -760,7 +769,7 @@ export class Game {
     this.outdoors = !indoors && !underground && zoneId !== "home";
     this.ambient = new Ambient(this.scene, map, indoors || underground || zoneId === "home");
     this.daynight = new DayNight(app, this.scene, map, indoors, zoneId === "arcade" || zoneId === "bowling" || zoneId === "casino" || zoneId === "concert_hall", underground ? 22.5 : null);
-    this.milestones = new Milestones(this.scene, map, (x, y, s) => this.daynight.addLight(x, y, s), app.stage);
+    this.milestones = new Milestones(this.scene, map, (x, y, s, foot) => this.daynight.addLight(x, y, s, foot), app.stage);
     // Lamps really light things, in a home and in a front yard.
     this.props.lightUp = {
       add: (x, y, color, scale, key) => this.daynight.roomGlow(x, y, color, scale, scale, key),
@@ -1157,6 +1166,7 @@ export class Game {
     if (fire) {
       this.campfire = new Campfire({ x: fire.x, y: fire.y });
       this.sky.glowLayer.addChild(this.campfire.flames);
+      this.scene.standOn(this.campfire.flames, (fire.y + 1) * TILE);
     }
     this.nookOf = new Uint8Array(map.width * map.height);
     map.objects
@@ -3092,6 +3102,18 @@ export class Game {
     if (fishingBuddy && !this.petAtWater.has(this.selfId)) self.petGoal = this.petFishing!.spot;
     // At its spot by the water: fishing (watching, pouncing in); its bubble a fish.
     const pet = self.pet;
+    if (pet && !pet.onLand) {
+      // Down off a ramp after us: a scuff of its wheels, and off a big one, how it feels about it.
+      let last = 0;
+      pet.onLand = (px) => {
+        const t = performance.now();
+        if (px > 14) psfx.hop(Math.min(0.5, px / 120), 0);
+        if (px > 46 && t - last > 5000) {
+          last = t;
+          psfx.voice(pet.species, "excited", 0.5, 120);
+        }
+      };
+    }
     if (pet) {
       const pf = this.petFishing;
       // (Only with the water right there: never on dry land.)
@@ -3202,6 +3224,54 @@ export class Game {
       send: (m) => this.socket?.send(m),
     });
     return this.petDuo;
+  }
+
+  /** Bounce Buddies' window (made the first time it's needed). */
+  private bouncePanel(): PetBouncePanel {
+    this.petBounce ??= new PetBouncePanel({
+      selfId: () => this.selfId,
+      serverNow: () => this.socket?.clock.now() ?? 0,
+      nameOf: (id) => this.avatars.get(id)?.info.name ?? "your friend",
+      petOf: (id) => this.avatars.get(id)?.info.pet || 1,
+      send: (m) => this.socket?.send(m),
+    });
+    return this.petBounce;
+  }
+
+  /** Someone close by with their pet out too: a button in the corner to play with them. */
+  private updatePetPlay(now: number) {
+    if (now - this.petPlayWith.at < 250) return;
+    this.petPlayWith.at = now;
+    const self = this.self;
+    let who = null as Avatar | null;
+    if (self?.info.pet && this.socket && (!this.skate?.capturing || this.skate.street) && !this.petBounce?.open && !this.petDuo?.open) {
+      let best = 3.6;
+      for (const a of this.avatars.values()) {
+        if (a === self || !a.info.pet || isBotName(a.info.name) || this.ui.social.isBlockedName(a.info.name)) continue;
+        const d = Math.hypot(a.pos.x - self.pos.x, a.pos.y - self.pos.y) - (a.info.id === this.petPlayWith.id ? 0.8 : 0);
+        if (d < best) {
+          best = d;
+          who = a;
+        }
+      }
+    }
+    if (!who) {
+      this.petPlayWith.id = 0;
+      if (this.petPlayBtn) this.petPlayBtn.hidden = true;
+      return;
+    }
+    if (!this.petPlayBtn) {
+      this.petPlayBtn = button("", () => {
+        const a = this.avatars.get(this.petPlayWith.id);
+        if (a) this.offer(a.info.id, PET_BOUNCE, a.info.name);
+      }, "pet-play");
+      inCorner(this.petPlayBtn, CORNER.PLAY);
+    }
+    if (this.petPlayWith.id !== who.info.id || this.petPlayBtn.hidden) {
+      this.petPlayWith.id = who.info.id;
+      this.petPlayBtn.textContent = `🐾 Bounce with ${who.info.name}`;
+      this.petPlayBtn.hidden = false;
+    }
   }
 
   /** A catch by someone's pet (`pet_skill::FISH`, `MAGNET`): out of the water by their pet, or flopping on the bank. */
@@ -3723,6 +3793,30 @@ export class Game {
       case "PetDuoOver":
         this.petDuo?.onOver(m);
         break;
+      case "PetBounce":
+        if (m.a !== this.selfId && m.b !== this.selfId) break;
+        // (On a board, the keys would be the board's.)
+        if (this.skate?.capturing) this.skate.getOff();
+        this.bouncePanel().start(m);
+        break;
+      case "PetBounceTap":
+        this.petBounce?.onTap(m);
+        break;
+      case "PetBounceAt":
+        this.petBounce?.onAt(m);
+        break;
+      case "PetBounceStar":
+        this.petBounce?.onStar(m);
+        break;
+      case "PetBounceBeat":
+        this.petBounce?.onBeat(m);
+        break;
+      case "PetBounceAgain":
+        this.petBounce?.onAgain(m);
+        break;
+      case "PetBounceOver":
+        this.petBounce?.onOver(m);
+        break;
       case "MapDots":
         this.mapDots = m.dots;
         this.mapDotsAt = performance.now();
@@ -4236,6 +4330,8 @@ export class Game {
 
     const stage = this.app.stage;
     stage.eventMode = "static";
+    // (It listens for the whole screen: nothing under it to look through at every move of the mouse.)
+    stage.interactiveChildren = false;
     stage.hitArea = this.app.screen;
     const tap = (e: FederatedPointerEvent) => {
       if (this.place.watch) return;
@@ -4590,8 +4686,8 @@ export class Game {
           const me = this.self;
           if (!this.golf || !me || this.golf.inDuel || !this.golf.onCourse(me.pos.x, me.pos.y) || !this.golf.onCourse(a.pos.x, a.pos.y)) continue;
         }
-        // (Treat Catch: only with both your pets out on a walk.)
-        if (Number(kind) === PET_DUO && (!a.info.pet || !this.self?.info.pet)) continue;
+        // (Pet games: only with both your pets out on a walk.)
+        if ((Number(kind) === PET_DUO || Number(kind) === PET_BOUNCE) && (!a.info.pet || !this.self?.info.pet)) continue;
         actions.push([`${t.icon} ${t.offer}`, () => this.offer(a.info.id, Number(kind), name)]);
       }
       actions.push(["Report", () => this.ui.report.openFor(name)]);
@@ -5817,8 +5913,10 @@ export class Game {
     this.swingAll(wallNow);
     for (const a of this.avatars.values()) a.update(serverNow, wallNow);
 
-    if (self) {
-      const others = [...this.avatars.values()].filter((a) => a !== self);
+    // (Which names show, ten times a second: plenty.)
+    if (self && wallNow - this.namesAt > 100) {
+      this.namesAt = wallNow;
+      const others = [...this.avatars.values()].filter((a) => a !== self && !a.nameOff);
       others.sort((a, b) => dist2(a.pos, self.pos) - dist2(b.pos, self.pos));
       // Nearest first; a name that would overlap a nearer one waits its turn.
       const shown = [self.nameBox()];
@@ -5848,14 +5946,15 @@ export class Game {
     this.ambient.update(this.app.ticker.deltaMS, wallNow);
     // The settings: night falling or not, the weather, the colour grade, name tags.
     this.daynight.alwaysDay = !settings.daynight;
-    this.daynight.setGraded(settings.quality === "high" || settings.vibrant || settings.shaders);
-    // Advanced shaders (real shadows) and water reflections: each its own setting.
-    const fx = settings.shaders || settings.reflections;
+    this.daynight.setGraded(settings.quality === "high" || settings.vibrant || settings.shaders === "vibrant");
+    // The shaders (real shadows) and water reflections: each its own setting.
+    const shaded = settings.shaders !== "off";
+    const fx = shaded || settings.reflections;
     if (fx && !this.worldFx) this.worldFx = new WorldFx(this.scene, this.scene.map);
     if (this.worldFx) {
       // (In a home, shadows from its lights that are on.)
       this.worldFx.roomLights = this.zoneId === "home" ? () => this.props.lightsOn() : null;
-      this.worldFx.shade = settings.shaders;
+      this.worldFx.shade = shaded;
       this.worldFx.reflect = settings.reflections;
     }
     if (!fx && this.worldFx) {
@@ -5863,13 +5962,28 @@ export class Game {
       this.worldFx = null;
     }
     this.worldFx?.update(wallNow, this.daynight.hour(), this.daynight.outdoors ? this.daynight.dark : 0, this.daynight.outdoors);
+    // Shine: the sky in the windows, the chrome glinting.
+    if (settings.shine && !this.shineFx) this.shineFx = new ShineFx(this.scene);
+    if (!settings.shine && this.shineFx) {
+      this.shineFx.destroy();
+      this.shineFx = null;
+    }
+    if (this.shineFx) {
+      const hour = this.daynight.hour();
+      const sky = skyAt(hour, this.scene.airKind);
+      const rgb = (c: number): [number, number, number] => [((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255];
+      const out = this.daynight.outdoors;
+      this.shineFx.update({ top: out ? rgb(sky.horizon) : [0.9, 0.86, 0.78], low: out ? rgb(sky.mid) : [0.6, 0.55, 0.5] }, out ? 1 - this.daynight.dark * 0.7 : 0.55, (this.self?.pos.x ?? 0) * TILE, wallNow / 1000);
+    }
+    // Realistic water (the shaders).
+    this.scene.waterOn(shaded, this.daynight.hour(), this.daynight.outdoors ? this.daynight.dark : 0, wallNow);
     this.weather.enabled = settings.weather;
     this.labels.style.visibility = settings.names ? "" : "hidden";
     this.daynight.update();
     this.milestones.update(wallNow, this.daynight.dark);
     this.ball?.update(serverNow);
     this.weather.update(wallNow, this.daynight.clockHour());
-    this.scene.setAir(this.daynight.hour(), this.daynight.dark, this.weather.kind);
+    this.scene.setAir(this.daynight.hour(), this.daynight.dark, this.weather.kind, this.daynight.tint);
     this.critters.update(wallNow, this.daynight.dark);
     if (this.natureFx) {
       this.natureFx.update(wallNow, this.daynight.dark);
@@ -5949,6 +6063,7 @@ export class Game {
     this.lures.update(serverNow, wallNow);
     this.lucky.update(serverNow, wallNow);
     this.updatePetWays(wallNow);
+    this.updatePetPlay(wallNow);
     this.lab?.update(wallNow, serverNow);
     this.fountain?.update(wallNow);
     this.pond?.update(performance.now());

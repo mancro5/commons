@@ -14,6 +14,7 @@ use axum::Router;
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::{IntoResponse, Json};
 use axum::routing::get;
+use axum::serve::ListenerExt;
 use commons_common::{config, telemetry};
 use registry::Registry;
 use std::sync::Arc;
@@ -46,7 +47,10 @@ async fn main() -> anyhow::Result<()> {
         .with_state(registry)
         .merge(telemetry::routes(prom));
 
-    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    // (Small messages go out at once, not held back to be sent together.)
+    let listener = tokio::net::TcpListener::bind(&bind).await?.tap_io(|tcp| {
+        let _ = tcp.set_nodelay(true);
+    });
     tracing::info!(%bind, "zone server listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())

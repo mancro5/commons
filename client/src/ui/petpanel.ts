@@ -317,7 +317,7 @@ export class PetPanel extends Panel {
     // Its friends: the pets it's played Treat Catch with (a walk together, then tap their owner).
     this.body.append(el("h3", "", "Pet friends"));
     const friends = el("div", "pet-friends");
-    friends.append(el("p", "hint", "Out on a walk with someone else's pet? Tap them and play 🐾 Treat Catch together: your pets become friends."));
+    friends.append(el("p", "hint", "Out on a walk with someone else's pet? Tap them and play 🐾 Bounce Buddies or Treat Catch together: your pets become friends."));
     this.body.append(friends);
     void this.pets
       .friends()

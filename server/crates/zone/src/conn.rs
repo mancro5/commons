@@ -18,8 +18,10 @@ use tokio::sync::mpsc;
 
 pub const MAX_INBOUND_FRAME: usize = 8 * 1024;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
-/// Frames buffered toward a client before it is considered too slow.
-const OUT_QUEUE: usize = 32;
+/// Frames buffered toward a client before it is considered too slow (a dozen
+/// seconds' worth: a friend's connection hanging a moment isn't a reason to
+/// throw them out).
+const OUT_QUEUE: usize = 128;
 
 static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
 

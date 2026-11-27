@@ -176,6 +176,9 @@ impl Instance {
         }
         let w = self.zone.map.width as u32;
         let t = ((seat % w) as u16, (seat / w) as u16);
+        if self.tree_swing(t) {
+            return Some(t);
+        }
         let catalog = self.economy.as_ref()?.catalog()?;
         // (A double sofa's other half is a seat too.)
         let Some(item) = self.objects.get(&t) else {
@@ -186,6 +189,24 @@ impl Instance {
                 .then_some(t);
         };
         catalog.seats.contains(item).then_some(t)
+    }
+
+    /// A rope swing hung from a great tree's bough (the client draws which
+    /// trees are great, and their swings: one's the clear tile east of a tree).
+    fn tree_swing(&self, t: TilePos) -> bool {
+        let map = &self.zone.map;
+        let (w, h) = (map.width as usize, map.height as usize);
+        let (x, y) = (t.0 as usize, t.1 as usize);
+        if x == 0 || x >= w || y >= h {
+            return false;
+        }
+        let decor = |i: usize| {
+            map.decor_legend
+                .get(map.decor[i] as usize)
+                .map(String::as_str)
+        };
+        let i = y * w + x;
+        map.collision[i] == 0 && decor(i) == Some("none") && decor(i - 1) == Some("tree")
     }
 
     /// A garden pond's tiles, from its top left.

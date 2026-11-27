@@ -30,6 +30,8 @@ interface Pair {
   /** How far faded in (0–1): its shadows as it comes into view, its reflection as water comes near. */
   fade: number;
   mirrorFade: number;
+  /** What it was all worked out for last (where it stood, how big, the light): the same again, nothing to do. */
+  was: number[];
 }
 
 /** A soft dark oval: where something meets the ground. */
@@ -88,12 +90,13 @@ export class WorldFx {
   private last = 0;
   private pairs = new Map<Sprite, Pair>();
   private frame = 0;
+  private lightKey = 0;
   private contactTex = contactTexture();
   /** The haze over the far distance (3D view), and what it was last drawn as. */
   private haze = new Graphics();
   private hazeKey = "";
   /** Street lamps and lanterns (tiles), by 8-tile cell, for the night's shadows. */
-  private lamps = new Map<string, { x: number; y: number }[]>();
+  private lamps = new Map<number, { x: number; y: number }[]>();
   /** The bottom part of a picture, as far as the water reaches (by texture and rows). */
   private crops = new Map<string, Texture>();
 
@@ -110,7 +113,7 @@ export class WorldFx {
       if (d !== lamp && d !== lantern) return;
       const x = i % map.width;
       const y = Math.floor(i / map.width);
-      const k = `${Math.floor(x / 8)},${Math.floor(y / 8)}`;
+      const k = Math.floor(y / 8) * 4096 + Math.floor(x / 8);
       const list = this.lamps.get(k) ?? [];
       list.push({ x, y });
       this.lamps.set(k, list);
@@ -140,7 +143,9 @@ export class WorldFx {
     const cy = Math.floor(y / 8);
     for (let j = cy - 1; j <= cy + 1; j++) {
       for (let i = cx - 1; i <= cx + 1; i++) {
-        for (const l of this.lamps.get(`${i},${j}`) ?? []) {
+        const list = this.lamps.get(j * 4096 + i);
+        if (!list) continue;
+        for (const l of list) {
           const d = Math.hypot(l.x + 0.5 - x, l.y + 0.9 - y);
           if (d <= reach && d > 0.4 && (!best || d < best.d)) best = { x: l.x + 0.5, y: l.y + 0.9, d };
         }
@@ -272,6 +277,8 @@ export class WorldFx {
     const shade = 0x0b0e22;
     // Indoors: the room's lights that are on this frame (flickering with them).
     this.litNow = !outdoors && this.roomLights ? this.roomLights() : [];
+    // (The light, as it bears on the shadows: they're worked out again when it moves.)
+    this.lightKey = Math.round(hour * 60) * 64 + Math.round(dark * 40) + (in3d ? 1e7 : 0) + (outdoors ? 2e7 : 0);
     for (const s of this.scene.standing()) {
       let p = this.pairs.get(s);
       if (!p) {
@@ -287,13 +294,23 @@ export class WorldFx {
         const mirror = new Sprite();
         this.scene.sorted.addChild(mirror);
         this.scene.skipFx(mirror);
-        p = { contact, penumbra: make(), shadow: make(), lampShadow: make(), mirror, seen: 0, fade: 0, mirrorFade: 0 };
+        p = { contact, penumbra: make(), shadow: make(), lampShadow: make(), mirror, seen: 0, fade: 0, mirrorFade: 0, was: [] };
         this.pairs.set(s, p);
       }
       // (Back in view after a while away: it fades in again, as anything newly here does.)
       if (p.seen !== this.frame - 1) p.fade = 0;
       p.seen = this.frame;
       p.fade = Math.min(1, p.fade + dt / 450);
+      // (Standing still, faded in, out of the water, the light as it was: its shadows are where they were.)
+      const w = p.was;
+      const still = p.fade >= 1 && !p.mirror.visible && !this.litNow.length && w[0] === s.position.x && w[1] === s.position.y && w[2] === s.scale.x && w[3] === s.scale.y && w[4] === this.lightKey && w[5] === s.texture.uid;
+      if (still) continue;
+      w[0] = s.position.x;
+      w[1] = s.position.y;
+      w[2] = s.scale.x;
+      w[3] = s.scale.y;
+      w[4] = this.lightKey;
+      w[5] = s.texture.uid;
       const h = Math.abs(s.texture.height * s.scale.y);
       // Its feet: where it stands on the ground. (Something drawn up off the
       // ground, a lamp on a table, a picture on a wall, a swing's seat, a
@@ -304,21 +321,28 @@ export class WorldFx {
       const x = s.position.x;
       // (Tall things' shadows are kept in reach: a house's doesn't swallow the street.)
       const reach = Math.min(1, 64 / Math.max(1, h));
-      for (const c of [p.shadow, p.penumbra, p.lampShadow]) {
-        c.texture = s.texture;
-        c.anchor.set(s.anchor.x, 1);
-        c.tint = shade;
+      // (Only when it's changed: each set marks it to be gathered up again.)
+      if (p.shadow.texture !== s.texture || p.shadow.anchor.x !== s.anchor.x) {
+        for (const c of [p.shadow, p.penumbra, p.lampShadow]) {
+          c.texture = s.texture;
+          c.anchor.set(s.anchor.x, 1);
+          c.tint = shade;
+        }
       }
       // The sun's shadow: away from it, longer the lower it is.
       // (Back along the ground in 3D, forward when flat; leaning away from the sun.)
       const length = outdoors ? (in3d ? 0.7 + 0.8 * low : 0.38 + 0.5 * low) : 0.25;
       const lean = outdoors ? (in3d ? -sun : sun) * (0.4 + 1.0 * low) : 0;
       const up = in3d ? 1 : -1;
-      for (const [c, k] of [[p.shadow, 1], [p.penumbra, 1.15]] as const) {
-        c.position.set(x, foot);
-        c.scale.set(s.scale.x, up * s.scale.y * length * reach * k);
-        c.skew.set(lean * reach * k, 0);
-      }
+      // (A building's falls from its back: from its front, it'd show under its doorstep.)
+      const back = foot - this.scene.depthOf(s);
+      // (Each by hand: nothing made to go round them, a thousand times a frame.)
+      p.shadow.position.set(x, back);
+      p.shadow.scale.set(s.scale.x, up * s.scale.y * length * reach);
+      p.shadow.skew.set(lean * reach, 0);
+      p.penumbra.position.set(x, back);
+      p.penumbra.scale.set(s.scale.x, up * s.scale.y * length * reach * 1.15);
+      p.penumbra.skew.set(lean * reach * 1.15, 0);
       p.shadow.alpha = (outdoors ? 0.25 + 0.75 * day : 1) * p.fade;
       p.penumbra.alpha = 0.15 * day * p.fade;
       p.shadow.visible = p.penumbra.visible = grounded;

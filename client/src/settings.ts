@@ -21,19 +21,37 @@ export interface Settings {
   cinema: boolean;
   /** Richer, punchier colours. */
   vibrant: boolean;
-  /** Advanced shaders (experimental): everything casts a shadow from the sun and the lamps. */
-  shaders: boolean;
+  /**
+   * The shaders: off; on (shadows from the sun and the lamps, light that
+   * blooms, realistic water, the light's own colour: as colourful as drawn);
+   * or vibrant (all that, and richer, deeper colour).
+   */
+  shaders: "off" | "normal" | "vibrant";
+  /** With the shaders: lights glowing out into the air round them. */
+  bloom: boolean;
+  /** Glass and chrome reflecting the sky, a sheen sliding across as you pass. */
+  shine: boolean;
   /** Water reflections (experimental): water reflects what stands by it. */
   reflections: boolean;
+  /** Grass grown over the lawns and woods; and whether it parts round whoever walks through it. */
+  grass: boolean;
+  grassBend: boolean;
 }
 
 const KEY = "commons.settings";
-const DEFAULTS: Settings = { master: 0.8, sfx: 1, ambience: 0.8, music: 0.8, quality: "high", weather: true, daynight: true, names: true, fps: false, view3d: false, cineOn: false, cinema: false, vibrant: false, shaders: false, reflections: false };
+const DEFAULTS: Settings = { master: 0.8, sfx: 1, ambience: 0.8, music: 0.8, quality: "high", weather: true, daynight: true, names: true, fps: false, view3d: false, cineOn: false, cinema: false, vibrant: false, shaders: "off", bloom: true, shine: false, reflections: false, grass: true, grassBend: true };
 
 function load(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) };
+    if (raw) {
+      const s = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) };
+      // (Kept from when the shaders were just on or off: on was the vibrant look.)
+      const was = s.shaders as unknown;
+      if (was === true) s.shaders = "vibrant";
+      else if (was !== "normal" && was !== "vibrant") s.shaders = "off";
+      return s;
+    }
   } catch {
     // storage unavailable, or junk in it: the defaults
   }

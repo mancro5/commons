@@ -848,7 +848,10 @@ async fn trick(
 
 /// The zone's: a game of Treat Catch played (`duo`).
 pub fn internal_routes() -> Router<Arc<AppState>> {
-    Router::new().route("/pets/duo", post(duo))
+    Router::new()
+        .route("/pets/duo", post(duo))
+        .route("/pets/bounce", post(bounce))
+        .route("/pets/bounce/best", post(bounce_best))
 }
 
 /// Treat Catch: the first so many games a day between two pets grow their
@@ -873,6 +876,50 @@ async fn duo(
     Json(req): Json<DuoReq>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::internal::service(&state, &headers)?;
+    let pair = pair(&req)?;
+    let score = req.score.clamp(0, 500);
+    let r = played(&state, pair, 1 + score / 8, (6 + score / 2).min(40), 0).await?;
+    Ok(Json(r))
+}
+
+/// A game of Bounce Buddies between `a`'s pet and `b`'s: as Treat Catch, and their best together kept.
+async fn bounce(
+    State(state): S,
+    headers: HeaderMap,
+    Json(req): Json<DuoReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    crate::internal::service(&state, &headers)?;
+    let pair = pair(&req)?;
+    let score = req.score.clamp(0, 1_000_000);
+    // (Shut as it began: that's no game.)
+    let (points, xp) = if score == 0 {
+        (0, 0)
+    } else {
+        (1 + (score / 100).min(12), (6 + score / 40).min(40))
+    };
+    Ok(Json(played(&state, pair, points, xp, score).await?))
+}
+
+/// The best those two have done together at Bounce Buddies.
+async fn bounce_best(
+    State(state): S,
+    headers: HeaderMap,
+    Json(req): Json<DuoReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    crate::internal::service(&state, &headers)?;
+    let (a, b) = pair(&req)?;
+    let best: Option<i32> =
+        sqlx::query_scalar("SELECT best_bounce FROM pet_friends WHERE a = $1 AND b = $2")
+            .bind(a)
+            .bind(b)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(db_err)?;
+    Ok(Json(serde_json::json!({ "best": best.unwrap_or(0) })))
+}
+
+/// Whose two pets, the lesser id first.
+fn pair(req: &DuoReq) -> ApiResult<(Uuid, Uuid)> {
     let (a, b) = (
         crate::internal::uuid(&req.a)?,
         crate::internal::uuid(&req.b)?,
@@ -883,8 +930,18 @@ async fn duo(
             "a pet can't play with itself",
         ));
     }
-    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
-    let score = req.score.clamp(0, 500);
+    Ok((a.min(b), a.max(b)))
+}
+
+/// Two pets have played together: `fonder` points' more friendship and `xp`
+/// each (the day's first few games), and `best` if it beats their best at Bounce Buddies.
+async fn played(
+    state: &AppState,
+    (lo, hi): (Uuid, Uuid),
+    fonder: i32,
+    earned: i32,
+    best: i32,
+) -> ApiResult<serde_json::Value> {
     let mut tx = state.db.begin().await.map_err(db_err)?;
     // Today's games between them (a new day starts the count again).
     let (points, games): (i32, i32) = sqlx::query_as(
@@ -899,32 +956,39 @@ async fn duo(
     .fetch_one(&mut *tx)
     .await
     .map_err(db_err)?;
-    let counted = games < DUO_COUNTED;
+    let counted = games < DUO_COUNTED && earned > 0;
     let (mut points, mut xp) = (points, 0);
     if counted {
-        points += 1 + score / 8;
-        xp = (6 + score / 2).min(40);
-        for who in [a, b] {
+        points += fonder;
+        xp = earned;
+        for who in [lo, hi] {
             if let Ok((food, joy)) = settle(&mut tx, who).await {
                 store_needs(&mut tx, who, food, joy + 12.0).await?;
                 gain(&mut tx, who, xp).await?;
             }
         }
     }
-    sqlx::query("UPDATE pet_friends SET points = $3, games = games + 1 WHERE a = $1 AND b = $2")
-        .bind(lo)
-        .bind(hi)
-        .bind(points)
-        .execute(&mut *tx)
-        .await
-        .map_err(db_err)?;
+    let best: i32 = sqlx::query_scalar(
+        "UPDATE pet_friends SET points = $3, games = games + $4,
+           best_bounce = GREATEST(best_bounce, $5)
+         WHERE a = $1 AND b = $2 RETURNING best_bounce",
+    )
+    .bind(lo)
+    .bind(hi)
+    .bind(points)
+    .bind(i32::from(earned > 0))
+    .bind(best)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db_err)?;
     tx.commit().await.map_err(db_err)?;
-    Ok(Json(serde_json::json!({
+    Ok(serde_json::json!({
         "friendship": points,
         "level": friend_level(points),
         "counted": counted,
         "xp": xp,
-    })))
+        "best": best,
+    }))
 }
 
 /// The friendship level two pets have reached (1 to `DUO_TOP`).

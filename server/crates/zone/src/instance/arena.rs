@@ -48,6 +48,8 @@ pub(super) struct Arena {
     quiet_until: u32,
     /// How each fighter's doing, this round and this match (`ArenaStats`).
     tally: std::collections::HashMap<u32, Tally>,
+    /// Every other tick (`arena_send_tick`).
+    beat: bool,
 }
 
 /// A fighter's tally, from the round's events: this round, and the match so far.
@@ -174,6 +176,7 @@ impl Arena {
             lobby_at: 0,
             quiet_until: EXHIBIT_AFTER_MS,
             tally: Default::default(),
+            beat: false,
         })
     }
 
@@ -349,6 +352,11 @@ impl Instance {
 
     /// Sends to everyone who can see the ring (watching any cell it covers), once each.
     fn arena_broadcast(&mut self, msg: &ServerMsg) {
+        self.arena_tell(msg, false);
+    }
+
+    /// The same, `near`: only those near enough to see it well (and whoever's in it).
+    fn arena_tell(&mut self, msg: &ServerMsg, near: bool) {
         let Some(ar) = &self.arena else { return };
         let (x0, y0, w, h) = ar.ring;
         let (x1, y1) = (x0 + w - 1, y0 + h - 1);
@@ -367,9 +375,16 @@ impl Instance {
         to.sort_unstable();
         to.dedup();
         let bytes = msg.to_bytes();
+        let slots = ar.m.slots;
         for id in to {
             if let Some(a) = self.avatars.get_mut(&id) {
-                a.send(&bytes);
+                let far = near
+                    && !a.watching
+                    && !slots.contains(&id)
+                    && super::apart(a.tile, (x0, y0, w, h)) > super::FIGHT_NEAR;
+                if !far {
+                    a.send(&bytes);
+                }
             }
         }
     }
@@ -378,6 +393,15 @@ impl Instance {
         let Some(ar) = &self.arena else { return };
         let msg = ar.state(now);
         self.arena_broadcast(&msg);
+    }
+
+    /// A tick of a match: to those far off across town, every other one.
+    fn arena_send_tick(&mut self, now: u32) {
+        let Some(ar) = &mut self.arena else { return };
+        ar.beat = !ar.beat;
+        let near = ar.beat;
+        let msg = ar.state(now);
+        self.arena_tell(&msg, near);
     }
 
     /// A newcomer sees how the arena stands.
@@ -958,7 +982,12 @@ impl Instance {
                 }
             }
         }
-        self.arena_send(now);
+        // (A change of stage goes to everyone at once.)
+        if after == before {
+            self.arena_send_tick(now);
+        } else {
+            self.arena_send(now);
+        }
     }
 }
 

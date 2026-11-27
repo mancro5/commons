@@ -30,7 +30,7 @@ export class Milestones {
   constructor(
     private scene: Scene,
     private map: ZoneMap,
-    private addLight: (x: number, y: number, scale: number) => void,
+    private addLight: (x: number, y: number, scale: number, foot?: number) => void,
     private overlay: Container,
   ) {
     // Fireworks draw above the night shade (they're lights), following the
@@ -72,7 +72,8 @@ export class Milestones {
       [f.x + f.w, f.y + f.h],
     ]) {
       this.sprite("lantern", x, y);
-      this.addLight(x * TILE + TILE / 2, y * TILE - 4, 1.4);
+      // (In its glass, up on its post: its foot's where it stands.)
+      this.addLight(x * TILE + TILE / 2, y * TILE - 4, 1.4, y * TILE + TILE - 2);
     }
   }
 

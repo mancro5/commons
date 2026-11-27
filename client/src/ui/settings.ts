@@ -68,7 +68,7 @@ export class SettingsPanel extends Panel {
       button("⚡ Fast", () => (setSettings({ quality: "low" }), this.render()), s.quality === "low" ? "small on" : "small"),
     );
     this.body.append(el("p", "hint", "Sharp: full screen resolution and the colour grade. Fast: lighter on older computers and phones."), quality);
-    const toggle = (label: string, key: "weather" | "daynight" | "names" | "fps" | "view3d" | "cineOn" | "vibrant" | "shaders" | "reflections") => {
+    const toggle = (label: string, key: "weather" | "daynight" | "names" | "fps" | "view3d" | "cineOn" | "vibrant" | "reflections" | "grass" | "grassBend" | "bloom" | "shine") => {
       const on = s[key];
       this.body.append(button(`${on ? "✅" : "⬜"} ${label}`, () => (setSettings({ [key]: !on } as Partial<Settings>), this.render()), "small set-toggle"));
     };
@@ -89,15 +89,22 @@ export class SettingsPanel extends Panel {
       }, "small set-toggle"),
     );
     toggle("Vibrant colours (richer and punchier)", "vibrant");
+    toggle("Grass (tufts and wild flowers over the lawns and woods)", "grass");
+    if (s.grass) toggle("Grass moves as you walk through it", "grassBend");
     toggle("Weather (rain, mist, cloud shadows)", "weather");
     toggle("Night falls (day and night)", "daynight");
     toggle("Name tags and speech bubbles", "names");
     toggle("Frames per second counter", "fps");
-    // ---- experimental ----
-    this.body.append(el("h4", "set-head", "🧪 Experimental"));
-    this.body.append(el("p", "hint", "Still being worked on, and heavy: turn them off if the game slows down."));
-    toggle("Advanced shaders (soft shadows from the sun and lamps; indoors, living firelight and shadows from your lights)", "shaders");
-    toggle("Water reflections", "reflections");
+    // ---- shaders ----
+    this.body.append(el("h4", "set-head", "✨ Shaders"));
+    this.body.append(el("p", "hint", "Real shadows from the sun and the lamps, lights that glow, realistic water, light with its own colour. Vibrant: all that, and richer, deeper colour too. Heavy: turn them down if the game slows."));
+    const tier = el("div", "tier-row");
+    for (const [label, v] of [["Off", "off"], ["✨ Shaders", "normal"], ["🌈 Vibrant", "vibrant"]] as const) tier.append(button(label, () => (setSettings({ shaders: v }), this.render()), s.shaders === v ? "small on" : "small"));
+    this.body.append(tier);
+    if (s.shaders !== "off") toggle("Bloom (lamps, windows and the sun glowing out into the air)", "bloom");
+    this.body.append(el("h4", "set-head", "🪞 Reflections"));
+    toggle("Water reflections (what stands by the water, upside down in it)", "reflections");
+    toggle("Shine (the sky in the windows, chrome glinting, a sheen as you pass)", "shine");
     // ---- keys ----
     this.body.append(el("h4", "set-head", "⌨️ Keys"));
     const keys = el("div", "rows set-keys");

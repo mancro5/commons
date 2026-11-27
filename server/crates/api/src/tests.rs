@@ -2362,6 +2362,18 @@ mod mall_shop {
         );
         let level = r["level"].as_i64().unwrap();
         assert!(level >= 3, "{r}");
+        // Bounce Buddies: their best together's kept, whichever of them's asked about first.
+        for (score, best) in [(320, 320), (90, 320), (0, 320), (500, 500)] {
+            let (st, r) = call(&app, &svc, "POST", "/internal/pets/bounce", play(score)).await;
+            assert_eq!(
+                (st, r["best"].as_i64()),
+                (StatusCode::OK, Some(best)),
+                "{r}"
+            );
+        }
+        let round = json!({ "a": b.to_string(), "b": a.to_string(), "score": 0 });
+        let (_, r) = call(&app, &svc, "POST", "/internal/pets/bounce/best", round).await;
+        assert_eq!(r["best"].as_i64(), Some(500), "{r}");
         // Each sees the other's pet among its friends.
         let auth = bearer_for(&s, a, "A");
         let (_, r) = call(&app, &auth, "GET", "/api/me/pet/friends", json!({})).await;

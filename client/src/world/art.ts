@@ -29,7 +29,8 @@ import { boatObject } from "./boatart";
 import { museumObject } from "./museumart";
 import { paintballObject, splat as paintSplat } from "./paintballart";
 import { arenaObject } from "./arenaart";
-import { treeCanvas } from "./treeart";
+import { TREE_SHAPES, giant, treeCanvas } from "./treeart";
+import { lampCanvas } from "./lampart";
 
 export const TILE = 32;
 
@@ -486,6 +487,37 @@ function soften(ctx: CanvasRenderingContext2D, kind: string, tx: number, ty: num
 
 const decorCache = new Map<string, Texture>();
 
+/** A street lamp, by name (lampart.ts). */
+export function lampTexture(name: string): Texture {
+  const key = `lamp:${name}`;
+  let t = decorCache.get(key);
+  if (!t) decorCache.set(key, (t = toTexture(lampCanvas(name))));
+  return t;
+}
+
+/** One of the great trees, by name (treeart.ts). */
+export function giantTexture(name: string): Texture | null {
+  const key = `giant:${name}`;
+  let t = decorCache.get(key);
+  if (!t) {
+    const g = giant(name);
+    if (!g) return null;
+    decorCache.set(key, (t = toTexture(g.canvas)));
+  }
+  return t;
+}
+
+/** Paints all the trees there'll be, one at a time as there's time for it: walking up to them's smooth then. */
+export function warmTrees(giants: Iterable<string>) {
+  const todo: (() => void)[] = [...new Set(giants)].map((n) => () => void giantTexture(n));
+  for (const [kind, n] of Object.entries(TREE_SHAPES)) for (let v = 0; v < n; v++) todo.push(() => void decorTexture(kind, v));
+  const next = () => {
+    todo.shift()?.();
+    if (todo.length) window.setTimeout(next, 24);
+  };
+  window.setTimeout(next, 400);
+}
+
 export function decorTexture(kind: string, variant: number): Texture | null {
   // A home's walls, in their wallpaper.
   if (kind.startsWith("home_")) return homeWall(kind, variant);
@@ -500,8 +532,10 @@ export function decorTexture(kind: string, variant: number): Texture | null {
   // The sports grounds' fences and bleachers (yardart.ts).
   const yard = yardDecor(kind, variant);
   if (yard) return yard;
-  // The trees, richer and in six shapes each (treeart.ts).
-  const treeKey = `${kind}:t${variant % 6}`;
+  // The street lamps (lampart.ts): which one's the caller's to say; else the old one.
+  if (kind === "lamp") return lampTexture("original");
+  // The trees, in many shapes each (treeart.ts).
+  const treeKey = `${kind}:t${variant % (TREE_SHAPES[kind] ?? 1)}`;
   const tree = decorCache.get(treeKey) ?? treeCanvas(kind, variant);
   if (tree) {
     if (tree instanceof Texture) return tree;
@@ -770,39 +804,6 @@ export function decorTexture(kind: string, variant: number): Texture | null {
       if (!openT) {
         px(ctx, P.outline, 9, y0 - 1, 2, 1);
       }
-      break;
-    }
-    case "lamp": {
-      // An old street lamp: a pointed roof, a glass lantern with two dark
-      // bars, a collar, and a slim post with rings down to its foot.
-      [c, ctx] = makeCanvas(32, 56);
-      const dark = "#17110a";
-      const iron = "#2a2116";
-      const L = 9; // left edge of the 14-wide head
-      // Roof, stepping out from its tip to the brim.
-      px(ctx, iron, L + 6, 2, 2, 2);
-      for (let r = 0; r < 5; r++) px(ctx, iron, L + 5 - r, 4 + r, 4 + r * 2, 1);
-      px(ctx, dark, L, 9, 14, 3);
-      // The glass, paler at the top, warmer low down where the flame is.
-      px(ctx, dark, L + 2, 12, 10, 8);
-      px(ctx, "#cfd0a6", L + 3, 12, 8, 5);
-      px(ctx, "#bdbd86", L + 3, 17, 8, 3);
-      px(ctx, "#c9bb7a", L + 5, 16, 4, 4);
-      px(ctx, dark, L + 4, 12, 1, 9);
-      px(ctx, dark, L + 9, 12, 1, 9);
-      // It narrows into the collar.
-      px(ctx, dark, L + 3, 20, 8, 1);
-      px(ctx, "#bdbd86", L + 5, 20, 1, 1);
-      px(ctx, "#bdbd86", L + 8, 20, 1, 1);
-      px(ctx, iron, L + 4, 21, 6, 1);
-      // The post, with a crossbar under the head and rings lower down.
-      px(ctx, iron, L + 6, 22, 2, 32);
-      px(ctx, dark, L + 4, 23, 6, 1);
-      px(ctx, dark, L + 5, 24, 4, 1);
-      px(ctx, dark, L + 5, 41, 4, 1);
-      px(ctx, iron, L + 5, 43, 4, 4);
-      px(ctx, dark, L + 5, 49, 4, 1);
-      px(ctx, dark, L + 4, 53, 6, 2);
       break;
     }
     case "cafe_table": {

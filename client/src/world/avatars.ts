@@ -1,6 +1,7 @@
 // Avatars: a sprite in the y-sorted layer plus DOM labels (name, chat bubble,
 // emote) positioned in screen space so text stays crisp at any zoom.
 
+import { RideLine, type RidePoint } from "./petride";
 import { Graphics, Sprite } from "pixi.js";
 import type { EntityInfo } from "../net/protocol.gen";
 import { type AvatarFrame, BOWL_BACK, BOWL_HOLD, BOWL_PICKUP, BOWL_RELEASE, PET_CROUCH, PUSH_CROUCH, SPRINT_FRAMES, dozeFrame, SKIN_COLORS, TILE, avatarTexture, legColor } from "./art";
@@ -215,6 +216,7 @@ export class Avatar {
   private tile: TileXY;
   private blend = { x: 0, y: 0, until: 0 };
   /** Where the name label was last put on screen (px). */
+  private labelOff = false;
   private labelAt = { x: NaN, y: NaN, s: 1 };
   pos: TileXY;
   /** Where the avatar's drawn (`pos` with any correction still blending out): what the camera follows. */
@@ -824,7 +826,11 @@ export class Avatar {
     this.updateWheels(ride && seat < 0 ? vehicle : 0, feetX, feetY + wave, walking, wallNow);
     this.drawTrail(walking && !!vehicle && seat < 0, feetX, feetY, wallNow, afloat);
     this.updateCan(feetX, feetY, wallNow);
+    // (The grass parts round them; not up in the air, nor in a boat.)
+    if (!afloat && seat < 0 && !fighting?.hide && !(fighting?.lift && fighting.lift > 3)) this.scene.grass?.field.touch(this.info.id * 2, feetX, feetY, ride ? 19 : 16, wallNow);
     this.updatePet({ x, y }, serverNow, wallNow);
+    const pet = this.follower?.pet;
+    if (pet && !(pet.ride && pet.ride.air > 3)) this.scene.grass?.field.touch(this.info.id * 2 + 1, pet.pos.x * TILE + TILE / 2, pet.pos.y * TILE + TILE - 4, 12, wallNow);
 
     // DOM label above the head.
     // Afloat, names spread along the boat (the front seat's a little higher, clear of the captain's).
@@ -834,7 +840,14 @@ export class Avatar {
     const ly = Math.round(s.y);
     // (The cinematic view: smaller further off, and not at all from far away.)
     const ls = s.s < 0.42 ? 0 : s.s >= 1 ? 1 : Math.round(Math.min(1, s.s * 1.15) * 50) / 50;
-    if (lx !== this.labelAt.x || ly !== this.labelAt.y || ls !== this.labelAt.s) {
+    // (Off the screen: put away, not carried about out there.)
+    const { w: sw, h: sh } = this.scene.size;
+    const off = ls === 0 || lx < -160 || lx > sw + 160 || ly < -40 || ly > sh + 160;
+    if (off !== this.labelOff) {
+      this.labelOff = off;
+      this.label.style.display = off ? "none" : "";
+    }
+    if (!off && (lx !== this.labelAt.x || ly !== this.labelAt.y || ls !== this.labelAt.s)) {
       this.labelAt = { x: lx, y: ly, s: ls };
       this.label.style.transform = `translate3d(${lx}px, ${ly}px, 0)${ls === 1 ? "" : ` scale(${ls})`}`;
     }
@@ -1017,9 +1030,14 @@ export class Avatar {
     if ((hooked || !reeling) && swing >= 1) this.rodTip = { x: tx, y: ty, z: this.rod.zIndex };
   }
 
+  /** Whether its name tag's off the screen (and put away). */
+  get nameOff(): boolean {
+    return this.labelOff;
+  }
+
   /** Screen box of the name tag (measured once), for decluttering overlapping names. */
   nameBox(): { x0: number; x1: number; y: number } {
-    if (!this.nameW && !this.nameEl.hidden) this.nameW = this.nameEl.offsetWidth;
+    if (!this.nameW && !this.nameEl.hidden && !this.labelOff) this.nameW = this.nameEl.offsetWidth;
     const w = this.nameW || this.info.name.length * 7;
     const s = this.scene.headToScreen(this.pos.x + 0.5, this.pos.y + 1, 1);
     return { x0: s.x - w / 2, x1: s.x + w / 2, y: s.y };
@@ -1130,6 +1148,16 @@ export class Avatar {
     return this.walked;
   }
 
+  /** The line we've skated, for our pet to skate after us (`petride.ts`). */
+  private line: RideLine | null = null;
+
+  /** Where we are on our board, as we're drawn (activities/skate.ts). */
+  skated(p: RidePoint) {
+    if (!this.info.pet) return;
+    this.line ??= new RideLine();
+    this.line.note(p);
+  }
+
   private updatePet(at: TileXY, serverNow: number, now: number) {
     const code = this.info.pet;
     if (this.follower && this.follower.pet.code !== code) {
@@ -1145,7 +1173,9 @@ export class Avatar {
     const v = this.info.vehicle;
     // (In an activity's hands, drawn where it says: at our heels as ever, no way to keep to.)
     const heel = this.arena ? null : this.way.heel(serverNow, this.facing);
-    this.follower.update(at, this.facing, now, { board: !!v && !isBoat(v), goal: this.petGoal, heel });
+    // (Skating: up and down the ramps after us.)
+    if (this.line && !(this.arena && this.line.riding(now))) this.line = null;
+    this.follower.update(at, this.facing, now, { board: !!v && !isBoat(v), goal: this.petGoal, heel, ride: this.line?.ride(now) ?? null });
   }
 
   /**

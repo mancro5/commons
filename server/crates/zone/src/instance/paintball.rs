@@ -56,6 +56,8 @@ pub(super) struct Yard {
     bet_close: u32,
     /// Nobody's played since: the bots start a match once it's been a while.
     quiet_until: u32,
+    /// Every other tick (`pb_send_tick`).
+    beat: bool,
 }
 
 impl Yard {
@@ -94,6 +96,7 @@ impl Yard {
             round: 0,
             bets: Vec::new(),
             bet_close: 0,
+            beat: false,
             quiet_until: EXHIBIT_AFTER_MS,
         })
     }
@@ -219,6 +222,11 @@ impl Instance {
     /// To everyone in the hall (it's all one room); out in the city, to
     /// those who can see the field.
     fn pb_broadcast(&mut self, msg: &ServerMsg, except: Option<u32>) {
+        self.pb_tell(msg, except, false);
+    }
+
+    /// The same, `near`: only those near enough to see it well (and whoever's in it).
+    fn pb_tell(&mut self, msg: &ServerMsg, except: Option<u32>, near: bool) {
         let bytes = msg.to_bytes();
         let Some(y) = &self.yard else { return };
         if !y.outdoor {
@@ -248,7 +256,18 @@ impl Instance {
             .collect();
         to.sort_unstable();
         to.dedup();
+        let area = (x0, y0, y.size.0, y.size.1);
+        let playing: Vec<u32> = y.m.players.iter().map(|p| p.id).collect();
         for id in to {
+            if near
+                && !playing.contains(&id)
+                && self
+                    .avatars
+                    .get(&id)
+                    .is_some_and(|a| !a.watching && super::apart(a.tile, area) > super::FIGHT_NEAR)
+            {
+                continue;
+            }
             if Some(id) != except
                 && let Some(a) = self.avatars.get_mut(&id)
             {
@@ -261,6 +280,15 @@ impl Instance {
         let Some(y) = &self.yard else { return };
         let msg = y.state(now);
         self.pb_broadcast(&msg, None);
+    }
+
+    /// A tick of a match: to those far off across town, every other one.
+    fn pb_send_tick(&mut self, now: u32) {
+        let Some(y) = &mut self.yard else { return };
+        y.beat = !y.beat;
+        let near = y.beat;
+        let msg = y.state(now);
+        self.pb_tell(&msg, None, near);
     }
 
     /// A newcomer sees how the yard stands.
@@ -543,7 +571,12 @@ impl Instance {
                 y.quiet_until = now + EXHIBIT_AFTER_MS;
             }
         }
-        self.pb_send_state(now);
+        // (A change of stage goes to everyone at once.)
+        if after == before {
+            self.pb_send_tick(now);
+        } else {
+            self.pb_send_state(now);
+        }
     }
 
     /// A bet on the bots' match (`pick`: the team): the stake taken, or told why not.

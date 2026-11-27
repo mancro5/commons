@@ -43,11 +43,13 @@ export interface Relief {
    * A piece with walls down its west and east sides (a ramp, a box): how high
    * they stand, by ground px from its north edge, and how wide it is.
    */
-  walls?: { west: Float32Array; east: Float32Array; w: number };
+  walls?: { west: Float32Array; east: Float32Array; w: number; north: Float32Array; south: Float32Array };
   /** Posts holding it up (px from its north-west corner, and how high): a rail's, hidden under it in its picture. */
   posts?: { x: number; y: number; z: number }[];
   /** Vertices of its mesh: one every this many px (a small piece: finer). */
   step?: number;
+  /** The ground it covers (rows) and how high it gets (worked out when first needed). */
+  extent?: { y0: number; y1: number; up: number };
   /** How high it stands at its highest (worked out when first needed). */
   tall?: number;
 }
@@ -61,7 +63,15 @@ function wallsOf(w: number, d: number, z: (x: number, y: number) => number): Non
     west[y] = z(0, at);
     east[y] = z(w - 1, at);
   }
-  return { west, east, w };
+  // And across its ends: a kicker's or a ramp's side, the triangle it makes rising across.
+  const north = new Float32Array(w + 1);
+  const south = new Float32Array(w + 1);
+  for (let x = 0; x <= w; x++) {
+    const at = Math.min(w - 1, x);
+    north[x] = z(at, 0);
+    south[x] = z(at, d - 1);
+  }
+  return { west, east, w, north, south };
 }
 
 function relief(w: number, h: number): Relief {

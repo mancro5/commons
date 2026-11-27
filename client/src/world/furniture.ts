@@ -1,6 +1,7 @@
 // Seats and game tables derived from the map: mirror of
 // server/crates/sim/src/furniture.rs. Ids are tile indices (y * width + x).
 
+import { treeSwings } from "./bigtrees";
 import { type ZoneMap, walkable } from "./map";
 import type { TileXY } from "./motion";
 
@@ -30,6 +31,8 @@ export class Furniture {
     map.decor.forEach((d, i) => {
       if (seatKinds.has(d)) this.seats.set(i, { id: i, tile: { x: i % w, y: Math.floor(i / w) }, table: null });
     });
+    // (The rope swings on the great trees: see bigtrees.ts, and the server's `tree_swing`.)
+    for (const i of treeSwings(map)) this.seats.set(i, { id: i, tile: { x: i % w, y: Math.floor(i / w) }, table: null });
     map.decor.forEach((d, i) => {
       if (d !== table || i % w === 0) return;
       const left = this.seats.get(i - 1);

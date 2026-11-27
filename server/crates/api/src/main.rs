@@ -3,6 +3,7 @@
 //! migrations in `server/migrations` run on startup.
 
 use axum::Router;
+use axum::serve::ListenerExt;
 use commons_api::economy::Catalog;
 use commons_api::{
     AppState, auth, bottles, devtools, economy, goods, gov, internal, library, loans, mall, pets,
@@ -85,7 +86,10 @@ async fn main() -> anyhow::Result<()> {
         .nest("/internal", internal::routes())
         .with_state(state)
         .merge(telemetry::routes(prom));
-    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    // (Small messages go out at once, not held back to be sent together.)
+    let listener = tokio::net::TcpListener::bind(&bind).await?.tap_io(|tcp| {
+        let _ = tcp.set_nodelay(true);
+    });
     tracing::info!(%bind, "api listening");
     axum::serve(listener, app).await?;
     Ok(())

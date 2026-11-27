@@ -369,6 +369,8 @@ class Rig {
       lift += MIDDLE - MIDDLE * Math.cos(turn);
     }
     avatar.setArena({ x: (p.x + shiftX - TILE / 2) / TILE, y: (p.y - TILE + 4) / TILE, facing, frame, walking: false, hurt: false, lean, lift, noRide: true });
+    // (Their pet, out with them, skates it after them.)
+    avatar.skated({ t: wallNow, x: p.x, y: p.y, z: p.z, ground, facing: this.facing, spin: p.spin, flip: body ? turn : 0, low: p.pose === POSE.CROUCH || p.pose === POSE.SLIDE || !!p.slide, grind: p.pose === POSE.GRIND, bail: p.pose === POSE.BAIL });
     // The board.
     const by = Math.round(p.y - p.z) + boardDy;
     if (body) {
